@@ -250,9 +250,9 @@ export function DemoProvider({ children }: { children: ReactNode }) {
         date: input.date.trim(),
         time: input.time.trim(),
         area: input.area.trim(),
-        shortDescription: `${input.title.trim()} is a mock organizer draft awaiting venue approval.`,
+        shortDescription: `${input.title.trim()} is an organizer draft awaiting venue approval.`,
         whatHappens:
-          "Organizer-created mock draft for validating the MVP create-event flow before real persistence exists.",
+          "Organizer-created draft that follows the MVP create-event flow before persistence is connected.",
         going: 0,
         interested: 0,
         expectedRiders,

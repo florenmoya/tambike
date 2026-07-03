@@ -34,6 +34,7 @@ import {
   useState,
   type ComponentType,
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
 } from "react";
@@ -98,6 +99,14 @@ const roleLabels: Record<Role, string> = {
 
 const primaryEventId = defaultPass.eventId;
 const primaryPassId = defaultPass.id;
+const featuredEventIds = [
+  "tambike-cafe-classico",
+  "boys-underbone-laguna-tambike",
+  "ccph-upper-east-tambike",
+  "ccph-cebu-official-tambike",
+  "tambike-night-malabon",
+  "fullprint-manila-tambike",
+];
 const featuredCarouselIntervalMs = 5_000;
 const featuredDragActivationPx = 16;
 const featuredDragCommitPx = 90;
@@ -142,6 +151,42 @@ const navigationByRole: Record<Role, Array<{ label: string; href: string }>> = {
   ],
 };
 
+const footerLinkGroups = [
+  {
+    title: "Events",
+    ariaLabel: "Footer event links",
+    links: [
+      { label: "Explore events", href: "/events" },
+      { label: "Charity rides", href: "/events?type=charity-ride" },
+      { label: "Track days", href: "/events?type=track-day" },
+      { label: "Moto expos", href: "/events?type=moto-expo" },
+    ],
+  },
+  {
+    title: "Riders",
+    ariaLabel: "Footer rider links",
+    links: [
+      { label: "My passes", href: "/passes" },
+      { label: "Profile", href: "/profile" },
+      { label: "Create rider account", href: "/signup" },
+    ],
+  },
+  {
+    title: "Organizers",
+    ariaLabel: "Footer organizer links",
+    links: [
+      { label: "Organizer application", href: "/organizer/apply" },
+      { label: "Create event", href: "/organizer/events/create" },
+      { label: "Scanner", href: `/organizer/events/${primaryEventId}/scanner` },
+      { label: "Reports", href: `/organizer/events/${primaryEventId}/report` },
+    ],
+  },
+] satisfies Array<{
+  title: string;
+  ariaLabel: string;
+  links: Array<{ label: string; href: string }>;
+}>;
+
 const eventFilters = [
   { label: "All", value: "all", href: "/events", icon: SlidersHorizontal, matches: () => true },
   { label: "Tambike", value: "tambike", href: "/events?type=tambike", icon: Motorbike, matches: (event: Event) => event.type === "Tambike" },
@@ -160,6 +205,16 @@ const eventFilters = [
 
 function getEventFilter(value?: string) {
   return eventFilters.find((filter) => filter.value === value) ?? eventFilters[0];
+}
+
+function getFeaturedEvents(events: Event[]) {
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  const featuredEvents = featuredEventIds.flatMap((eventId) => {
+    const event = eventById.get(eventId);
+    return event ? [event] : [];
+  });
+
+  return featuredEvents.length ? featuredEvents : events.slice(0, 6);
 }
 
 const eventVisuals: Record<
@@ -424,7 +479,81 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="ambient-main">{children}</main>
+      <TambikeFooter />
     </div>
+  );
+}
+
+function TambikeFooter() {
+  return (
+    <footer className="site-footer" aria-label="Tambike footer">
+      <div className="footer-shell">
+        <section className="footer-brand-panel" aria-label="Footer brand">
+          <Link className="brand footer-brand-link" href="/" aria-label="Tambike footer home">
+            <span className="brand-mark" aria-hidden="true">
+              TB
+            </span>
+            <span className="brand-core">Tambike</span>
+          </Link>
+          <div className="footer-callout">
+            <span>Ride bulletin</span>
+            <p>
+              Built for tambike nights, charity rides, track days, and venue-hosted motorcycle
+              ganaps.
+            </p>
+          </div>
+          <div className="footer-gauge" aria-hidden="true">
+            <span className="footer-gauge__needle" />
+            <span className="footer-gauge__hub" />
+          </div>
+        </section>
+
+        <div className="footer-link-grid">
+          {footerLinkGroups.map((group) => (
+            <FooterLinkGroup key={group.title} group={group} />
+          ))}
+        </div>
+
+        <aside className="footer-dispatch" aria-label="Tambike dispatch status">
+          <span>Next checkpoint</span>
+          <strong>Pass flow, event review, scanner, and reports are ready for walkthrough.</strong>
+          <div className="footer-dispatch__actions">
+            <Link href={`/events/${primaryEventId}`}>
+              <Route aria-hidden="true" />
+              Featured ride
+            </Link>
+            <Link href="/login">
+              <Ticket aria-hidden="true" />
+              Demo login
+            </Link>
+          </div>
+        </aside>
+      </div>
+      <div className="footer-legal">
+        <span>© 2026 Tambike UI Demo</span>
+        <div>
+          <Link href="/admin/events/review">Review queue</Link>
+          <Link href="/venue/claim">Claim venue</Link>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+function FooterLinkGroup({
+  group,
+}: {
+  group: (typeof footerLinkGroups)[number];
+}) {
+  return (
+    <nav className="footer-link-group" aria-label={group.ariaLabel}>
+      <h2>{group.title}</h2>
+      {group.links.map((link) => (
+        <Link key={link.href} href={link.href}>
+          {link.label}
+        </Link>
+      ))}
+    </nav>
   );
 }
 
@@ -433,7 +562,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
   const activeFilter = compact ? getEventFilter(query?.type) : eventFilters[0];
   const isFiltered = activeFilter.value !== "all";
   const visibleEvents = events.filter(activeFilter.matches);
-  const featuredEvents = events.slice(0, 6);
+  const featuredEvents = getFeaturedEvents(events);
   const primaryListings = isFiltered ? visibleEvents : visibleEvents.slice(0, 5);
   const secondaryListings = isFiltered ? [] : visibleEvents.slice(5).concat(visibleEvents.slice(0, 4));
   const [activeFeaturedIndex, setActiveFeaturedIndex] = useState(0);
@@ -519,9 +648,15 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
     suppressFeatureClickRef.current = false;
   };
 
-  const markFeatureCarouselReady = (node: HTMLDivElement | null) => {
-    if (node) {
-      node.dataset.ready = "true";
+  const handleFeatureKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveFeature(-1);
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      moveFeature(1);
     }
   };
 
@@ -539,6 +674,12 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
     return () => window.clearInterval(timerId);
   }, [featuredEvents.length]);
 
+  const markFeatureCarouselReady = (node: HTMLDivElement | null) => {
+    if (node) {
+      node.dataset.ready = "true";
+    }
+  };
+
   return (
     <>
       <section className={clsx("hero", compact && "hero-compact")}>
@@ -551,6 +692,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
               dragDirection === "previous" && "is-dragging-previous",
               dragDirection === "next" && "is-dragging-next",
             )}
+            data-ready="false"
             aria-label="Featured Tambike events"
           >
             <button
@@ -569,11 +711,13 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
             </button>
             <div
               className="hero-showcase"
+              tabIndex={0}
               onPointerDown={handleFeaturePointerDown}
               onPointerMove={handleFeaturePointerMove}
               onPointerUp={handleFeaturePointerUp}
               onPointerCancel={handleFeaturePointerCancel}
               onClickCapture={handleFeatureClickCapture}
+              onKeyDown={handleFeatureKeyDown}
               onDragStart={(event) => event.preventDefault()}
             >
               {featuredEvents.map((event, index) => (
@@ -643,9 +787,22 @@ function featureOffset(index: number, activeIndex: number, total: number) {
   const midpoint = total / 2;
 
   if (offset > midpoint) offset -= total;
-  if (offset < -midpoint) offset += total;
+  if (offset <= -midpoint) offset += total;
 
   return offset;
+}
+
+function splitFeatureTitleEndPhrase(title: string) {
+  const words = title.trim().split(/\s+/);
+
+  if (words.length < 3) {
+    return null;
+  }
+
+  return {
+    prefix: words.slice(0, -2).join(" "),
+    keepTogether: words.slice(-2).join(" "),
+  };
 }
 
 function FeatureCard({
@@ -663,36 +820,53 @@ function FeatureCard({
   const distance = Math.abs(offset);
   const isFeatured = offset === 0;
   const isVisible = distance <= 2;
+  const isWidePeek = distance === 3;
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
+  const titleParts = splitFeatureTitleEndPhrase(event.title);
   const featureStyle = {
     "--x": `calc(${offset} * (var(--feature-card-width) + var(--feature-gap)))`,
-    "--scale": isFeatured ? "1.08" : distance === 1 ? "0.9" : "0.82",
-    "--opacity": isFeatured ? "1" : distance === 1 ? "0.78" : distance === 2 ? "0.42" : "0",
+    "--scale": isFeatured ? "1.08" : distance === 1 ? "0.9" : distance === 2 ? "0.82" : "0.74",
+    "--opacity": isFeatured ? "1" : distance === 1 ? "0.78" : distance === 2 ? "0.42" : distance === 3 ? "0.28" : "0",
     "--z": String(10 - distance),
     "--feature-tone": visual.poster,
   } as CSSProperties;
 
   return (
     <Link
-      className={clsx("feature-card", isFeatured && "is-featured", isVisible && "is-visible")}
+      className={clsx(
+        "feature-card",
+        isFeatured && "is-featured",
+        isVisible && "is-visible",
+        isWidePeek && "is-wide-peek",
+      )}
       href={`/events/${event.id}`}
       style={featureStyle}
       aria-hidden={!isVisible}
       tabIndex={isFeatured ? 0 : -1}
+      draggable={false}
+      onDragStart={(event) => event.preventDefault()}
     >
       <div className="feature-cover">
         <Image
           src={event.poster}
           alt={`${event.title} poster`}
           fill
+          draggable={false}
           loading={isFeatured ? "eager" : "lazy"}
           fetchPriority={isFeatured ? "high" : "auto"}
-          sizes="(max-width: 760px) 68vw, 300px"
+          sizes="(max-width: 760px) 68vw, (min-width: 1600px) 260px, 300px"
         />
       </div>
       <div className="feature-caption">
         <h2 className={event.title.length > 24 ? "feature-title-compact" : undefined}>
-          {event.title}
+          {titleParts ? (
+            <>
+              {titleParts.prefix ? `${titleParts.prefix} ` : null}
+              <span className="feature-title-keep">{titleParts.keepTogether}</span>
+            </>
+          ) : (
+            event.title
+          )}
         </h2>
         <p>
           {event.date} · {event.area}
@@ -983,7 +1157,7 @@ function AuthGateModal({ notice, onClose }: { notice: string; onClose: () => voi
           <h2>{notice}</h2>
         </div>
         <p>
-          Use one of the mock accounts or create a sample rider profile to continue this MVP flow.
+          Use one of the sample accounts or create a rider profile to continue this MVP flow.
         </p>
         <div className="modal-actions">
           <button type="button" className="buy-secondary" onClick={onClose}>
@@ -1027,7 +1201,7 @@ function PassDetail({ passId }: { passId?: string }) {
   const qrToken = passIdValue === defaultPass.id ? defaultPass.qrToken : qrTokenForEvent(event.id);
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view this pass" body="Mock passes are tied to the logged-in demo rider profile." />;
+    return <AuthRequired title="Log in to view this pass" body="Tambike passes are tied to the logged-in rider profile." />;
   }
 
   return (
@@ -1340,7 +1514,7 @@ function Dashboard({
 }) {
   return (
     <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="Use the logged-in mock account and navigation to inspect each operating surface." />
+      <HeroPanel eyebrow={eyebrow} title={title} body="Use the logged-in sample account and navigation to inspect each operating surface." />
       {action}
       <div className="dashboard-grid">
         {[
@@ -1394,7 +1568,7 @@ function CreateEventScreen() {
             title="Draft created"
             body="Needs venue approval before it can move to admin review or public publishing."
           />
-          <InfoPanel eyebrow="Mock event" title={createdEvent.title}>
+          <InfoPanel eyebrow="Event draft" title={createdEvent.title}>
             <div className="detail-grid">
               <Detail label="Status" value="Needs venue approval" />
               <Detail label="Type" value={createdEvent.type} />
@@ -1411,7 +1585,7 @@ function CreateEventScreen() {
           <HeroPanel
             eyebrow="Create Event Wizard"
             title="Create a venue-approved ganap"
-            body="Create a mock draft with the same MVP review path: organizer draft, venue approval, then admin review when required."
+            body="Create an event draft with the same MVP review path: organizer draft, venue approval, then admin review when required."
           />
           <Timeline steps={steps} />
           <form
@@ -1501,11 +1675,26 @@ function LoginScreen() {
 
   return (
     <LightView>
-      <HeroPanel
-        eyebrow="Mock login"
-        title="Choose a sample account"
-        body="This MVP demo uses in-memory users so the login, profile, registration, and organizer flows can be tested end to end."
-      />
+      <section className="auth-stage">
+        <HeroPanel
+          eyebrow="Account access"
+          title="Choose your Tambike seat"
+          body="Use a demo rider, organizer, venue, or admin account to inspect the full MVP flow without leaving this prototype."
+        />
+        <aside className="auth-console" aria-label="Demo account guide">
+          <span>Demo cockpit</span>
+          <h2>Each account opens a different operating surface.</h2>
+          <div className="auth-console__grid">
+            <Detail label="Rider" value="Passes, profile, RSVP" />
+            <Detail label="Organizer" value="Drafts, scanner, report" />
+            <Detail label="Venue" value="Requests and check-in" />
+            <Detail label="Admin" value="Risk review queues" />
+          </div>
+          <Link className="buy-secondary as-link" href="/signup">
+            Create sample rider
+          </Link>
+        </aside>
+      </section>
       <div className="mock-account-grid">
         {users.map((user) => (
           <button
@@ -1538,13 +1727,25 @@ function SignupScreen() {
 
   return (
     <LightView>
-      <HeroPanel
-        eyebrow="Rider signup"
-        title="Create a sample rider"
-        body="Signup defaults to Rider permissions, matching the MVP rule that new users can browse and register but cannot create events."
-      />
+      <section className="auth-stage">
+        <HeroPanel
+          eyebrow="Rider signup"
+          title="Build a rider pass profile"
+          body="Create a browser-only rider profile that can RSVP, generate Tambike Passes, and update basic ride details."
+        />
+        <aside className="auth-console" aria-label="Signup permissions">
+          <span>Default access</span>
+          <h2>New riders start with browsing and pass generation only.</h2>
+          <div className="auth-console__grid">
+            <Detail label="Can do" value="RSVP and check passes" />
+            <Detail label="Can edit" value="Area, bike, club" />
+            <Detail label="Needs approval" value="Hosting events" />
+            <Detail label="Stored in" value="This browser session" />
+          </div>
+        </aside>
+      </section>
       <form
-        className="prototype-form"
+        className="prototype-form auth-form"
         onSubmit={(event) => {
           event.preventDefault();
           const formData = new FormData(event.currentTarget);
@@ -1622,7 +1823,7 @@ function ProfileScreen() {
   const [saved, setSaved] = useState(false);
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view profile" body="The profile screen shows the current mock user and their rider/organizer permissions." />;
+    return <AuthRequired title="Log in to view profile" body="The profile screen shows the current browser-session user and their rider/organizer permissions." />;
   }
 
   return (
@@ -1670,7 +1871,7 @@ function ProfileScreen() {
         <button className="checkout-button" type="submit">
           Save profile
         </button>
-        {saved && <PassStrip title="Profile saved" body="Mock data updated for this browser session." />}
+        {saved && <PassStrip title="Profile saved" body="Profile details updated for this browser session." />}
       </form>
     </LightView>
   );

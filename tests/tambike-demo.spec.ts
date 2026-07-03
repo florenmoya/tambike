@@ -20,23 +20,27 @@ test("arai charity event uses the sourced organizer poster", async ({ page }) =>
   );
 });
 
-test("featured event carousel auto-advances with wheel controls", async ({ page }) => {
+test("featured event carousel tire controls highlight the next small-bike cover", async ({ page }) => {
   await page.goto("/events", { waitUntil: "domcontentloaded" });
 
   const featuredTitle = page.locator(".feature-card.is-featured h2");
   const carousel = page.locator(".featured-carousel");
+  const nextButton = page.getByRole("button", { name: "Next featured event" });
   await expect(featuredTitle).toHaveText("Tambike at Cafe Classico");
   await expect(carousel).toHaveAttribute("data-ready", "true");
 
-  await page.waitForTimeout(5_200);
-  await expect(featuredTitle).toHaveText("ARAI HJC Charity Ride", { timeout: 1_500 });
+  await nextButton.click();
+  await expect(featuredTitle).toHaveText("Boys of Underbone Laguna Tambike");
 
   await expect(carousel.locator(".wheel-button")).toHaveCount(2);
+  await expect(carousel.locator(".slider-button")).toHaveCount(2);
   await expect(carousel.locator(".wheel-direction")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Previous featured event" })).toBeVisible();
+  await expect(nextButton).toBeVisible();
   await expect(carousel.locator(".slider-button svg")).toHaveCount(0);
 });
 
-test("featured event carousel drags left and highlights the next wheel", async ({ page, isMobile }) => {
+test("featured event carousel drags left to highlight the next small-bike cover", async ({ page, isMobile }) => {
   await page.goto("/events", { waitUntil: "domcontentloaded" });
 
   const carousel = page.locator(".featured-carousel");
@@ -52,17 +56,162 @@ test("featured event carousel drags left and highlights the next wheel", async (
 
   const startX = showcaseBox.x + showcaseBox.width / 2;
   const startY = showcaseBox.y + showcaseBox.height / 2;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX - 180, startY, { steps: 6 });
-
-  await expect(carousel).toHaveClass(/is-dragging-next/);
-  if (!isMobile) {
-    await expect(carousel.locator(".slider-next .wheel-face")).toHaveCSS("animation-duration", "1.4s");
+  if (isMobile) {
+    const client = await page.context().newCDPSession(page);
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: startX, y: startY, id: 1 }],
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: startX - 180, y: startY, id: 1 }],
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+  } else {
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX - 180, startY, { steps: 6 });
+    await page.mouse.up();
   }
 
-  await page.mouse.up();
-  await expect(featuredTitle).toHaveText("ARAI HJC Charity Ride", { timeout: 1_500 });
+  await expect(featuredTitle).toHaveText("Boys of Underbone Laguna Tambike", { timeout: 1_500 });
+});
+
+test("featured event carousel reveals the outer card on large screens", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const widePeek = page.locator(".feature-card.is-wide-peek");
+  await expect(widePeek).toHaveCount(1);
+  await expect(widePeek).toHaveCSS("opacity", "0.28");
+
+  const box = await widePeek.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(2048);
+});
+
+test("featured event carousel loops wrapped cards forward from tire control", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const carousel = page.locator(".featured-carousel");
+  const featuredTitle = page.locator(".feature-card.is-featured h2");
+  const nextButton = page.getByRole("button", { name: "Next featured event" });
+  await expect(featuredTitle).toHaveText("Tambike at Cafe Classico");
+  await expect(carousel).toHaveAttribute("data-ready", "true");
+  await expect(nextButton).toBeVisible();
+
+  for (let step = 0; step < 5; step += 1) {
+    await nextButton.click();
+  }
+
+  await expect(featuredTitle).toHaveText("FullPrint Manila Tambike");
+
+  const cardCenterX = async (title: string) => {
+    const box = await carousel.locator(".feature-card").filter({ hasText: title }).boundingBox();
+    return box ? box.x + box.width / 2 : Number.NaN;
+  };
+
+  await expect
+    .poll(async () => {
+      const activeCenter = await cardCenterX("FullPrint Manila Tambike");
+      const tambikeCenter = await cardCenterX("Tambike at Cafe Classico");
+      const underboneCenter = await cardCenterX("Boys of Underbone Laguna Tambike");
+      const upperEastCenter = await cardCenterX("CCPH Upper East Tambike");
+
+      return (
+        Number.isFinite(activeCenter) &&
+        tambikeCenter > activeCenter &&
+        underboneCenter > tambikeCenter &&
+        upperEastCenter > underboneCenter
+      );
+    })
+    .toBe(true);
+});
+
+test("featured event carousel prioritizes small-bike tambike covers", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const carousel = page.locator(".featured-carousel");
+  await expect(carousel).toHaveAttribute("data-ready", "true");
+
+  await expect(carousel.locator(".feature-card h2")).toHaveText([
+    "Tambike at Cafe Classico",
+    "Boys of Underbone Laguna Tambike",
+    "CCPH Upper East Tambike",
+    "CCPH Cebu Official Tambike",
+    "Tambike Night",
+    "FullPrint Manila Tambike",
+  ]);
+  await expect(page.getByAltText("Boys of Underbone Laguna Tambike poster").first()).toHaveAttribute(
+    "src",
+    /poster-boys-underbone-laguna-tambike\.jpg/,
+  );
+  await expect(page.getByAltText("CCPH Cebu Official Tambike poster").first()).toHaveAttribute(
+    "src",
+    /poster-ccph-cebu-official-tambike\.jpg/,
+  );
+});
+
+test("featured event title keeps the final place phrase together", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const featuredTitle = page.locator(".feature-card.is-featured h2");
+  await expect(featuredTitle).toHaveText("Tambike at Cafe Classico");
+
+  const phraseLineOffset = await featuredTitle.evaluate((heading) => {
+    const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+    let currentNode = walker.nextNode();
+    let textNode: Text | null = null;
+
+    while (currentNode) {
+      if (currentNode.textContent?.includes("Cafe") && currentNode.textContent.includes("Classico")) {
+        textNode = currentNode as Text;
+        break;
+      }
+
+      currentNode = walker.nextNode();
+    }
+
+    if (!textNode?.textContent) return Number.POSITIVE_INFINITY;
+
+    const text = textNode.textContent;
+    const cafeStart = text.indexOf("Cafe");
+    const classicoStart = text.indexOf("Classico");
+    if (cafeStart === -1 || classicoStart === -1) return Number.POSITIVE_INFINITY;
+
+    const measure = (start: number, end: number) => {
+      const range = document.createRange();
+      range.setStart(textNode, start);
+      range.setEnd(textNode, end);
+      const rect = Array.from(range.getClientRects()).find((item) => item.width > 0 && item.height > 0);
+      range.detach();
+      return rect;
+    };
+
+    const cafeRect = measure(cafeStart, cafeStart + "Cafe".length);
+    const classicoRect = measure(classicoStart, classicoStart + "Classico".length);
+    if (!cafeRect || !classicoRect) return Number.POSITIVE_INFINITY;
+
+    return Math.abs(classicoRect.top - cafeRect.top);
+  });
+
+  expect(phraseLineOffset).toBeLessThan(4);
+});
+
+test("event categories sit directly after carousel without a driving wheel", async ({ page }) => {
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator(".featured-carousel + .category-strip")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Interactive driving wheel" })).toHaveCount(0);
 });
 
 test("event controls use raised rider dashboard styling", async ({ page }) => {
@@ -85,6 +234,10 @@ test("event categories sit below carousel and filter only listings", async ({ pa
 
   const categories = page.locator(".category-strip");
   await expect(page.locator(".featured-carousel + .category-strip")).toBeVisible();
+  await expect(categories).toHaveCSS("background-image", "none");
+  await expect(categories).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(categories).toHaveCSS("border-top-style", "none");
+  await expect(categories).toHaveCSS("box-shadow", "none");
   await expect(categories.getByRole("link", { name: "All" })).toBeVisible();
   await expect(categories.getByRole("link", { name: "Tambike" })).toBeVisible();
   await expect(categories.getByRole("link", { name: "Charity" })).toBeVisible();
@@ -100,6 +253,50 @@ test("event categories sit below carousel and filter only listings", async ({ pa
   await expect(page.locator(".event-grid .event-card h3")).toHaveText([
     "ARAI HJC Charity Ride",
     "Long Ride x Charity",
+  ]);
+});
+
+test("tambike filter uses multiple real sourced meet-up covers", async ({ page }) => {
+  await page.goto("/events?type=tambike");
+
+  await expect(page.locator(".feature-card.is-featured h2")).toHaveText("Tambike at Cafe Classico");
+  await expect(page.locator(".category-strip .is-active")).toHaveText("Tambike");
+  await expect(page.locator(".event-grid .event-card h3")).toHaveText([
+    "Tambike at Cafe Classico",
+    "Tambike Night",
+    "Boys of Underbone Laguna Tambike",
+    "Swabz Classic Bike Tambike",
+    "Yloco Bandits Classic Tambike",
+    "Kape Mo-To Tagaytay Tambike",
+    "FullPrint Manila Tambike",
+    "Boys of Garage Crossmeet Tambike",
+    "CCPH Upper East Tambike",
+    "CCPH Cebu Official Tambike",
+  ]);
+  await expect(page.getByAltText("Tambike Night poster").first()).toHaveAttribute(
+    "src",
+    /poster-tambike-night-malabon\.jpg/,
+  );
+  await expect(page.getByAltText("Boys of Underbone Laguna Tambike poster").first()).toHaveAttribute(
+    "src",
+    /poster-boys-underbone-laguna-tambike\.jpg/,
+  );
+  await expect(page.getByAltText("FullPrint Manila Tambike poster").first()).toHaveAttribute(
+    "src",
+    /poster-fullprint-manila-tambike\.jpg/,
+  );
+});
+
+test("all events secondary grid fills three desktop rows", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 1400 });
+  await page.goto("/events");
+
+  const secondaryCards = page.locator(".event-grid-secondary .event-card");
+  await expect(secondaryCards).toHaveCount(15);
+  await expect(secondaryCards.locator("h3")).toContainText([
+    "Boys of Garage Crossmeet Tambike",
+    "CCPH Upper East Tambike",
+    "CCPH Cebu Official Tambike",
   ]);
 });
 
@@ -125,6 +322,21 @@ test("header uses simplified rider brand without country pill", async ({ page })
   const brandMark = page.locator(".brand-mark").first();
   await expect(brandMark).toHaveCSS("transform-style", "preserve-3d");
   await expect(brandMark).toHaveCSS("border-bottom-style", "solid");
+});
+
+test("events page includes redesigned Tambike footer shortcuts", async ({ page }) => {
+  await page.goto("/events");
+
+  const footer = page.getByRole("contentinfo", { name: "Tambike footer" });
+  await expect(footer).toBeVisible();
+  await expect(footer.getByText("Ride bulletin")).toBeVisible();
+  await expect(footer.getByText("Built for tambike nights, charity rides, track days, and venue-hosted motorcycle ganaps.")).toBeVisible();
+  await expect(footer.getByText("Pass flow, event review, scanner, and reports are ready for walkthrough.")).toBeVisible();
+  await expect(footer.getByText(/Mock/i)).toHaveCount(0);
+  await expect(footer.getByRole("navigation", { name: "Footer event links" }).getByRole("link", { name: "Explore events" })).toHaveAttribute("href", "/events");
+  await expect(footer.getByRole("navigation", { name: "Footer rider links" }).getByRole("link", { name: "My passes" })).toHaveAttribute("href", "/passes");
+  await expect(footer.getByRole("navigation", { name: "Footer organizer links" }).getByRole("link", { name: "Create event" })).toHaveAttribute("href", "/organizer/events/create");
+  await expect(footer.locator(".footer-gauge")).toHaveCSS("border-bottom-style", "solid");
 });
 
 test("guest header nav avoids duplicate auth links and matches dashboard controls", async ({ page }) => {
@@ -192,7 +404,7 @@ test("rider navigation separates discovery, passes, profile, and hosting", async
   await expect(homeShortcuts.getByRole("link", { name: "Near Me" })).toHaveCount(0);
 });
 
-test("guest can log in with mock data, view profile, and register for an event", async ({
+test("guest can log in with sample data, view profile, and register for an event", async ({
   page,
 }) => {
   await page.goto("/events/arai-hjc-charity-ride");
@@ -219,7 +431,7 @@ test("guest can log in with mock data, view profile, and register for an event",
   await expect(page.getByText(/QR token: TBK-ARAI-HJC-CHARITY-RIDE/i)).toBeVisible();
 });
 
-test("new mock signup creates a rider profile", async ({ page }) => {
+test("new sample signup creates a rider profile", async ({ page }) => {
   await page.goto("/signup");
 
   await page.getByLabel(/Display name/i).fill("Jay New Rider");
@@ -236,8 +448,10 @@ test("new mock signup creates a rider profile", async ({ page }) => {
   await expect(page.getByText(/Club: QC Night Riders/i)).toBeVisible();
 });
 
-test("approved mock organizer can create an event draft", async ({ page }) => {
+test("approved sample organizer can create an event draft", async ({ page }) => {
   await page.goto("/login");
+  await expect(page.getByText("Account access")).toBeVisible();
+  await expect(page.getByText(/Mock login/i)).toHaveCount(0);
   await page.getByRole("button", { name: /Login as Marco Organizer/i }).click();
 
   await expect(page.getByRole("heading", { name: /Organizer Dashboard/i })).toBeVisible();
@@ -254,6 +468,8 @@ test("approved mock organizer can create an event draft", async ({ page }) => {
   await page.getByRole("button", { name: /Create draft/i }).click();
 
   await expect(page.getByRole("heading", { name: /Draft created/i })).toBeVisible();
+  await expect(page.getByText("Event draft")).toBeVisible();
+  await expect(page.getByText(/Mock event/i)).toHaveCount(0);
   await expect(page.getByText(/Tambike Night at Katipunan/i)).toBeVisible();
   await expect(page.getByText("Needs venue approval", { exact: true })).toBeVisible();
 
