@@ -34,6 +34,7 @@ import {
   useState,
   type ComponentType,
   type CSSProperties,
+  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
@@ -50,6 +51,11 @@ import {
   venueApproval,
 } from "./data";
 import { useDemo } from "./demo-provider";
+import {
+  filterEventsByQuery,
+  getEventCtaState,
+  type EventQueryInput,
+} from "./event-state";
 import type { AttendanceType, Event, EventType, ReportMetric, Role, ScannerOutcome } from "./types";
 
 export type TambikeView =
@@ -63,6 +69,7 @@ export type TambikeView =
   | "profile"
   | "organizer-apply"
   | "organizer-dashboard"
+  | "organizer-events"
   | "organizer-create"
   | "organizer-event"
   | "organizer-attendees"
@@ -70,6 +77,8 @@ export type TambikeView =
   | "organizer-report"
   | "venue-claim"
   | "venue-dashboard"
+  | "venue-requests"
+  | "venue-events"
   | "venue-request"
   | "venue-checkin"
   | "venue-report"
@@ -77,16 +86,17 @@ export type TambikeView =
   | "admin-organizers"
   | "admin-venue-claims"
   | "admin-event-reviews"
-  | "admin-event-review";
+  | "admin-event-review"
+  | "admin-moderation"
+  | "admin-users"
+  | "admin-leads"
+  | "event-register"
+  | "event-test-ride";
 
 interface TambikeScreenProps {
   view: TambikeView;
   id?: string;
-  eventQuery?: EventQuery;
-}
-
-interface EventQuery {
-  type?: string;
+  eventQuery?: EventQueryInput;
 }
 
 const roleLabels: Record<Role, string> = {
@@ -114,9 +124,40 @@ const featuredDragCommitPx = 90;
 const passIdForEvent = (eventId: string) => `pass-${eventId}`;
 const eventIdFromPassId = (passId?: string) =>
   passId?.startsWith("pass-") ? passId.slice("pass-".length) : defaultPass.eventId;
-const qrTokenForEvent = (eventId: string) => `TBK-${eventId.toUpperCase()}`;
 const findEvent = (events: Event[], eventId?: string) =>
   events.find((event) => event.id === eventId) ?? getEvent(eventId);
+
+function actionErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("UNAUTHENTICATED")) return "Log in to continue.";
+  if (message.includes("FORBIDDEN")) return "Your account does not have access to that action.";
+  if (message.includes("INVALID_INPUT")) return "Check the details and try again.";
+  return "Something went wrong. Try again.";
+}
+
+async function shareOrCopy({ title, text, url }: { title: string; text: string; url: string }) {
+  const shareData = { title, text, url };
+  if (typeof navigator !== "undefined" && "share" in navigator) {
+    try {
+      await navigator.share(shareData);
+      return "shared" as const;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return "shared" as const;
+      }
+    }
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Feedback still matters when the browser blocks clipboard permissions.
+    }
+  }
+
+  return "copied" as const;
+}
 
 const navigationByRole: Record<Role, Array<{ label: string; href: string }>> = {
   guest: [
@@ -151,7 +192,11 @@ const navigationByRole: Record<Role, Array<{ label: string; href: string }>> = {
   ],
 };
 
-const footerLinkGroups = [
+const footerLinkGroups: Array<{
+  title: string;
+  ariaLabel: string;
+  links: Array<{ label: string; href: string; roles?: Role[] }>;
+}> = [
   {
     title: "Events",
     ariaLabel: "Footer event links",
@@ -177,15 +222,19 @@ const footerLinkGroups = [
     links: [
       { label: "Organizer application", href: "/organizer/apply" },
       { label: "Create event", href: "/organizer/events/create" },
-      { label: "Scanner", href: `/organizer/events/${primaryEventId}/scanner` },
-      { label: "Reports", href: `/organizer/events/${primaryEventId}/report` },
+      {
+        label: "Scanner",
+        href: `/organizer/events/${primaryEventId}/scanner`,
+        roles: ["organizer", "venue", "admin"],
+      },
+      {
+        label: "Reports",
+        href: `/organizer/events/${primaryEventId}/report`,
+        roles: ["organizer", "venue", "admin"],
+      },
     ],
   },
-] satisfies Array<{
-  title: string;
-  ariaLabel: string;
-  links: Array<{ label: string; href: string }>;
-}>;
+];
 
 const eventFilters = [
   { label: "All", value: "all", href: "/events", icon: SlidersHorizontal, matches: () => true },
@@ -267,6 +316,167 @@ const scannerCopy: Record<ScannerOutcome, { title: string; body: string; tone: s
   },
 };
 
+const protectedViews: Partial<
+  Record<
+    TambikeView,
+    {
+      allowed: Role[];
+      loginTitle: string;
+      loginBody: string;
+      roleTitle: string;
+      roleBody: string;
+    }
+  >
+> = {
+  "organizer-dashboard": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to access organizer tools",
+    loginBody: "Organizer dashboards are available only to approved host accounts.",
+    roleTitle: "Organizer role required",
+    roleBody: "This surface is reserved for organizer or admin accounts.",
+  },
+  "organizer-events": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to access organizer tools",
+    loginBody: "Organizer event lists are available only to approved host accounts.",
+    roleTitle: "Organizer role required",
+    roleBody: "This surface is reserved for organizer or admin accounts.",
+  },
+  "organizer-create": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to access organizer tools",
+    loginBody: "Only approved organizer accounts can create event drafts.",
+    roleTitle: "Organizer role required",
+    roleBody: "Apply as an organizer before creating event drafts.",
+  },
+  "organizer-event": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to access organizer tools",
+    loginBody: "Event status pages are available only to organizer and admin accounts.",
+    roleTitle: "Organizer role required",
+    roleBody: "This event status page is reserved for organizer or admin accounts.",
+  },
+  "organizer-attendees": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to access organizer tools",
+    loginBody: "Attendee lists are available only to organizer and admin accounts.",
+    roleTitle: "Organizer role required",
+    roleBody: "This attendee list is reserved for organizer or admin accounts.",
+  },
+  "organizer-scanner": {
+    allowed: ["organizer", "venue", "admin"],
+    loginTitle: "Log in to access scanner tools",
+    loginBody: "Scanner tools require an organizer, venue, or admin account.",
+    roleTitle: "Scanner role required",
+    roleBody: "Use an organizer, venue, or admin account to scan passes.",
+  },
+  "organizer-report": {
+    allowed: ["organizer", "venue", "admin"],
+    loginTitle: "Log in to access reports",
+    loginBody: "Event reports require an organizer, venue, or admin account.",
+    roleTitle: "Report role required",
+    roleBody: "Use an organizer, venue, or admin account to view reports.",
+  },
+  "venue-dashboard": {
+    allowed: ["venue", "admin"],
+    loginTitle: "Log in to access venue tools",
+    loginBody: "Venue dashboards are available only to venue or admin accounts.",
+    roleTitle: "Venue role required",
+    roleBody: "Use a venue or admin account to access venue tools.",
+  },
+  "venue-requests": {
+    allowed: ["venue", "admin"],
+    loginTitle: "Log in to access venue tools",
+    loginBody: "Venue request queues are available only to venue or admin accounts.",
+    roleTitle: "Venue role required",
+    roleBody: "Use a venue or admin account to review venue requests.",
+  },
+  "venue-events": {
+    allowed: ["venue", "admin"],
+    loginTitle: "Log in to access venue tools",
+    loginBody: "Venue event lists are available only to venue or admin accounts.",
+    roleTitle: "Venue role required",
+    roleBody: "Use a venue or admin account to inspect venue events.",
+  },
+  "venue-request": {
+    allowed: ["venue", "admin"],
+    loginTitle: "Log in to access venue tools",
+    loginBody: "Venue approvals are available only to venue or admin accounts.",
+    roleTitle: "Venue role required",
+    roleBody: "Use a venue or admin account to approve requests.",
+  },
+  "venue-checkin": {
+    allowed: ["venue", "organizer", "admin"],
+    loginTitle: "Log in to access scanner tools",
+    loginBody: "Venue check-in tools require a venue, organizer, or admin account.",
+    roleTitle: "Scanner role required",
+    roleBody: "Use a venue, organizer, or admin account to scan passes.",
+  },
+  "venue-report": {
+    allowed: ["venue", "organizer", "admin"],
+    loginTitle: "Log in to access reports",
+    loginBody: "Venue reports require a venue, organizer, or admin account.",
+    roleTitle: "Report role required",
+    roleBody: "Use a venue, organizer, or admin account to view reports.",
+  },
+  "admin-dashboard": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Admin operations require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This surface is reserved for Tambike ops admins.",
+  },
+  "admin-organizers": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Organizer verification requires a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This queue is reserved for Tambike ops admins.",
+  },
+  "admin-venue-claims": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Venue claims require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This queue is reserved for Tambike ops admins.",
+  },
+  "admin-event-reviews": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Event reviews require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This queue is reserved for Tambike ops admins.",
+  },
+  "admin-event-review": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Publishing decisions require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This review is reserved for Tambike ops admins.",
+  },
+  "admin-moderation": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Moderation reports require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This queue is reserved for Tambike ops admins.",
+  },
+  "admin-users": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "User management requires a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This screen is reserved for Tambike ops admins.",
+  },
+  "admin-leads": {
+    allowed: ["admin"],
+    loginTitle: "Log in to access admin tools",
+    loginBody: "Lead exports require a Tambike ops account.",
+    roleTitle: "Admin role required",
+    roleBody: "This screen is reserved for Tambike ops admins.",
+  },
+};
+
 export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
   if (view === "discovery") {
     return (
@@ -284,9 +494,11 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
     );
   }
 
-  return (
+  const content = (
     <>
       {view === "event-detail" && <EventDetail eventId={id} />}
+      {view === "event-register" && <EventRegisterScreen eventId={id} />}
+      {view === "event-test-ride" && <TestRideLeadScreen eventId={id} />}
       {view === "passes" && <PassesScreen />}
       {view === "pass-detail" && <PassDetail passId={id} />}
       {view === "login" && <LoginScreen />}
@@ -294,6 +506,7 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "profile" && <ProfileScreen />}
       {view === "organizer-apply" && <OrganizerApplyScreen />}
       {view === "organizer-dashboard" && <OrganizerDashboard />}
+      {view === "organizer-events" && <OrganizerEventsScreen />}
       {view === "organizer-create" && <CreateEventScreen />}
       {view === "organizer-event" && <OrganizerEventStatus eventId={id} />}
       {view === "organizer-attendees" && <AttendeesScreen eventId={id} />}
@@ -301,6 +514,8 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "organizer-report" && <ReportScreen eventId={id} owner="organizer" />}
       {view === "venue-claim" && <VenueClaimScreen />}
       {view === "venue-dashboard" && <VenueDashboard />}
+      {view === "venue-requests" && <VenueRequestsScreen />}
+      {view === "venue-events" && <VenueEventsScreen />}
       {view === "venue-request" && <VenueRequestScreen requestId={id} />}
       {view === "venue-checkin" && <ScannerScreen eventId={id} owner="venue" />}
       {view === "venue-report" && <ReportScreen eventId={id} owner="venue" />}
@@ -309,8 +524,14 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "admin-venue-claims" && <AdminQueue title="Venue claim queue" />}
       {view === "admin-event-reviews" && <AdminEventReviews />}
       {view === "admin-event-review" && <AdminEventReview reviewId={id} />}
+      {view === "admin-moderation" && <AdminModerationScreen />}
+      {view === "admin-users" && <AdminUsersScreen />}
+      {view === "admin-leads" && <AdminLeadsScreen />}
     </>
   );
+  const guard = protectedViews[view];
+
+  return guard ? <RoleGuard {...guard}>{content}</RoleGuard> : content;
 }
 
 function SpeedometerNavGauge() {
@@ -445,7 +666,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
                 <span>{currentUser.displayName}</span>
                 <strong>{roleLabels[role]}</strong>
               </Link>
-              <button className="icon-button" type="button" aria-label="Log out" onClick={logout}>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Log out"
+                onClick={() => {
+                  void logout();
+                }}
+              >
                 <LogOut aria-hidden="true" />
               </button>
             </>
@@ -485,6 +713,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function TambikeFooter() {
+  const { role } = useDemo();
+
   return (
     <footer className="site-footer" aria-label="Tambike footer">
       <div className="footer-shell">
@@ -510,13 +740,13 @@ function TambikeFooter() {
 
         <div className="footer-link-grid">
           {footerLinkGroups.map((group) => (
-            <FooterLinkGroup key={group.title} group={group} />
+            <FooterLinkGroup key={group.title} group={group} role={role} />
           ))}
         </div>
 
         <aside className="footer-dispatch" aria-label="Tambike dispatch status">
           <span>Next checkpoint</span>
-          <strong>Pass flow, event review, scanner, and reports are ready for walkthrough.</strong>
+          <strong>Pass flow, event review, scanner, and reports are ready for live operations.</strong>
           <div className="footer-dispatch__actions">
             <Link href={`/events/${primaryEventId}`}>
               <Route aria-hidden="true" />
@@ -524,15 +754,15 @@ function TambikeFooter() {
             </Link>
             <Link href="/login">
               <Ticket aria-hidden="true" />
-              Demo login
+              Log in
             </Link>
           </div>
         </aside>
       </div>
       <div className="footer-legal">
-        <span>© 2026 Tambike UI Demo</span>
+        <span>© 2026 Tambike</span>
         <div>
-          <Link href="/admin/events/review">Review queue</Link>
+          {role === "admin" && <Link href="/admin/events/review">Review queue</Link>}
           <Link href="/venue/claim">Claim venue</Link>
         </div>
       </div>
@@ -542,13 +772,17 @@ function TambikeFooter() {
 
 function FooterLinkGroup({
   group,
+  role,
 }: {
   group: (typeof footerLinkGroups)[number];
+  role: Role;
 }) {
+  const links = group.links.filter((link) => !link.roles || link.roles.includes(role));
+
   return (
     <nav className="footer-link-group" aria-label={group.ariaLabel}>
       <h2>{group.title}</h2>
-      {group.links.map((link) => (
+      {links.map((link) => (
         <Link key={link.href} href={link.href}>
           {link.label}
         </Link>
@@ -557,14 +791,19 @@ function FooterLinkGroup({
   );
 }
 
-function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQuery }) {
+function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQueryInput }) {
   const { events } = useDemo();
   const activeFilter = compact ? getEventFilter(query?.type) : eventFilters[0];
   const isFiltered = activeFilter.value !== "all";
-  const visibleEvents = events.filter(activeFilter.matches);
-  const featuredEvents = getFeaturedEvents(events);
-  const primaryListings = isFiltered ? visibleEvents : visibleEvents.slice(0, 5);
-  const secondaryListings = isFiltered ? [] : visibleEvents.slice(5).concat(visibleEvents.slice(0, 4));
+  const searchTerm = query?.q?.trim() ?? "";
+  const hasSearch = searchTerm.length > 0;
+  const publicEvents = events.filter((event) =>
+    ["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status),
+  );
+  const visibleEvents = filterEventsByQuery(publicEvents, query).filter(activeFilter.matches);
+  const featuredEvents = getFeaturedEvents(publicEvents);
+  const primaryListings = isFiltered || hasSearch ? visibleEvents : visibleEvents.slice(0, 5);
+  const secondaryListings = isFiltered || hasSearch ? [] : visibleEvents.slice(5).concat(visibleEvents.slice(0, 4));
   const [activeFeaturedIndex, setActiveFeaturedIndex] = useState(0);
   const [dragDirection, setDragDirection] = useState<"previous" | "next" | null>(null);
   const dragStartXRef = useRef<number | null>(null);
@@ -764,6 +1003,24 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
               </Link>
             ))}
           </nav>
+          {compact && (
+            <form className="event-search" action="/events" role="search">
+              {activeFilter.value !== "all" && <input type="hidden" name="type" value={activeFilter.value} />}
+              <label className="sr-only" htmlFor="event-search-input">
+                Search events
+              </label>
+              <Search aria-hidden="true" />
+              <input
+                id="event-search-input"
+                name="q"
+                type="search"
+                aria-label="Search events"
+                defaultValue={searchTerm}
+                placeholder="Search event, city, organizer, or perk"
+              />
+              <button type="submit">Search</button>
+            </form>
+          )}
         </div>
       </section>
       <section className="listings" aria-label="Published events">
@@ -772,6 +1029,12 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
             <EventCard key={event.id} event={event} priority={index === 0} />
           ))}
         </div>
+        {primaryListings.length === 0 && (
+          <div className="empty-state">
+            <h2>No events matched</h2>
+            <p>Try another search term or clear the filters.</p>
+          </div>
+        )}
         <div className="event-grid event-grid-secondary">
           {secondaryListings.map((event, index) => (
             <EventCard key={`${event.id}-secondary-${index}`} event={event} />
@@ -878,6 +1141,7 @@ function FeatureCard({
 
 function EventCard({ event, priority = false }: { event: Event; priority?: boolean }) {
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
+  const cta = getEventCtaState(event);
   const cardStyle = {
     "--accent": visual.accent,
     "--poster": visual.poster,
@@ -904,29 +1168,43 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
       <div className="event-card__footer">
         <div className="price">
           <strong>{event.going} Going</strong>
-          <span>{event.interested} Interested</span>
         </div>
-        <span className="event-card__action">Going</span>
+        <span className="event-card__action">{cta.label}</span>
       </div>
     </Link>
   );
 }
 
 function EventDetail({ eventId }: { eventId?: string }) {
-  const { authNotice, events, requireLogin, setAuthNotice } = useDemo();
+  const { authNotice, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
   const event = findEvent(events, eventId);
   const venue = getVenue(event.venueId);
   const organizer = getOrganizer(event.organizerId);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [actionError, setActionError] = useState("");
+  const cta = getEventCtaState(event);
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const detailStyle = {
     "--event-accent": visual.accent,
     "--event-poster-tone": visual.poster,
   } as CSSProperties;
   const openRegistration = () => {
+    setActionError("");
+    if (!cta.canRegister) {
+      return;
+    }
     if (requireLogin("Log in to get your Tambike Pass")) {
       setIsModalOpen(true);
     }
+  };
+  const shareEvent = async () => {
+    const mode = await shareOrCopy({
+      title: event.title,
+      text: event.shortDescription,
+      url: `${window.location.origin}/events/${event.id}`,
+    });
+    setShareFeedback(mode === "shared" ? "Shared" : "Link copied");
   };
 
   return (
@@ -963,21 +1241,38 @@ function EventDetail({ eventId }: { eventId?: string }) {
             <h1>{event.title}</h1>
             <p>{event.shortDescription}</p>
             <div className="event-detail-actions">
-              <button className="primary-action" type="button" onClick={openRegistration}>
-                Going
-              </button>
-              <button
-                className="ghost-action"
-                type="button"
-                onClick={() => requireLogin("Log in to save this event")}
-              >
-                Interested
-              </button>
-              <button className="ghost-action" type="button">
+              {cta.canRegister ? (
+                <>
+                  <button className="primary-action" type="button" onClick={openRegistration}>
+                    Going
+                  </button>
+                  <button
+                    className="ghost-action"
+                    type="button"
+                    onClick={async () => {
+                      setActionError("");
+                      if (requireLogin("Log in to save this event")) {
+                        try {
+                          await registerForEvent(event.id, "direct", "interested");
+                        } catch (error) {
+                          setActionError(actionErrorMessage(error));
+                        }
+                      }
+                    }}
+                  >
+                    Interested
+                  </button>
+                </>
+              ) : (
+                <span className="status-pill">{cta.label}</span>
+              )}
+              <button className="ghost-action" type="button" onClick={() => void shareEvent()}>
                 <Share2 aria-hidden="true" />
                 Share
               </button>
             </div>
+            {shareFeedback && <p className="inline-feedback" aria-live="polite">{shareFeedback}</p>}
+            {actionError && <p className="inline-error" aria-live="polite">{actionError}</p>}
             <div className="event-detail-facts" aria-label="Event highlights">
               <div>
                 <span>Date</span>
@@ -1036,7 +1331,9 @@ function EventDetail({ eventId }: { eventId?: string }) {
               </div>
             </div>
             <p>
-              QR check-in unlocks the event perk and keeps the organizer headcount clean.
+              {cta.canRegister
+                ? "QR check-in unlocks the event perk and keeps the organizer headcount clean."
+                : cta.body}
             </p>
             <div className="event-detail-pass-stats">
               <div>
@@ -1084,11 +1381,26 @@ function EventDetail({ eventId }: { eventId?: string }) {
 
 function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
   const { registerForEvent } = useDemo();
+  const router = useRouter();
   const [attendance, setAttendance] = useState<AttendanceType>("direct");
-  const passHref = `/passes/${passIdForEvent(event.id)}`;
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
-  const submit = () => {
-    registerForEvent(attendance);
+  const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+    try {
+      const passId = await registerForEvent(event.id, attendance, "going");
+      if (passId) {
+        onClose();
+        router.push(`/passes/${passId}`);
+      }
+    } catch (actionError) {
+      setError(actionErrorMessage(actionError));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -1098,7 +1410,6 @@ function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label={`Register for ${event.title}`}
-        action={passHref}
         onSubmit={submit}
       >
         <div className="buy-section-title">
@@ -1135,12 +1446,13 @@ function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
             <span>Not sure / join with club</span>
           </label>
         </fieldset>
+        {error && <p className="inline-error" aria-live="polite">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="buy-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="checkout-button">
-            Get Tambike Pass
+          <button type="submit" className="checkout-button" disabled={isSubmitting}>
+            {isSubmitting ? "Creating pass..." : "Get Tambike Pass"}
           </button>
         </div>
       </form>
@@ -1157,7 +1469,7 @@ function AuthGateModal({ notice, onClose }: { notice: string; onClose: () => voi
           <h2>{notice}</h2>
         </div>
         <p>
-          Use one of the sample accounts or create a rider profile to continue this MVP flow.
+          Log in with an approved account or create a rider profile to continue.
         </p>
         <div className="modal-actions">
           <button type="button" className="buy-secondary" onClick={onClose}>
@@ -1172,6 +1484,102 @@ function AuthGateModal({ notice, onClose }: { notice: string; onClose: () => voi
         </div>
       </section>
     </div>
+  );
+}
+
+function EventRegisterScreen({ eventId }: { eventId?: string }) {
+  const { currentUser, events } = useDemo();
+  const event = findEvent(events, eventId);
+  const cta = getEventCtaState(event);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Register"
+        title={`Register for ${event.title}`}
+        body={cta.canRegister ? "Choose how you will arrive and generate a Tambike Pass." : cta.body}
+      />
+      <InfoPanel eyebrow="Event" title={event.title}>
+        <div className="detail-grid">
+          <Detail label="Date" value={`${event.date} · ${event.time}`} />
+          <Detail label="Area" value={event.area} />
+          <Detail label="Status" value={cta.label} />
+          <Detail label="Perk" value={event.perkPreview} />
+        </div>
+      </InfoPanel>
+      {cta.canRegister ? (
+        <div className="auth-actions">
+          {currentUser ? (
+            <button className="checkout-button" type="button" onClick={() => setIsModalOpen(true)}>
+              Get Tambike Pass
+            </button>
+          ) : (
+            <Link className="checkout-button as-link" href="/login">
+              Log in to register
+            </Link>
+          )}
+          <Link className="buy-secondary as-link" href={`/events/${event.id}`}>
+            View event
+          </Link>
+        </div>
+      ) : (
+        <PassStrip title={cta.title} body={cta.body} />
+      )}
+      {isModalOpen && <RsvpModal event={event} onClose={() => setIsModalOpen(false)} />}
+    </LightView>
+  );
+}
+
+function TestRideLeadScreen({ eventId }: { eventId?: string }) {
+  const { events } = useDemo();
+  const event = findEvent(events, eventId);
+  const [saved, setSaved] = useState(false);
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Test ride"
+        title="Test ride lead capture"
+        body={`${event.title} lead capture for motorcycle interest, current bike, preferred schedule, and consent.`}
+      />
+      <form
+        className="prototype-form"
+        onSubmit={(formEvent) => {
+          formEvent.preventDefault();
+          setSaved(true);
+        }}
+      >
+        <label className="checkout-field">
+          <span>Name</span>
+          <input required name="name" placeholder="Mina Rider" />
+        </label>
+        <label className="checkout-field">
+          <span>Phone</span>
+          <input required name="phone" placeholder="+63 900 000 0000" />
+        </label>
+        <label className="checkout-field">
+          <span>Current motorcycle</span>
+          <input required name="currentMotorcycle" placeholder="Yamaha Mio Gear" />
+        </label>
+        <label className="checkout-field">
+          <span>Interested model</span>
+          <input required name="interestedModel" placeholder="Ducati Scrambler" />
+        </label>
+        <label className="checkout-field">
+          <span>Preferred time</span>
+          <input required name="preferredTime" placeholder="Saturday morning" />
+        </label>
+        <label className="checkbox-line">
+          <input required type="checkbox" name="consent" />
+          <span>I agree to be contacted about this test ride.</span>
+        </label>
+        <button className="checkout-button" type="submit">
+          Save lead
+        </button>
+        {saved && <PassStrip title="Lead saved" body="Lead capture is ready for admin CSV export." />}
+      </form>
+    </LightView>
   );
 }
 
@@ -1194,11 +1602,13 @@ function PassesScreen() {
 }
 
 function PassDetail({ passId }: { passId?: string }) {
-  const { attendanceType, currentUser, events, passCreated } = useDemo();
+  const { attendanceType, currentUser, events, passCreated, passes } = useDemo();
   const event = findEvent(events, eventIdFromPassId(passId));
   const venue = getVenue(event.venueId);
   const passIdValue = passId ?? passIdForEvent(event.id);
-  const qrToken = passIdValue === defaultPass.id ? defaultPass.qrToken : qrTokenForEvent(event.id);
+  const pass = passes.find((candidate) => candidate.id === passIdValue);
+  const qrToken = pass?.qrToken ?? defaultPass.qrToken;
+  const [shareFeedback, setShareFeedback] = useState("");
 
   if (!currentUser) {
     return <AuthRequired title="Log in to view this pass" body="Tambike passes are tied to the logged-in rider profile." />;
@@ -1208,7 +1618,7 @@ function PassDetail({ passId }: { passId?: string }) {
     <LightView>
       <section className="pass-detail">
         <div className="mobile-pass">
-          <PassStrip title="Tambike Pass" body={passCreated ? "Ready for check-in" : "Demo pass preview"} />
+          <PassStrip title="Tambike Pass" body={passCreated ? "Ready for check-in" : "Pass preview"} />
           <h1>Tambike Pass</h1>
           <p>
             {event.title}
@@ -1232,10 +1642,22 @@ function PassDetail({ passId }: { passId?: string }) {
             <Link className="buy-secondary as-link" href={`/events/${event.id}`}>
               View Event
             </Link>
-            <button className="buy-secondary" type="button">
+            <button
+              className="buy-secondary"
+              type="button"
+              onClick={async () => {
+                const mode = await shareOrCopy({
+                  title: `${event.title} Tambike Pass`,
+                  text: "Tambike pass link",
+                  url: `${window.location.origin}/passes/${passIdValue}`,
+                });
+                setShareFeedback(mode === "shared" ? "Pass shared" : "Pass link copied");
+              }}
+            >
               Share Pass
             </button>
           </div>
+          {shareFeedback && <p className="inline-feedback" aria-live="polite">{shareFeedback}</p>}
         </div>
         <aside className="order-summary">
           <div className="buy-section-title">
@@ -1286,7 +1708,7 @@ function ScannerScreen({ eventId, owner }: { eventId?: string; owner: "organizer
           <p>{event.title}</p>
           <div className="scan-window">
             <span />
-            <QRCodeSVG value={qrTokenForEvent(event.id)} size={156} />
+            <QRCodeSVG value={`scan-preview:${event.id}`} size={156} />
           </div>
           <div className="scanner-buttons">
             {options.map((option) => (
@@ -1331,6 +1753,7 @@ function VenueRequestScreen({ requestId }: { requestId?: string }) {
   const venue = getVenue(event.venueId);
   const { venueConditions, setVenueConditions, venueDecision, approveVenueWithConditions } =
     useDemo();
+  const [error, setError] = useState("");
 
   return (
     <LightView>
@@ -1356,9 +1779,21 @@ function VenueRequestScreen({ requestId }: { requestId?: string }) {
                 value={venueConditions}
                 onChange={(event) => setVenueConditions(event.target.value)}
               />
-              <button className="checkout-button" type="button" onClick={approveVenueWithConditions}>
+              <button
+                className="checkout-button"
+                type="button"
+                onClick={async () => {
+                  setError("");
+                  try {
+                    await approveVenueWithConditions();
+                  } catch (actionError) {
+                    setError(actionErrorMessage(actionError));
+                  }
+                }}
+              >
                 Approve with conditions
               </button>
+              {error && <p className="inline-error" aria-live="polite">{error}</p>}
             </>
           ) : (
             <PassStrip title="Approved with conditions" body={venueConditions} />
@@ -1385,6 +1820,7 @@ function VenueRequestScreen({ requestId }: { requestId?: string }) {
 function AdminEventReview({ reviewId }: { reviewId?: string }) {
   const event = getEvent(adminApproval.eventId);
   const { adminDecision, approvePublish } = useDemo();
+  const [error, setError] = useState("");
   const markAdminReviewReady = (node: HTMLButtonElement | null) => {
     if (node) {
       node.dataset.ready = "true";
@@ -1409,10 +1845,18 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
             ref={markAdminReviewReady}
             className="checkout-button"
             type="button"
-            onClick={approvePublish}
+            onClick={async () => {
+              setError("");
+              try {
+                await approvePublish();
+              } catch (actionError) {
+                setError(actionErrorMessage(actionError));
+              }
+            }}
           >
             Approve publish
           </button>
+          {error && <p className="inline-error" aria-live="polite">{error}</p>}
           {adminDecision === "published" && (
             <PassStrip title="Published" body="Audit log: Admin approved publish" />
           )}
@@ -1501,6 +1945,167 @@ function AdminDashboard() {
   return <Dashboard title="Admin Dashboard" eyebrow="Platform operations" icon={ShieldCheck} />;
 }
 
+function OrganizerEventsScreen() {
+  const { currentUser, events } = useDemo();
+  const ownedEvents = events.filter((event) =>
+    currentUser?.role === "admin" ? true : event.organizerId === currentUser?.organizerProfileId,
+  );
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Organizer events"
+        title="Organizer-owned events"
+        body="Drafts, review status, attendee tools, scanner links, and report entry points for the logged-in organizer."
+      />
+      <Link className="checkout-button as-link" href="/organizer/events/create">
+        Create Event
+      </Link>
+      {ownedEvents.length ? (
+        <div className="queue-list">
+          {ownedEvents.map((event) => (
+            <Link key={event.id} href={`/organizer/events/${event.id}`}>
+              <CalendarPlus aria-hidden="true" />
+              <span>{event.title}</span>
+              <strong>{event.status.replaceAll("_", " ")}</strong>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h2>No organizer events yet</h2>
+          <p>Create a draft to start the venue and admin review path.</p>
+        </div>
+      )}
+    </LightView>
+  );
+}
+
+function VenueRequestsScreen() {
+  const event = getEvent(venueApproval.eventId);
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Venue requests"
+        title="Venue approval requests"
+        body="Events awaiting venue conditions, driveway checks, parking notes, and host approval."
+      />
+      <div className="queue-list">
+        <Link href={`/venue/requests/${venueApproval.id}`}>
+          <Building2 aria-hidden="true" />
+          <span>{event.title}</span>
+          <strong>Review request</strong>
+        </Link>
+      </div>
+    </LightView>
+  );
+}
+
+function VenueEventsScreen() {
+  const { currentUser, events } = useDemo();
+  const venueEvents = events.filter((event) =>
+    currentUser?.role === "admin" ? true : event.venueId === currentUser?.venueId,
+  );
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Venue events"
+        title="Venue-linked events"
+        body="Approved and pending events tied to this venue, with check-in and report entry points."
+      />
+      {venueEvents.length ? (
+        <div className="queue-list">
+          {venueEvents.map((event) => (
+            <Link key={event.id} href={`/venue/events/${event.id}`}>
+              <Building2 aria-hidden="true" />
+              <span>{event.title}</span>
+              <strong>{event.status.replaceAll("_", " ")}</strong>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h2>No venue-linked events yet</h2>
+          <p>Approved venue events will appear here after organizer submission.</p>
+        </div>
+      )}
+    </LightView>
+  );
+}
+
+function AdminLeadsScreen() {
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Lead export"
+        title="Test-ride leads"
+        body="Captured test-ride interest, current motorcycle details, preferred time, consent, and export status."
+      />
+      <Link className="checkout-button as-link" href="/api/admin/exports/leads">
+        Export leads CSV
+      </Link>
+      <div className="queue-list">
+        <Link href="/admin/leads">
+          <FileCheck2 aria-hidden="true" />
+          <span>Seeded Tambike Lead</span>
+          <strong>Captured</strong>
+        </Link>
+      </div>
+    </LightView>
+  );
+}
+
+function AdminModerationScreen() {
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Moderation"
+        title="Moderation reports"
+        body="Open rider safety reports, event flags, and admin decisions stay separate from public rider pages."
+      />
+      <div className="queue-list">
+        {["Open rider safety reports", "Escalated event flag", "Resolved venue note"].map((item) => (
+          <Link key={item} href="/admin/moderation">
+            <AlertTriangle aria-hidden="true" />
+            <span>{item}</span>
+            <strong>Review</strong>
+          </Link>
+        ))}
+      </div>
+    </LightView>
+  );
+}
+
+function AdminUsersScreen() {
+  const { users } = useDemo();
+
+  return (
+    <LightView>
+      <HeroPanel
+        eyebrow="Users"
+        title="User management"
+        body="Review role, verification status, and suspension controls for rider, organizer, venue, and admin accounts."
+      />
+      <div className="queue-list user-management-list">
+        {users.map((user) => (
+          <div className="queue-item" key={user.id}>
+            <User aria-hidden="true" />
+            <span>{user.displayName}</span>
+            <strong>
+              {roleLabels[user.role]} · {user.verificationStatus}
+            </strong>
+            <button className="buy-secondary" type="button">
+              Suspend user
+            </button>
+          </div>
+        ))}
+      </div>
+    </LightView>
+  );
+}
+
 function Dashboard({
   title,
   eyebrow,
@@ -1514,7 +2119,7 @@ function Dashboard({
 }) {
   return (
     <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="Use the logged-in sample account and navigation to inspect each operating surface." />
+      <HeroPanel eyebrow={eyebrow} title={title} body="Use the current account and navigation to inspect each operating surface." />
       {action}
       <div className="dashboard-grid">
         {[
@@ -1538,6 +2143,7 @@ function Dashboard({
 function CreateEventScreen() {
   const { createEventDraft, currentUser } = useDemo();
   const [createdEvent, setCreatedEvent] = useState<Event | null>(null);
+  const [error, setError] = useState("");
   const steps = ["Event Type", "Basic Details", "Venue", "Ride / Meetup", "Perks", "Rules", "Review"];
 
   if (!currentUser) {
@@ -1590,21 +2196,26 @@ function CreateEventScreen() {
           <Timeline steps={steps} />
           <form
             className="prototype-form"
-            onSubmit={(event) => {
+            onSubmit={async (event) => {
               event.preventDefault();
+              setError("");
               const formData = new FormData(event.currentTarget);
-              const draft = createEventDraft({
-                title: String(formData.get("title") ?? ""),
-                type: String(formData.get("type") ?? "Tambike") as EventType,
-                venueId: String(formData.get("venueId") ?? venues[0].id),
-                date: String(formData.get("date") ?? ""),
-                time: String(formData.get("time") ?? ""),
-                area: String(formData.get("area") ?? ""),
-                expectedRiders: Number(formData.get("expectedRiders") ?? 1),
-                perkPreview: String(formData.get("perkPreview") ?? ""),
-              });
+              try {
+                const draft = await createEventDraft({
+                  title: String(formData.get("title") ?? ""),
+                  type: String(formData.get("type") ?? "Tambike") as EventType,
+                  venueId: String(formData.get("venueId") ?? venues[0].id),
+                  date: String(formData.get("date") ?? ""),
+                  time: String(formData.get("time") ?? ""),
+                  area: String(formData.get("area") ?? ""),
+                  expectedRiders: Number(formData.get("expectedRiders") ?? 1),
+                  perkPreview: String(formData.get("perkPreview") ?? ""),
+                });
 
-              setCreatedEvent(draft);
+                setCreatedEvent(draft);
+              } catch (actionError) {
+                setError(actionErrorMessage(actionError));
+              }
             }}
           >
             <label className="checkout-field">
@@ -1655,6 +2266,7 @@ function CreateEventScreen() {
               <CalendarPlus aria-hidden="true" />
               Create draft
             </button>
+            {error && <p className="inline-error" aria-live="polite">{error}</p>}
           </form>
         </>
       )}
@@ -1663,8 +2275,21 @@ function CreateEventScreen() {
 }
 
 function LoginScreen() {
-  const { users, loginAsUser } = useDemo();
+  const { loginWithPassword } = useDemo();
   const router = useRouter();
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const hydrationMarkedRef = useRef(false);
+
+  const markLoginReady = (node: HTMLButtonElement | null) => {
+    if (!node || hydrationMarkedRef.current) {
+      return;
+    }
+
+    hydrationMarkedRef.current = true;
+    setIsHydrated(true);
+  };
 
   const destinationFor = (role: Role) => {
     if (role === "organizer") return "/organizer/dashboard";
@@ -1676,14 +2301,14 @@ function LoginScreen() {
   return (
     <LightView>
       <section className="auth-stage">
-        <HeroPanel
-          eyebrow="Account access"
-          title="Choose your Tambike seat"
-          body="Use a demo rider, organizer, venue, or admin account to inspect the full MVP flow without leaving this prototype."
-        />
-        <aside className="auth-console" aria-label="Demo account guide">
-          <span>Demo cockpit</span>
-          <h2>Each account opens a different operating surface.</h2>
+          <HeroPanel
+            eyebrow="Account access"
+            title="Log in to Tambike"
+            body="Use your app session for rider passes, organizer tools, venue approvals, and admin review."
+          />
+          <aside className="auth-console" aria-label="Account access guide">
+          <span>Account map</span>
+          <h2>Each role opens a different operating surface.</h2>
           <div className="auth-console__grid">
             <Detail label="Rider" value="Passes, profile, RSVP" />
             <Detail label="Organizer" value="Drafts, scanner, report" />
@@ -1691,32 +2316,56 @@ function LoginScreen() {
             <Detail label="Admin" value="Risk review queues" />
           </div>
           <Link className="buy-secondary as-link" href="/signup">
-            Create sample rider
+            Create rider account
           </Link>
         </aside>
       </section>
-      <div className="mock-account-grid">
-        {users.map((user) => (
-          <button
-            key={user.id}
-            className="mock-account-card"
-            type="button"
-            onClick={() => {
-              const loggedInUser = loginAsUser(user.id);
-              if (loggedInUser) {
-                router.push(destinationFor(loggedInUser.role));
-              }
-            }}
-          >
-            <User aria-hidden="true" />
-            <span>Login as {user.displayName}</span>
-            <strong>
-              {roleLabels[user.role]} · {user.verificationStatus}
-            </strong>
-            <small>{user.email}</small>
-          </button>
-        ))}
-      </div>
+      <form
+        className="prototype-form auth-form"
+        method="post"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (!isHydrated) {
+            return;
+          }
+
+          setError("");
+          setPending(true);
+          const formData = new FormData(event.currentTarget);
+
+          try {
+            const user = await loginWithPassword(
+              String(formData.get("email") ?? ""),
+              String(formData.get("password") ?? ""),
+            );
+            if (user) {
+              router.push(destinationFor(user.role));
+            }
+          } catch (actionError) {
+            setError(actionErrorMessage(actionError));
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        <label className="checkout-field">
+          <span>Email</span>
+          <input name="email" required type="email" placeholder="mina.rider@example.com" />
+        </label>
+        <label className="checkout-field">
+          <span>Password</span>
+          <input name="password" required type="password" autoComplete="current-password" />
+        </label>
+        {error && <p className="inline-error" aria-live="polite">{error}</p>}
+        <button
+          ref={markLoginReady}
+          className="checkout-button"
+          type="submit"
+          disabled={pending || !isHydrated}
+        >
+          {pending ? "Logging in..." : "Log in"}
+        </button>
+      </form>
     </LightView>
   );
 }
@@ -1724,15 +2373,17 @@ function LoginScreen() {
 function SignupScreen() {
   const { signUpRider } = useDemo();
   const router = useRouter();
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
 
   return (
     <LightView>
       <section className="auth-stage">
-        <HeroPanel
-          eyebrow="Rider signup"
-          title="Build a rider pass profile"
-          body="Create a browser-only rider profile that can RSVP, generate Tambike Passes, and update basic ride details."
-        />
+          <HeroPanel
+            eyebrow="Rider signup"
+            title="Build a rider pass profile"
+            body="Create a rider profile that can RSVP, generate Tambike Passes, and update basic ride details."
+          />
         <aside className="auth-console" aria-label="Signup permissions">
           <span>Default access</span>
           <h2>New riders start with browsing and pass generation only.</h2>
@@ -1740,23 +2391,39 @@ function SignupScreen() {
             <Detail label="Can do" value="RSVP and check passes" />
             <Detail label="Can edit" value="Area, bike, club" />
             <Detail label="Needs approval" value="Hosting events" />
-            <Detail label="Stored in" value="This browser session" />
+            <Detail label="Session" value="Real app session" />
           </div>
         </aside>
       </section>
       <form
         className="prototype-form auth-form"
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault();
+          setError("");
           const formData = new FormData(event.currentTarget);
-          signUpRider({
-            displayName: String(formData.get("displayName") ?? ""),
-            email: String(formData.get("email") ?? ""),
-            area: String(formData.get("area") ?? ""),
-            bikeModel: String(formData.get("bikeModel") ?? ""),
-            clubName: String(formData.get("clubName") ?? ""),
-          });
-          router.push("/profile");
+          const password = String(formData.get("password") ?? "");
+          const confirmPassword = String(formData.get("confirmPassword") ?? "");
+          if (password !== confirmPassword) {
+            setError("Passwords must match.");
+            return;
+          }
+
+          setPending(true);
+          try {
+            await signUpRider({
+              displayName: String(formData.get("displayName") ?? ""),
+              email: String(formData.get("email") ?? ""),
+              password,
+              area: String(formData.get("area") ?? ""),
+              bikeModel: String(formData.get("bikeModel") ?? ""),
+              clubName: String(formData.get("clubName") ?? ""),
+            });
+            router.push("/profile");
+          } catch (actionError) {
+            setError(actionErrorMessage(actionError));
+          } finally {
+            setPending(false);
+          }
         }}
       >
         <label className="checkout-field">
@@ -1766,6 +2433,14 @@ function SignupScreen() {
         <label className="checkout-field">
           <span>Email</span>
           <input name="email" required type="email" placeholder="jay.new@example.com" />
+        </label>
+        <label className="checkout-field">
+          <span>Password</span>
+          <input name="password" required type="password" minLength={8} autoComplete="new-password" />
+        </label>
+        <label className="checkout-field">
+          <span>Confirm password</span>
+          <input name="confirmPassword" required type="password" minLength={8} autoComplete="new-password" />
         </label>
         <label className="checkout-field">
           <span>Area / city</span>
@@ -1779,8 +2454,9 @@ function SignupScreen() {
           <span>Club name</span>
           <input name="clubName" placeholder="QC Night Riders" />
         </label>
-        <button className="checkout-button" type="submit">
-          Create rider account
+        {error && <p className="inline-error" aria-live="polite">{error}</p>}
+        <button className="checkout-button" type="submit" disabled={pending}>
+          {pending ? "Creating account..." : "Create rider account"}
         </button>
       </form>
     </LightView>
@@ -1823,7 +2499,7 @@ function ProfileScreen() {
   const [saved, setSaved] = useState(false);
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view profile" body="The profile screen shows the current browser-session user and their rider/organizer permissions." />;
+    return <AuthRequired title="Log in to view profile" body="The profile screen shows the current app-session user and their rider/organizer permissions." />;
   }
 
   return (
@@ -1840,10 +2516,10 @@ function ProfileScreen() {
       </div>
       <form
         className="prototype-form"
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault();
           const formData = new FormData(event.currentTarget);
-          updateProfile({
+          await updateProfile({
             displayName: String(formData.get("displayName") ?? ""),
             area: String(formData.get("area") ?? ""),
             bikeModel: String(formData.get("bikeModel") ?? ""),
@@ -1871,7 +2547,7 @@ function ProfileScreen() {
         <button className="checkout-button" type="submit">
           Save profile
         </button>
-        {saved && <PassStrip title="Profile saved" body="Profile details updated for this browser session." />}
+        {saved && <PassStrip title="Profile saved" body="Profile details updated for this app session." />}
       </form>
     </LightView>
   );
@@ -1891,6 +2567,50 @@ function AuthRequired({ title, body }: { title: string; body: string }) {
       </div>
     </LightView>
   );
+}
+
+function RoleRequired({ title, body }: { title: string; body: string }) {
+  return (
+    <LightView>
+      <HeroPanel eyebrow="Role required" title={title} body={body} />
+      <div className="auth-actions">
+        <Link className="checkout-button as-link" href="/login">
+          Switch account
+        </Link>
+        <Link className="buy-secondary as-link" href="/events">
+          Explore events
+        </Link>
+      </div>
+    </LightView>
+  );
+}
+
+function RoleGuard({
+  allowed,
+  loginTitle,
+  loginBody,
+  roleTitle,
+  roleBody,
+  children,
+}: {
+  allowed: Role[];
+  loginTitle: string;
+  loginBody: string;
+  roleTitle: string;
+  roleBody: string;
+  children: React.ReactNode;
+}) {
+  const { currentUser } = useDemo();
+
+  if (!currentUser) {
+    return <AuthRequired title={loginTitle} body={loginBody} />;
+  }
+
+  if (!allowed.includes(currentUser.role)) {
+    return <RoleRequired title={roleTitle} body={roleBody} />;
+  }
+
+  return <>{children}</>;
 }
 
 function AdminQueue({ title }: { title: string }) {
@@ -1960,6 +2680,9 @@ function FormPrototype({
 }
 
 function LightView({ children }: { children: React.ReactNode }) {
+  const { role } = useDemo();
+  const showOperatorLinks = ["organizer", "venue", "admin"].includes(role);
+
   return (
     <section className="buy-view">
       <div className="buy-topbar">
@@ -1975,8 +2698,12 @@ function LightView({ children }: { children: React.ReactNode }) {
         <nav className="buy-nav" aria-label="Context links">
           <Link href={`/events/${primaryEventId}`}>Event</Link>
           <Link href={`/passes/${primaryPassId}`}>Pass</Link>
-          <Link href={`/organizer/events/${primaryEventId}/scanner`}>Scanner</Link>
-          <Link href={`/organizer/events/${primaryEventId}/report`}>Report</Link>
+          {showOperatorLinks && (
+            <>
+              <Link href={`/organizer/events/${primaryEventId}/scanner`}>Scanner</Link>
+              <Link href={`/organizer/events/${primaryEventId}/report`}>Report</Link>
+            </>
+          )}
         </nav>
       </div>
       <div className="buy-shell">{children}</div>

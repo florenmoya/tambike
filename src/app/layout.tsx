@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { DemoProvider } from "@/features/tambike-demo/demo-provider";
+import { getDemoState } from "@/server/demo-state";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,22 +15,24 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tambike UI Demo",
-  description: "Mobile-first Tambike event discovery and QR pass prototype.",
+  title: "Tambike",
+  description: "Mobile-first Tambike event discovery and QR pass platform.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const initialState = await getDemoState();
+
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <DemoProvider>{children}</DemoProvider>
+        <DemoProvider initialState={initialState}>{children}</DemoProvider>
       </body>
     </html>
   );

@@ -20,6 +20,28 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Supabase Postgres
+
+Tambike uses Supabase Postgres through Prisma. Use the Supabase pooled connection for app runtime and the direct database connection for migrations/seed:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL="https://<project-ref>.supabase.co"
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="sb_publishable_<publishable-key>"
+DATABASE_URL="postgresql://postgres.<project-ref>:<password>@<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+DIRECT_URL="postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres"
+SUPABASE_URL="https://<project-ref>.supabase.co"
+SUPABASE_SECRET_KEY="sb_secret_<secret-key>"
+```
+
+Then run:
+
+```bash
+npm run db:generate
+npx prisma migrate reset --force
+```
+
+If no Supabase database URL is configured, the local app falls back to the in-memory backend so UI and e2e work can still run.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

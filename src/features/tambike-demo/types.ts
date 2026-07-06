@@ -84,6 +84,7 @@ export interface ProfileInput {
 
 export interface SignupInput extends ProfileInput {
   email: string;
+  password: string;
 }
 
 export interface CreateEventInput {

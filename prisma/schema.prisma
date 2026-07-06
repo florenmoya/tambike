@@ -1,0 +1,380 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  rider
+  organizer
+  venue
+  admin
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING_VENUE_APPROVAL
+  PENDING_ADMIN_REVIEW
+  PUBLISHED
+  ONGOING
+  COMPLETED
+  NEEDS_CHANGES
+  REJECTED
+  CANCELLED
+}
+
+enum EventType {
+  TAMBIKE @map("Tambike")
+  BIKE_NIGHT @map("Bike Night")
+  COFFEE_RIDE @map("Coffee Ride")
+  CLUB_EB @map("Club EB")
+  BRAND_EVENT @map("Brand Event")
+  TEST_RIDE @map("Test Ride")
+  CHARITY_RIDE @map("Charity Ride")
+  TRACK_DAY @map("Track Day")
+  ENDURANCE_RIDE @map("Endurance Ride")
+  MOTO_EXPO @map("Moto Expo")
+  RACE @map("Race")
+}
+
+enum AttendanceType {
+  direct
+  ride_out @map("ride-out")
+  club
+}
+
+enum RsvpStatus {
+  interested
+  going
+  waitlist
+  cancelled
+}
+
+enum PassStatus {
+  active
+  checked_in
+  cancelled
+}
+
+enum CheckInMethod {
+  qr
+  manual
+}
+
+enum ApprovalType {
+  venue
+  admin
+}
+
+enum ApprovalDecision {
+  pending
+  approved
+  approved_with_conditions
+  rejected
+  needs_changes
+  published
+}
+
+enum PerkRedemptionStatus {
+  available
+  redeemed
+  cancelled
+}
+
+enum FlagStatus {
+  open
+  resolved
+  dismissed
+  escalated
+}
+
+model User {
+  id                 String             @id @default(cuid())
+  displayName        String
+  email              String             @unique
+  passwordHash       String
+  role               Role               @default(rider)
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  area               String
+  bikeModel          String?
+  clubName           String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  sessions              Session[]
+  organizerProfile      OrganizerProfile?
+  venueClaims           VenueClaim[]
+  ownedVenues           Venue[]             @relation("VenueOwner")
+  rsvps                 RSVP[]
+  passes                Pass[]
+  checkIns              CheckIn[]           @relation("CheckedInUser")
+  scans                 CheckIn[]           @relation("ScannerUser")
+  perkRedemptions       PerkRedemption[]
+  leads                 Lead[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]          @relation("AuditActor")
+  reportedFlags         FlagReport[]        @relation("FlagReporter")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OrganizerProfile {
+  id                 String             @id @default(cuid())
+  userId             String             @unique
+  organizerType      String
+  displayName        String
+  realName           String
+  contactNumber      String
+  fbLink             String
+  clubPageName       String?
+  reason             String
+  pastEventLinks     String[]
+  verificationStatus VerificationStatus @default(PENDING)
+  adminNotes         String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events Event[]
+}
+
+model Venue {
+  id             String             @id @default(cuid())
+  name           String
+  area           String
+  address        String
+  mapLink        String
+  ownerUserId    String?
+  status         VerificationStatus @default(PENDING)
+  capacityNotes  String
+  houseRules     String[]
+  contact        String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  owner       User?        @relation("VenueOwner", fields: [ownerUserId], references: [id])
+  claims      VenueClaim[]
+  events      Event[]
+}
+
+model VenueClaim {
+  id            String             @id @default(cuid())
+  venueId       String?
+  claimantId    String
+  venueName     String
+  address       String
+  googleMapsUrl String
+  contactPerson String
+  claimantRole  String
+  fbPage        String?
+  contactNumber String
+  proofNotes    String?
+  status        VerificationStatus @default(PENDING)
+  adminNotes    String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  venue    Venue? @relation(fields: [venueId], references: [id])
+  claimant User   @relation(fields: [claimantId], references: [id], onDelete: Cascade)
+}
+
+model Event {
+  id               String      @id @default(cuid())
+  slug             String      @unique
+  title            String
+  type             EventType
+  status           EventStatus @default(DRAFT)
+  organizerId      String
+  venueId          String?
+  dateLabel        String
+  timeLabel        String
+  area             String
+  capacity         Int?
+  expectedRiders   Int
+  description      String
+  whatHappens      String
+  poster           String
+  perkPreview      String
+  tags             String[]
+  riskFlags        String[]
+  rideOutMeetup    String?
+  rideOutMapLink   String?
+  rideOutCallTime  String?
+  rideOutDeparture String?
+  rideOutDestination String?
+  rideOutNotes     String?
+  safetyRules      String[]
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  organizer       OrganizerProfile @relation(fields: [organizerId], references: [id])
+  venue           Venue?           @relation(fields: [venueId], references: [id])
+  approvals       EventApproval[]
+  rsvps           RSVP[]
+  passes          Pass[]
+  checkIns        CheckIn[]
+  perks           Perk[]
+  leads           Lead[]
+  flags           FlagReport[]
+}
+
+model EventApproval {
+  id           String           @id @default(cuid())
+  eventId      String
+  approvalType ApprovalType
+  reviewerId   String?
+  decision     ApprovalDecision @default(pending)
+  conditions   String?
+  notes        String?
+  decidedAt    DateTime?
+  createdAt    DateTime         @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model RSVP {
+  id             String         @id @default(cuid())
+  eventId        String
+  userId         String
+  status         RsvpStatus
+  attendanceType AttendanceType
+  companions     Int            @default(0)
+  clubName       String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pass  Pass?
+
+  @@unique([eventId, userId])
+}
+
+model Pass {
+  id          String     @id @default(cuid())
+  eventId     String
+  userId      String
+  rsvpId      String     @unique
+  qrTokenHash String     @unique
+  status      PassStatus @default(active)
+  generatedAt DateTime   @default(now())
+  checkedInAt DateTime?
+
+  event    Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rsvp     RSVP      @relation(fields: [rsvpId], references: [id], onDelete: Cascade)
+  checkIns CheckIn[]
+}
+
+model CheckIn {
+  id        String        @id @default(cuid())
+  eventId   String
+  passId    String
+  userId    String
+  scannedBy String
+  timestamp DateTime      @default(now())
+  method    CheckInMethod
+
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  pass    Pass  @relation(fields: [passId], references: [id], onDelete: Cascade)
+  user    User  @relation("CheckedInUser", fields: [userId], references: [id], onDelete: Cascade)
+  scanner User  @relation("ScannerUser", fields: [scannedBy], references: [id], onDelete: Cascade)
+}
+
+model Perk {
+  id              String   @id @default(cuid())
+  eventId         String
+  type            String
+  description     String
+  quantity        Int?
+  redemptionRules String?
+
+  event       Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  redemptions PerkRedemption[]
+}
+
+model PerkRedemption {
+  id         String                 @id @default(cuid())
+  perkId     String
+  userId     String
+  status     PerkRedemptionStatus   @default(available)
+  redeemedBy String?
+  redeemedAt DateTime?
+
+  perk Perk @relation(fields: [perkId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Lead {
+  id                String    @id @default(cuid())
+  eventId           String
+  userId            String?
+  name              String
+  phone             String
+  currentMotorcycle String
+  interestedModel   String
+  preferredTime     String
+  consentAt         DateTime
+  exportedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id])
+}
+
+model FlagReport {
+  id         String     @id @default(cuid())
+  eventId    String?
+  reporterId String?
+  targetType String
+  targetId   String
+  reason     String
+  status     FlagStatus @default(open)
+  adminNotes String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  event    Event? @relation(fields: [eventId], references: [id])
+  reporter User?  @relation("FlagReporter", fields: [reporterId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String
+  targetType  String
+  targetId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id])
+}

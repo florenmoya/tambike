@@ -1,4 +1,39 @@
-import { expect, test } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+
+import { expect, test, type Page } from "@playwright/test";
+
+test.beforeAll(() => {
+  if (process.env.TAMBIKE_BACKEND === "memory") {
+    return;
+  }
+
+  execFileSync(process.execPath, ["--import", "tsx", "prisma/seed.ts"], {
+    stdio: "inherit",
+  });
+});
+
+test.beforeEach(async ({ request }) => {
+  if (process.env.TAMBIKE_BACKEND !== "memory") {
+    return;
+  }
+
+  const response = await request.post("/api/test/reset");
+  expect(response.ok()).toBeTruthy();
+});
+
+const accountCredentials = {
+  rider: "mina.rider@example.com",
+  organizer: "marco.organizer@example.com",
+  venue: "ana.venue@example.com",
+  admin: "ops@tambike.example",
+} as const;
+
+async function logInAs(page: Page, role: keyof typeof accountCredentials) {
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+  await page.getByLabel(/Email/i).fill(accountCredentials[role]);
+  await page.getByLabel(/Password/i).fill("password123");
+  await page.getByRole("button", { name: /^Log in$/i }).click();
+}
 
 test("event discovery highlights the simple tambike sample", async ({ page }) => {
   await page.goto("/events");
@@ -250,10 +285,7 @@ test("event categories sit below carousel and filter only listings", async ({ pa
   await expect(page).toHaveURL(/\/events\?type=charity-ride$/);
   await expect(page.locator(".category-strip .is-active")).toHaveText("Charity");
   await expect(page.locator(".feature-card.is-featured h2")).toHaveText("Tambike at Cafe Classico");
-  await expect(page.locator(".event-grid .event-card h3")).toHaveText([
-    "ARAI HJC Charity Ride",
-    "Long Ride x Charity",
-  ]);
+  await expect(page.locator(".event-grid .event-card h3")).toHaveCount(0);
 });
 
 test("tambike filter uses multiple real sourced meet-up covers", async ({ page }) => {
@@ -292,7 +324,7 @@ test("all events secondary grid fills three desktop rows", async ({ page }) => {
   await page.goto("/events");
 
   const secondaryCards = page.locator(".event-grid-secondary .event-card");
-  await expect(secondaryCards).toHaveCount(15);
+  await expect(secondaryCards).toHaveCount(11);
   await expect(secondaryCards.locator("h3")).toContainText([
     "Boys of Garage Crossmeet Tambike",
     "CCPH Upper East Tambike",
@@ -331,7 +363,7 @@ test("events page includes redesigned Tambike footer shortcuts", async ({ page }
   await expect(footer).toBeVisible();
   await expect(footer.getByText("Ride bulletin")).toBeVisible();
   await expect(footer.getByText("Built for tambike nights, charity rides, track days, and venue-hosted motorcycle ganaps.")).toBeVisible();
-  await expect(footer.getByText("Pass flow, event review, scanner, and reports are ready for walkthrough.")).toBeVisible();
+  await expect(footer.getByText("Pass flow, event review, scanner, and reports are ready for live operations.")).toBeVisible();
   await expect(footer.getByText(/Mock/i)).toHaveCount(0);
   await expect(footer.getByRole("navigation", { name: "Footer event links" }).getByRole("link", { name: "Explore events" })).toHaveAttribute("href", "/events");
   await expect(footer.getByRole("navigation", { name: "Footer rider links" }).getByRole("link", { name: "My passes" })).toHaveAttribute("href", "/passes");
@@ -357,9 +389,9 @@ test("guest header nav avoids duplicate auth links and matches dashboard control
 });
 
 test("rider navigation separates discovery, passes, profile, and hosting", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("tambike-demo-current-user", "user-mina-rider");
-  });
+  await logInAs(page, "rider");
+  await expect(page).toHaveURL(/\/profile/);
+
   await page.goto("/events");
   await expect(page.getByRole("heading", { name: "Tambike events" })).toBeVisible();
   await expect(page.locator(".site-header")).toHaveAttribute("data-role", "rider");
@@ -407,35 +439,173 @@ test("rider navigation separates discovery, passes, profile, and hosting", async
 test("guest can log in with sample data, view profile, and register for an event", async ({
   page,
 }) => {
-  await page.goto("/events/arai-hjc-charity-ride");
+  await page.goto("/events/tambike-cafe-classico");
 
-  await expect(page.getByRole("heading", { name: /ARAI HJC Charity Ride/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Tambike at Cafe Classico/i })).toBeVisible();
   await page.getByRole("button", { name: /^Going$/i }).click();
   await expect(page.getByRole("heading", { name: /Log in to get your Tambike Pass/i })).toBeVisible();
 
-  await page.getByRole("link", { name: /Log in/i }).click();
-  await page.getByRole("button", { name: /Login as Mina Rider/i }).click();
+  await logInAs(page, "rider");
 
   await expect(page).toHaveURL(/\/profile/);
   await expect(page.getByRole("heading", { name: /Mina Rider/i })).toBeVisible();
   await expect(page.getByText(/mina.rider@example.com/i)).toBeVisible();
   await expect(page.getByText(/Bike: Yamaha Mio Gear/i)).toBeVisible();
 
-  await page.goto("/events/arai-hjc-charity-ride");
+  await page.goto("/events/tambike-cafe-classico");
   await page.getByRole("button", { name: /^Going$/i }).click();
   await page.getByLabel(/Go direct to venue/i).check();
   await page.getByRole("button", { name: /Get Tambike Pass/i }).click();
 
-  await expect(page).toHaveURL(/\/passes\/pass-arai-hjc-charity-ride/);
+  await expect(page).toHaveURL(/\/passes\/pass-tambike-cafe-classico/);
   await expect(page.getByRole("heading", { name: /Tambike Pass/i })).toBeVisible();
-  await expect(page.getByText(/QR token: TBK-ARAI-HJC-CHARITY-RIDE/i)).toBeVisible();
+  await expect(page.locator(".qr-token")).toHaveText(/QR token: tbk_[A-Za-z0-9_-]+/);
 });
 
-test("new sample signup creates a rider profile", async ({ page }) => {
+test("email and password login signs in with seeded accounts", async ({ page }) => {
+  await page.goto("/login");
+
+  await page.getByLabel(/Email/i).fill("mina.rider@example.com");
+  await page.getByLabel(/Password/i).fill("password123");
+  await page.getByRole("button", { name: /^Log in$/i }).click();
+
+  await expect(page).toHaveURL(/\/profile/);
+  await expect(page.getByRole("heading", { name: /Mina Rider/i })).toBeVisible();
+});
+
+test("login and footer use production account copy", async ({ page }) => {
+  await page.goto("/login");
+
+  await expect(page.getByText(/Demo accounts|Walkthrough accounts|sample accounts/i)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Login as/i })).toHaveCount(0);
+  await expect(page.locator("[aria-label='Demo account guide']")).toHaveCount(0);
+
+  await page.goto("/");
+  await expect(page.getByText(/Demo login|Tambike UI Demo|ready for walkthrough/i)).toHaveCount(0);
+});
+
+test("signup requires password and matching confirmation", async ({ page }, testInfo) => {
+  const email = `secure.rider.${testInfo.project.name}.${Date.now()}@example.com`;
+
+  await page.goto("/signup");
+
+  await page.getByLabel(/Display name/i).fill("Secure Rider");
+  await page.getByLabel(/Email/i).fill(email);
+  await page.getByLabel(/^Password$/i).fill("passw0rd!");
+  await page.getByLabel(/Confirm password/i).fill("different-pass");
+  await page.getByLabel(/Area \/ city/i).fill("Quezon City");
+  await page.getByRole("button", { name: /Create rider account/i }).click();
+
+  await expect(page.getByText(/Passwords must match/i)).toBeVisible();
+  await expect(page).toHaveURL(/\/signup/);
+
+  await page.getByLabel(/Confirm password/i).fill("passw0rd!");
+  await page.getByRole("button", { name: /Create rider account/i }).click();
+
+  await expect(page).toHaveURL(/\/profile/);
+  await expect(page.getByRole("heading", { name: /Secure Rider/i })).toBeVisible();
+});
+
+test("guest and wrong-role users see protected route guards instead of operator controls", async ({
+  page,
+}) => {
+  const protectedRoutes = [
+    ["/admin", /Log in to access admin tools/i],
+    ["/admin/moderation", /Log in to access admin tools/i],
+    ["/organizer/events", /Log in to access organizer tools/i],
+    ["/organizer/events/arai-hjc-charity-ride/scanner", /Log in to access scanner tools/i],
+    ["/organizer/events/arai-hjc-charity-ride/report", /Log in to access reports/i],
+    ["/venue/requests", /Log in to access venue tools/i],
+    ["/venue/events", /Log in to access venue tools/i],
+  ] as const;
+
+  for (const [route, heading] of protectedRoutes) {
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Approve|Valid pass|Export|Suspend/i })).toHaveCount(0);
+  }
+
+  await logInAs(page, "rider");
+  await expect(page).toHaveURL(/\/profile/);
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: /Admin role required/i })).toBeVisible();
+});
+
+test("operator index routes render distinct MVP screens", async ({ page }) => {
+  await logInAs(page, "admin");
+  await expect(page).toHaveURL(/\/admin/);
+
+  await page.goto("/admin/leads");
+  await expect(page.getByRole("heading", { name: /Test-ride leads/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Export leads CSV/i })).toHaveAttribute(
+    "href",
+    "/api/admin/exports/leads",
+  );
+
+  await page.goto("/admin/moderation");
+  await expect(page.getByRole("heading", { name: /Moderation reports/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Open rider safety reports/i })).toBeVisible();
+
+  await page.goto("/admin/users");
+  await expect(page.getByRole("heading", { name: /User management/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Suspend user/i }).first()).toBeVisible();
+
+  await logInAs(page, "organizer");
+  await expect(page).toHaveURL(/\/organizer\/dashboard/);
+  await page.goto("/organizer/events");
+  await expect(page.getByRole("heading", { name: /Organizer-owned events/i })).toBeVisible();
+
+  await logInAs(page, "venue");
+  await expect(page).toHaveURL(/\/venue\/dashboard/);
+  await page.goto("/venue/requests");
+  await expect(page.getByRole("heading", { name: /Venue approval requests/i })).toBeVisible();
+  await page.goto("/venue/events");
+  await expect(page.getByRole("heading", { name: "Venue-linked events", exact: true })).toBeVisible();
+});
+
+test("event search filters listings through the q query parameter", async ({ page }) => {
+  await page.goto("/events?q=makina");
+
+  await expect(page).toHaveURL(/\/events\?q=makina$/);
+  await expect(page.getByRole("searchbox", { name: /Search events/i })).toHaveValue("makina");
+  await expect(page.locator(".event-grid .event-card h3")).toHaveText(["Makina Moto Expo Cebu"]);
+});
+
+test("share controls show copied or shared feedback", async ({ page }) => {
+  await page.goto("/events/tambike-cafe-classico");
+
+  await page.getByRole("button", { name: /^Share$/i }).click();
+  await expect(page.getByText(/Link copied|Shared/i)).toBeVisible();
+
+  await logInAs(page, "rider");
+  await expect(page).toHaveURL(/\/profile/);
+  await page.goto("/events/tambike-cafe-classico");
+  await page.getByRole("button", { name: /^Going$/i }).click();
+  await page.getByRole("button", { name: /Get Tambike Pass/i }).click();
+  await expect(page).toHaveURL(/\/passes\/pass-tambike-cafe-classico/);
+
+  await page.getByRole("button", { name: /Share Pass/i }).click();
+  await expect(page.getByText(/Pass link copied|Pass shared/i)).toBeVisible();
+});
+
+test("past events show closed registration state", async ({ page }) => {
+  await page.goto("/events/fullprint-manila-tambike");
+
+  await expect(page.getByText(/Past event/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Going$/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Interested/i })).toHaveCount(0);
+});
+
+test("new sample signup creates a rider profile", async ({ page }, testInfo) => {
+  const email = `jay.new.${testInfo.project.name}.${Date.now()}@example.com`;
+
   await page.goto("/signup");
 
   await page.getByLabel(/Display name/i).fill("Jay New Rider");
-  await page.getByLabel(/Email/i).fill("jay.new@example.com");
+  await page.getByLabel(/Email/i).fill(email);
+  await page.getByLabel(/^Password$/i).fill("passw0rd!");
+  await page.getByLabel(/Confirm password/i).fill("passw0rd!");
   await page.getByLabel(/Area \/ city/i).fill("Quezon City");
   await page.getByLabel(/Bike model/i).fill("Honda Click 160");
   await page.getByLabel(/Club name/i).fill("QC Night Riders");
@@ -443,16 +613,13 @@ test("new sample signup creates a rider profile", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/profile/);
   await expect(page.getByRole("heading", { name: /Jay New Rider/i })).toBeVisible();
-  await expect(page.getByText(/jay.new@example.com/i)).toBeVisible();
+  await expect(page.getByText(email)).toBeVisible();
   await expect(page.getByText(/Bike: Honda Click 160/i)).toBeVisible();
   await expect(page.getByText(/Club: QC Night Riders/i)).toBeVisible();
 });
 
 test("approved sample organizer can create an event draft", async ({ page }) => {
-  await page.goto("/login");
-  await expect(page.getByText("Account access")).toBeVisible();
-  await expect(page.getByText(/Mock login/i)).toHaveCount(0);
-  await page.getByRole("button", { name: /Login as Marco Organizer/i }).click();
+  await logInAs(page, "organizer");
 
   await expect(page.getByRole("heading", { name: /Organizer Dashboard/i })).toBeVisible();
   await page.getByRole("link", { name: /Create Event/i }).click();
@@ -476,15 +643,15 @@ test("approved sample organizer can create an event draft", async ({ page }) => 
   await page.getByRole("link", { name: /View draft event/i }).click();
   await expect(page.getByRole("heading", { name: /Tambike Night at Katipunan/i })).toBeVisible();
   await page.getByRole("link", { name: "Events" }).click();
-  await expect(page.getByAltText("Tambike Night at Katipunan poster").first()).toHaveAttribute(
-    "src",
-    /poster-tambike-cafe-classico\.jpg/,
-  );
+  await expect(page.getByRole("heading", { name: /Tambike Night at Katipunan/i })).toHaveCount(0);
 });
 
 test("organizer scanner shows event-day validation states and report metrics", async ({
   page,
 }) => {
+  await logInAs(page, "organizer");
+  await expect(page).toHaveURL(/\/organizer\/dashboard/);
+
   await page.goto("/organizer/events/arai-hjc-charity-ride/scanner");
 
   await expect(page.getByRole("heading", { name: /QR Scanner/i })).toBeVisible();
@@ -510,6 +677,9 @@ test("organizer scanner shows event-day validation states and report metrics", a
 });
 
 test("venue can approve an event request with conditions", async ({ page }) => {
+  await logInAs(page, "venue");
+  await expect(page).toHaveURL(/\/venue\/dashboard/);
+
   await page.goto("/venue/requests/req-shell-pugon");
 
   await expect(page.getByRole("heading", { name: /Venue request/i })).toBeVisible();
@@ -524,6 +694,9 @@ test("venue can approve an event request with conditions", async ({ page }) => {
 });
 
 test("admin can review and publish the risky event", async ({ page }) => {
+  await logInAs(page, "admin");
+  await expect(page).toHaveURL(/\/admin/);
+
   await page.goto("/admin/events/review/rev-arai-hjc-charity-ride", {
     waitUntil: "domcontentloaded",
   });

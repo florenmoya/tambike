@@ -4,16 +4,25 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
-import { demoEvents, mockUsers } from "./data";
+import {
+  approvePublishAction,
+  approveVenueWithConditionsAction,
+  createEventDraftAction,
+  loginWithPasswordAction,
+  logoutAction,
+  registerForEventAction,
+  signUpRiderAction,
+  updateProfileAction,
+} from "@/server/actions";
 import type {
   AttendanceType,
   CreateEventInput,
   Event,
+  Pass,
   ProfileInput,
   Role,
   ScannerOutcome,
@@ -21,66 +30,62 @@ import type {
   UserProfile,
 } from "./types";
 
+export interface DemoState {
+  currentUser: UserProfile | null;
+  users: UserProfile[];
+  events: Event[];
+  passes: Pass[];
+  passCreated: boolean;
+}
+
 interface DemoContextValue {
   role: Role;
   users: UserProfile[];
   currentUser: UserProfile | null;
   authNotice: string;
   setAuthNotice: (notice: string) => void;
-  loginAsUser: (userId: string) => UserProfile | null;
-  signUpRider: (input: SignupInput) => UserProfile;
-  logout: () => void;
-  updateProfile: (input: ProfileInput) => void;
+  loginWithPassword: (email: string, password: string) => Promise<UserProfile | null>;
+  signUpRider: (input: SignupInput) => Promise<UserProfile>;
+  logout: () => Promise<void>;
+  updateProfile: (input: ProfileInput) => Promise<void>;
   requireLogin: (notice: string) => boolean;
   events: Event[];
-  createEventDraft: (input: CreateEventInput) => Event | null;
+  passes: Pass[];
+  createEventDraft: (input: CreateEventInput) => Promise<Event | null>;
   attendanceType: AttendanceType;
   passCreated: boolean;
-  registerForEvent: (attendanceType: AttendanceType) => boolean;
+  registerForEvent: (
+    eventId: string,
+    attendanceType: AttendanceType,
+    status?: "interested" | "going",
+  ) => Promise<string | null>;
   scannerOutcome: ScannerOutcome;
   setScannerOutcome: (outcome: ScannerOutcome) => void;
   checkedInCount: number;
   venueConditions: string;
   setVenueConditions: (conditions: string) => void;
   venueDecision: "pending" | "approved_with_conditions";
-  approveVenueWithConditions: () => void;
+  approveVenueWithConditions: () => Promise<void>;
   adminDecision: "pending" | "published";
-  approvePublish: () => void;
+  approvePublish: () => Promise<void>;
 }
 
 const DemoContext = createContext<DemoContextValue | null>(null);
-const USERS_STORAGE_KEY = "tambike-demo-users";
-const CURRENT_USER_STORAGE_KEY = "tambike-demo-current-user";
-const SOURCED_POSTER_BY_TYPE: Record<Event["type"], string> = {
-  Tambike: "/demo/poster-tambike-cafe-classico.jpg",
-  "Bike Night": "/demo/poster-tambike-cafe-classico.jpg",
-  "Coffee Ride": "/demo/poster-tambike-cafe-classico.jpg",
-  "Club EB": "/demo/poster-tambike-cafe-classico.jpg",
-  "Brand Event": "/demo/poster-ducati-track-day.jpg",
-  "Test Ride": "/demo/poster-ducati-track-day.jpg",
-  "Charity Ride": "/demo/poster-arai-hjc-charity-ride.jpg",
-  "Track Day": "/demo/poster-ducati-track-day.jpg",
-  "Endurance Ride": "/demo/poster-mandirigma-endutour-v5.jpg",
-  "Moto Expo": "/demo/poster-makina-moto-expo-cebu.jpg",
-  Race: "/demo/poster-motoir-round-4.jpg",
-};
 
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-export function DemoProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<UserProfile[]>(mockUsers);
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [hasRestoredSession, setHasRestoredSession] = useState(false);
+export function DemoProvider({
+  children,
+  initialState,
+}: {
+  children: ReactNode;
+  initialState: DemoState;
+}) {
+  const [users, setUsers] = useState<UserProfile[]>(initialState.users);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(initialState.currentUser);
   const [authNotice, setAuthNotice] = useState("");
-  const [events, setEvents] = useState<Event[]>(demoEvents);
+  const [events, setEvents] = useState<Event[]>(initialState.events);
+  const [passes, setPasses] = useState<Pass[]>(initialState.passes);
   const [attendanceType, setAttendanceType] = useState<AttendanceType>("direct");
-  const [passCreated, setPassCreated] = useState(false);
+  const [passCreated, setPassCreated] = useState(initialState.passCreated);
   const [scannerOutcome, setScannerOutcomeState] = useState<ScannerOutcome>("idle");
   const [checkedInCount, setCheckedInCount] = useState(68);
   const [venueConditions, setVenueConditions] = useState(
@@ -93,115 +98,50 @@ export function DemoProvider({ children }: { children: ReactNode }) {
 
   const role: Role = currentUser?.role ?? "guest";
 
-  useEffect(() => {
-    let isActive = true;
-
-    window.queueMicrotask(() => {
-      if (!isActive) {
-        return;
-      }
-
-      try {
-        const savedUsers = window.localStorage.getItem(USERS_STORAGE_KEY);
-        const nextUsers = savedUsers ? (JSON.parse(savedUsers) as UserProfile[]) : mockUsers;
-        const savedCurrentUserId = window.localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-
-        setUsers(nextUsers);
-        setCurrentUser(
-          nextUsers.find((candidate) => candidate.id === savedCurrentUserId) ?? null,
-        );
-      } catch {
-        setUsers(mockUsers);
-        setCurrentUser(null);
-      } finally {
-        setHasRestoredSession(true);
-      }
-    });
-
-    return () => {
-      isActive = false;
-    };
+  const applyState = useCallback((nextState: DemoState) => {
+    setUsers(nextState.users);
+    setCurrentUser(nextState.currentUser);
+    setEvents(nextState.events);
+    setPasses(nextState.passes);
+    setPassCreated(nextState.passCreated);
   }, []);
 
-  useEffect(() => {
-    if (!hasRestoredSession) {
-      return;
-    }
-
-    window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-  }, [hasRestoredSession, users]);
-
-  useEffect(() => {
-    if (!hasRestoredSession) {
-      return;
-    }
-
-    if (currentUser) {
-      window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, currentUser.id);
-      return;
-    }
-
-    window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-  }, [currentUser, hasRestoredSession]);
-
-  const loginAsUser = useCallback(
-    (userId: string) => {
-      const user = users.find((candidate) => candidate.id === userId) ?? null;
-      setCurrentUser(user);
+  const loginWithPassword = useCallback(
+    async (email: string, password: string) => {
+      const nextState = await loginWithPasswordAction(email, password);
+      applyState(nextState);
       setAuthNotice("");
-      return user;
+      return nextState.currentUser;
     },
-    [users],
+    [applyState],
   );
 
-  const signUpRider = useCallback((input: SignupInput) => {
-    const newUser: UserProfile = {
-      id: `user-${slugify(input.email || input.displayName)}`,
-      displayName: input.displayName.trim(),
-      email: input.email.trim().toLowerCase(),
-      role: "rider",
-      verificationStatus: "UNVERIFIED",
-      area: input.area.trim(),
-      bikeModel: input.bikeModel?.trim() || undefined,
-      clubName: input.clubName?.trim() || undefined,
-      joinedAt: "July 2, 2026",
-    };
-
-    setUsers((existingUsers) => [...existingUsers, newUser]);
-    setCurrentUser(newUser);
-    setAuthNotice("");
-    return newUser;
-  }, []);
-
-  const logout = useCallback(() => {
-    setCurrentUser(null);
-    setPassCreated(false);
-    setAuthNotice("");
-  }, []);
-
-  const updateProfile = useCallback((input: ProfileInput) => {
-    setCurrentUser((user) => {
-      if (!user) {
-        return user;
+  const signUpRider = useCallback(
+    async (input: SignupInput) => {
+      const nextState = await signUpRiderAction(input);
+      applyState(nextState);
+      setAuthNotice("");
+      if (!nextState.currentUser) {
+        throw new Error("SIGNUP_FAILED");
       }
+      return nextState.currentUser;
+    },
+    [applyState],
+  );
 
-      const updatedUser = {
-        ...user,
-        displayName: input.displayName.trim(),
-        area: input.area.trim(),
-        bikeModel: input.bikeModel?.trim() || undefined,
-        clubName: input.clubName?.trim() || undefined,
-      };
+  const logout = useCallback(async () => {
+    const nextState = await logoutAction();
+    applyState(nextState);
+    setAuthNotice("");
+  }, [applyState]);
 
-      setUsers((existingUsers) =>
-        existingUsers.map((existingUser) =>
-          existingUser.id === updatedUser.id ? updatedUser : existingUser,
-        ),
-      );
-
-      return updatedUser;
-    });
-  }, []);
+  const updateProfile = useCallback(
+    async (input: ProfileInput) => {
+      const nextState = await updateProfileAction(input);
+      applyState(nextState);
+    },
+    [applyState],
+  );
 
   const requireLogin = useCallback(
     (notice: string) => {
@@ -215,64 +155,40 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     [currentUser],
   );
 
-  const registerForEvent = useCallback((nextAttendanceType: AttendanceType) => {
-    if (!currentUser) {
-      setAuthNotice("Log in to get your Tambike Pass.");
-      return false;
-    }
-
-    setAttendanceType(nextAttendanceType);
-    setPassCreated(true);
-    return true;
-  }, [currentUser]);
-
-  const createEventDraft = useCallback(
-    (input: CreateEventInput) => {
-      if (
-        currentUser?.role !== "organizer" ||
-        currentUser.verificationStatus !== "APPROVED"
-      ) {
+  const registerForEvent = useCallback(
+    async (
+      eventId: string,
+      nextAttendanceType: AttendanceType,
+      status: "interested" | "going" = "going",
+    ) => {
+      if (!currentUser) {
+        setAuthNotice("Log in to get your Tambike Pass.");
         return null;
       }
 
-      const baseId = slugify(input.title);
-      const existingIds = new Set(events.map((event) => event.id));
-      const eventId = existingIds.has(baseId) ? `${baseId}-${events.length + 1}` : baseId;
-      const expectedRiders = Math.max(1, input.expectedRiders);
-      const createdEvent: Event = {
-        id: eventId,
-        title: input.title.trim(),
-        type: input.type,
-        status: "PENDING_VENUE_APPROVAL",
-        organizerId: currentUser.organizerProfileId ?? "arai-hjc-riders",
-        venueId: input.venueId,
-        poster: SOURCED_POSTER_BY_TYPE[input.type],
-        date: input.date.trim(),
-        time: input.time.trim(),
-        area: input.area.trim(),
-        shortDescription: `${input.title.trim()} is an organizer draft awaiting venue approval.`,
-        whatHappens:
-          "Organizer-created draft that follows the MVP create-event flow before persistence is connected.",
-        going: 0,
-        interested: 0,
-        expectedRiders,
-        perkPreview: input.perkPreview.trim(),
-        tags: [input.type, "Draft", "Venue approval"],
-        riskFlags: expectedRiders >= 50 ? ["Expected riders need review"] : ["Standard venue approval"],
-        rules: ["Helmet required", "Respect venue rules", "No revving", "Follow marshals"],
-        perks: [
-          {
-            id: "mock-perk",
-            type: "Check-in perk",
-            description: input.perkPreview.trim(),
-          },
-        ],
-      };
-
-      setEvents((existingEvents) => [createdEvent, ...existingEvents]);
-      return createdEvent;
+      const result = await registerForEventAction(eventId, {
+        status,
+        attendanceType: nextAttendanceType,
+        clubName: currentUser.clubName,
+      });
+      applyState(result.state);
+      setAttendanceType(nextAttendanceType);
+      return result.passId;
     },
-    [currentUser, events],
+    [applyState, currentUser],
+  );
+
+  const createEventDraft = useCallback(
+    async (input: CreateEventInput) => {
+      if (currentUser?.role !== "organizer" || currentUser.verificationStatus !== "APPROVED") {
+        return null;
+      }
+
+      const result = await createEventDraftAction(input);
+      applyState(result.state);
+      return result.event;
+    },
+    [applyState, currentUser],
   );
 
   const setScannerOutcome = useCallback((outcome: ScannerOutcome) => {
@@ -282,13 +198,20 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const approveVenueWithConditions = useCallback(() => {
+  const approveVenueWithConditions = useCallback(async () => {
+    const nextState = await approveVenueWithConditionsAction(
+      "arai-hjc-charity-ride",
+      venueConditions,
+    );
+    applyState(nextState);
     setVenueDecision("approved_with_conditions");
-  }, []);
+  }, [applyState, venueConditions]);
 
-  const approvePublish = useCallback(() => {
+  const approvePublish = useCallback(async () => {
+    const nextState = await approvePublishAction("arai-hjc-charity-ride");
+    applyState(nextState);
     setAdminDecision("published");
-  }, []);
+  }, [applyState]);
 
   const value = useMemo(
     () => ({
@@ -297,12 +220,13 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       currentUser,
       authNotice,
       setAuthNotice,
-      loginAsUser,
+      loginWithPassword,
       signUpRider,
       logout,
       updateProfile,
       requireLogin,
       events,
+      passes,
       createEventDraft,
       attendanceType,
       passCreated,
@@ -327,9 +251,10 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       createEventDraft,
       currentUser,
       events,
-      loginAsUser,
+      loginWithPassword,
       logout,
       passCreated,
+      passes,
       registerForEvent,
       requireLogin,
       role,

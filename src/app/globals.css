@@ -1363,53 +1363,11 @@ svg {
   width: fit-content;
 }
 
-.mock-account-grid,
 .profile-summary,
 .auth-actions {
   grid-column: 1 / -1;
   display: grid;
   gap: 12px;
-}
-
-.mock-account-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.mock-account-card {
-  min-height: 188px;
-  display: grid;
-  align-content: start;
-  justify-items: start;
-  gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
-  padding: 16px;
-  text-align: left;
-}
-
-.mock-account-card:hover,
-.mock-account-card:focus-visible {
-  border-color: rgba(255, 190, 69, 0.7);
-  outline: none;
-  box-shadow: 0 0 0 4px rgba(255, 190, 69, 0.16);
-}
-
-.mock-account-card svg {
-  width: 28px;
-  height: 28px;
-  color: var(--signal);
-}
-
-.mock-account-card span {
-  font-weight: 900;
-}
-
-.mock-account-card strong,
-.mock-account-card small {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .profile-summary {
@@ -1480,7 +1438,6 @@ svg {
 
   .quick-cats,
   .dashboard-grid,
-  .mock-account-grid,
   .metric-strip-large {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1562,7 +1519,6 @@ svg {
   .metric-strip,
   .metric-strip-large,
   .dashboard-grid,
-  .mock-account-grid,
   .profile-summary,
   .auth-actions,
   .prototype-form {
@@ -3939,7 +3895,6 @@ svg {
 .buy-view .pass-strip,
 .buy-view .queue-list a,
 .buy-view .pass-card,
-.buy-view .mock-account-card,
 .buy-view .attendance-options label {
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-bottom: 1px solid rgba(255, 238, 184, 0.18);
@@ -4017,26 +3972,6 @@ svg {
   color: #fff;
 }
 
-.buy-view .mock-account-grid {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.buy-view .mock-account-card {
-  min-height: 220px;
-  overflow: hidden;
-}
-
-.buy-view .mock-account-card::after {
-  content: "";
-  width: 58px;
-  height: 7px;
-  margin-top: auto;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--signal), var(--fuel));
-  box-shadow: 0 0 18px rgba(255, 190, 69, 0.26);
-}
-
-.buy-view .mock-account-card svg,
 .buy-view .metric-card svg,
 .buy-view .queue-list svg,
 .buy-view .pass-strip svg,
@@ -4045,19 +3980,6 @@ svg {
   color: var(--signal);
 }
 
-.buy-view .mock-account-card span {
-  color: #fff;
-  font-size: 18px;
-  line-height: 1.05;
-}
-
-.buy-view .mock-account-card strong,
-.buy-view .mock-account-card small {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.buy-view .mock-account-card:hover,
-.buy-view .mock-account-card:focus-visible,
 .buy-view .queue-list a:hover,
 .buy-view .queue-list a:focus-visible,
 .buy-view .pass-card:hover,
@@ -4116,6 +4038,153 @@ svg {
 
 .buy-view .auth-form {
   grid-column: 1 / -1;
+}
+
+.event-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(720px, calc(100% - 2rem));
+  margin: 1rem auto 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 18px;
+  background: rgba(18, 19, 20, 0.72);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+}
+
+.event-search svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  color: #f1c46c;
+}
+
+.event-search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #fff8e8;
+  font: inherit;
+}
+
+.event-search input::placeholder {
+  color: rgba(255, 248, 232, 0.58);
+}
+
+.event-search button,
+.status-pill {
+  border: 1px solid rgba(244, 178, 63, 0.38);
+  border-radius: 999px;
+  background: rgba(244, 178, 63, 0.14);
+  color: #ffe4a6;
+  font: inherit;
+  font-weight: 800;
+  padding: 0.65rem 1rem;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.inline-error,
+.inline-feedback {
+  margin: 0.85rem 0 0;
+  font-weight: 800;
+}
+
+.inline-error {
+  color: #ffb4a9;
+}
+
+.inline-feedback {
+  color: #75d9a4;
+}
+
+.empty-state {
+  width: min(760px, calc(100% - 2rem));
+  margin: 1.5rem auto;
+  padding: 1.25rem;
+  border: 1px solid rgba(37, 42, 47, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #251c13;
+}
+
+.empty-state h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+}
+
+.empty-state p {
+  margin: 0;
+  color: rgba(37, 28, 19, 0.72);
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: #fff;
+  font-weight: 800;
+}
+
+.checkbox-line input {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: #d64b2a;
+}
+
+.buy-view .queue-list .queue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(37, 42, 47, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.buy-view .queue-list .queue-item svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  color: #d64b2a;
+}
+
+.buy-view .queue-list .queue-item span,
+.buy-view .queue-list .queue-item strong {
+  min-width: 0;
+}
+
+.buy-view .queue-list .queue-item span {
+  font-weight: 900;
+}
+
+.buy-view .queue-list .queue-item strong {
+  color: rgba(37, 28, 19, 0.68);
+}
+
+@media (max-width: 720px) {
+  .event-search {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .event-search button {
+    grid-column: 1 / -1;
+  }
+
+  .buy-view .queue-list .queue-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .buy-view .queue-list .queue-item button,
+  .buy-view .queue-list .queue-item strong {
+    grid-column: 2;
+  }
 }
 
 .buy-view .checkout-field input,
@@ -4251,10 +4320,6 @@ svg {
 
   .auth-console__grid {
     grid-template-columns: 1fr;
-  }
-
-  .buy-view .mock-account-card {
-    min-height: 180px;
   }
 
   .buy-view .mobile-pass {
@@ -4398,7 +4463,6 @@ svg {
 .buy-view .pass-strip,
 .buy-view .queue-list a,
 .buy-view .pass-card,
-.buy-view .mock-account-card,
 .buy-view .attendance-options label {
   border-color: rgba(255, 255, 255, 0.12);
   border-bottom-color: rgba(255, 255, 255, 0.12);
@@ -4455,28 +4519,6 @@ svg {
   line-height: 1.22;
 }
 
-.buy-view .mock-account-card {
-  min-height: 190px;
-  gap: 11px;
-}
-
-.buy-view .mock-account-card::after {
-  height: 4px;
-  box-shadow: none;
-}
-
-.buy-view .mock-account-card span {
-  font-size: 17px;
-  line-height: 1.18;
-}
-
-.buy-view .mock-account-card strong,
-.buy-view .mock-account-card small {
-  color: rgba(255, 255, 255, 0.72);
-}
-
-.buy-view .mock-account-card:hover,
-.buy-view .mock-account-card:focus-visible,
 .buy-view .queue-list a:hover,
 .buy-view .queue-list a:focus-visible,
 .buy-view .pass-card:hover,
@@ -4539,9 +4581,6 @@ svg {
     padding: 10px 12px;
   }
 
-  .buy-view .mock-account-card {
-    min-height: 160px;
-  }
 }
 
 /* Header readability correction */
