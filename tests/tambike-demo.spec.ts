@@ -75,6 +75,36 @@ test("featured event carousel tire controls highlight the next small-bike cover"
   await expect(carousel.locator(".slider-button svg")).toHaveCount(0);
 });
 
+test("featured event carousel tire controls share a temporary clicked direction", async ({ page }) => {
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const carousel = page.locator(".featured-carousel");
+  const wheels = carousel.locator(".wheel-face");
+  await expect(carousel).toHaveAttribute("data-ready", "true");
+  await expect(carousel).toHaveAttribute("data-wheel-direction", "next");
+  await expect(wheels).toHaveCount(2);
+  await expect(wheels.first()).toHaveCSS("animation-name", "wheel-roll-right");
+  await expect(wheels.nth(1)).toHaveCSS("animation-name", "wheel-roll-right");
+
+  await page.getByRole("button", { name: "Next featured event" }).click();
+  await expect(carousel).toHaveAttribute("data-wheel-direction", "next");
+  await expect(carousel).toHaveClass(/is-wheel-bursting/);
+  await expect(wheels.first()).toHaveCSS("animation-name", "wheel-roll-right");
+  await expect(wheels.nth(1)).toHaveCSS("animation-name", "wheel-roll-right");
+
+  await page.getByRole("button", { name: "Previous featured event" }).click();
+
+  await expect(carousel).toHaveAttribute("data-wheel-direction", "previous");
+  await expect(carousel).toHaveClass(/is-wheel-bursting/);
+  await expect(wheels.first()).toHaveCSS("animation-name", "wheel-roll-left");
+  await expect(wheels.nth(1)).toHaveCSS("animation-name", "wheel-roll-left");
+
+  await expect(carousel).toHaveAttribute("data-wheel-direction", "next", { timeout: 4_000 });
+  await expect(carousel).not.toHaveClass(/is-wheel-bursting/);
+  await expect(wheels.first()).toHaveCSS("animation-name", "wheel-roll-right");
+  await expect(wheels.nth(1)).toHaveCSS("animation-name", "wheel-roll-right");
+});
+
 test("featured event carousel drags left to highlight the next small-bike cover", async ({ page, isMobile }) => {
   await page.goto("/events", { waitUntil: "domcontentloaded" });
 
@@ -386,6 +416,109 @@ test("guest header nav avoids duplicate auth links and matches dashboard control
   await expect(guestNav.getByRole("link", { name: "Sign Up" })).toHaveCount(0);
   await expect(guestNav).toHaveCSS("transform-style", "preserve-3d");
   await expect(guestNav).toHaveCSS("border-bottom-style", "solid");
+});
+
+test("mobile app pages keep navigation compact without internal overflow", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile responsiveness regression");
+
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+  const buyTopbarBox = await page.locator(".buy-topbar").boundingBox();
+  expect(buyTopbarBox).not.toBeNull();
+  expect(buyTopbarBox?.height).toBeLessThanOrEqual(76);
+
+  await page.goto("/events/tambike-cafe-classico", { waitUntil: "domcontentloaded" });
+  const detailTopbarBox = await page.locator(".event-detail-topbar").boundingBox();
+  expect(detailTopbarBox).not.toBeNull();
+  expect(detailTopbarBox?.height).toBeLessThanOrEqual(84);
+
+  const overflowingDetailSelectors = await page.evaluate(() =>
+    [".event-detail-shell", ".event-detail-stage", ".event-detail-poster-stack"].filter(
+      (selector) => {
+        const element = document.querySelector(selector);
+        return element ? element.scrollWidth > element.clientWidth + 1 : false;
+      },
+    ),
+  );
+  expect(overflowingDetailSelectors).toEqual([]);
+});
+
+test("mobile discovery controls stay compact and clear the featured poster", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile responsiveness regression");
+
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const searchInputBox = await page.locator(".event-search input").boundingBox();
+  const searchButtonBox = await page.locator(".event-search button").boundingBox();
+  expect(searchInputBox).not.toBeNull();
+  expect(searchButtonBox).not.toBeNull();
+  expect(searchButtonBox?.width).toBeLessThanOrEqual(120);
+  const searchInputCenterY = (searchInputBox?.y ?? 0) + (searchInputBox?.height ?? 0) / 2;
+  const searchButtonCenterY = (searchButtonBox?.y ?? 0) + (searchButtonBox?.height ?? 0) / 2;
+  expect(Math.abs(searchButtonCenterY - searchInputCenterY)).toBeLessThanOrEqual(3);
+
+  const featuredCoverBox = await page
+    .locator(".feature-card.is-featured .feature-cover")
+    .boundingBox();
+  const previousButtonBox = await page.locator(".slider-prev").boundingBox();
+  const nextButtonBox = await page.locator(".slider-next").boundingBox();
+  expect(featuredCoverBox).not.toBeNull();
+  expect(previousButtonBox).not.toBeNull();
+  expect(nextButtonBox).not.toBeNull();
+
+  if (!featuredCoverBox || !previousButtonBox || !nextButtonBox) return;
+
+  expect(previousButtonBox.x + previousButtonBox.width).toBeLessThanOrEqual(
+    featuredCoverBox.x - 4,
+  );
+  expect(nextButtonBox.x).toBeGreaterThanOrEqual(
+    featuredCoverBox.x + featuredCoverBox.width + 4,
+  );
+});
+
+test("mobile event listings continue across primary and secondary grids", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile listing regression");
+
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const listingRows = await page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll(".listings .event-card"));
+    return cards.map((card) => {
+      const rect = card.getBoundingClientRect();
+      return {
+        title: card.querySelector("h3")?.textContent?.trim(),
+        y: Math.round(rect.y),
+      };
+    });
+  });
+
+  const boysCard = listingRows.find((card) =>
+    card.title?.includes("Boys of Underbone Laguna Tambike"),
+  );
+  const swabzCard = listingRows.find((card) =>
+    card.title?.includes("Swabz Classic Bike Tambike"),
+  );
+
+  expect(boysCard).toBeTruthy();
+  expect(swabzCard).toBeTruthy();
+  expect(Math.abs((boysCard?.y ?? 0) - (swabzCard?.y ?? 0))).toBeLessThanOrEqual(2);
+});
+
+test("tablet app pages keep the utility navigation on one row", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 900 });
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+
+  const buyTopbarBox = await page.locator(".buy-topbar").boundingBox();
+  expect(buyTopbarBox).not.toBeNull();
+  expect(buyTopbarBox?.height).toBeLessThanOrEqual(84);
 });
 
 test("rider navigation separates discovery, passes, profile, and hosting", async ({ page }) => {

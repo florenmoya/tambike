@@ -119,8 +119,10 @@ const featuredEventIds = [
   "fullprint-manila-tambike",
 ];
 const featuredCarouselIntervalMs = 5_000;
+const featuredWheelBurstDurationMs = 2_800;
 const featuredDragActivationPx = 16;
 const featuredDragCommitPx = 90;
+type FeaturedWheelDirection = "previous" | "next";
 
 const passIdForEvent = (eventId: string) => `pass-${eventId}`;
 const eventIdFromPassId = (passId?: string) =>
@@ -807,10 +809,13 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
   const secondaryListings = isFiltered || hasSearch ? [] : visibleEvents.slice(5).concat(visibleEvents.slice(0, 4));
   const [activeFeaturedIndex, setActiveFeaturedIndex] = useState(0);
   const [dragDirection, setDragDirection] = useState<"previous" | "next" | null>(null);
+  const [wheelDirection, setWheelDirection] = useState<FeaturedWheelDirection>("next");
+  const [isWheelBursting, setIsWheelBursting] = useState(false);
   const dragStartXRef = useRef<number | null>(null);
   const dragMovedRef = useRef(false);
   const suppressFeatureClickRef = useRef(false);
   const manualFeatureInteractionRef = useRef(0);
+  const wheelBurstTimerRef = useRef<number | null>(null);
   const normalizedFeaturedIndex = featuredEvents.length
     ? activeFeaturedIndex % featuredEvents.length
     : 0;
@@ -822,6 +827,16 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
     }
 
     manualFeatureInteractionRef.current = window.Date.now();
+    setWheelDirection(direction < 0 ? "previous" : "next");
+    setIsWheelBursting(true);
+    if (wheelBurstTimerRef.current !== null) {
+      window.clearTimeout(wheelBurstTimerRef.current);
+    }
+    wheelBurstTimerRef.current = window.setTimeout(() => {
+      setWheelDirection("next");
+      setIsWheelBursting(false);
+      wheelBurstTimerRef.current = null;
+    }, featuredWheelBurstDurationMs);
     setActiveFeaturedIndex((index) => (index + direction + featuredEvents.length) % featuredEvents.length);
   };
 
@@ -914,6 +929,14 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
     return () => window.clearInterval(timerId);
   }, [featuredEvents.length]);
 
+  useEffect(() => {
+    return () => {
+      if (wheelBurstTimerRef.current !== null) {
+        window.clearTimeout(wheelBurstTimerRef.current);
+      }
+    };
+  }, []);
+
   const markFeatureCarouselReady = (node: HTMLDivElement | null) => {
     if (node) {
       node.dataset.ready = "true";
@@ -931,8 +954,10 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
               "featured-carousel",
               dragDirection === "previous" && "is-dragging-previous",
               dragDirection === "next" && "is-dragging-next",
+              isWheelBursting && "is-wheel-bursting",
             )}
             data-ready="false"
+            data-wheel-direction={wheelDirection}
             aria-label="Featured Tambike events"
           >
             <button
@@ -1017,7 +1042,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
                 type="search"
                 aria-label="Search events"
                 defaultValue={searchTerm}
-                placeholder="Search event, city, organizer, or perk"
+                placeholder="Event, city, or perk"
               />
               <button type="submit">Search</button>
             </form>
