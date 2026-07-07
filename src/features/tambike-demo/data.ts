@@ -436,15 +436,15 @@ export const demoEvents: Event[] = [
     time: "7:30 AM - 5:00 PM",
     area: "Clark, Pampanga",
     shortDescription:
-      "Closed-course Ducati track day at Clark with intro lessons, demo bikes, and race-team technical support.",
+      "Closed-course Ducati track day at Clark with intro lessons, test-ride bikes, and race-team technical support.",
     whatHappens:
-      "Riders register for track access, pass gear inspection, attend intro lessons, request demo-bike slots, and receive paddock support from the technical team.",
+      "Riders register for track access, pass gear inspection, attend intro lessons, request test-ride slots, and receive paddock support from the technical team.",
     going: 42,
     interested: 126,
     expectedRiders: 100,
     perkPreview: "Track intro lessons + tech support",
-    tags: ["Track Day", "Brand", "Demo bikes", "Closed course"],
-    riskFlags: ["Closed-course riding", "Gear inspection", "Demo bikes", "License requirement"],
+    tags: ["Track Day", "Brand", "Test-ride bikes", "Closed course"],
+    riskFlags: ["Closed-course riding", "Gear inspection", "Test-ride bikes", "License requirement"],
     rules: [
       "Complete riding gear required",
       "Helmet required",
@@ -465,7 +465,7 @@ export const demoEvents: Event[] = [
       },
     ],
     sourceUrl: "https://bikenightasia.com/events/view/YJbZogypkl/ducati-track-day",
-    sourceNote: "Event name, venue, time, gear rules, demo bikes, and technical support from Bike Night Asia listing.",
+    sourceNote: "Event name, venue, time, gear rules, test-ride bikes, and technical support from Bike Night Asia listing.",
   },
   {
     id: "long-ride-charity-zambales",
@@ -598,7 +598,7 @@ export const demoEvents: Event[] = [
     expectedRiders: 500,
     perkPreview: "Expo booth priority list",
     tags: ["Moto Expo", "Brand", "Cebu", "Launches"],
-    riskFlags: ["Large crowd", "Brand activations", "Lead capture", "Indoor queueing"],
+    riskFlags: ["Large crowd", "Brand activations", "Lead collection", "Indoor queueing"],
     rules: ["Use assigned entrances", "Follow booth queueing", "No engine start inside halls", "Dealer staff handles test ride eligibility"],
     perks: [
       {
@@ -927,7 +927,7 @@ export const adminApproval: Approval = {
 export const defaultPass: Pass = {
   id: "pass-tambike-cafe-classico",
   eventId: "tambike-cafe-classico",
-  qrToken: "TBK-TAMBIKE-CAFE-CLASSICO",
+  qrToken: "pass_tambike_cafe_classico",
   status: "active",
   generatedAt: "July 2, 2026 · 8:12 AM",
 };

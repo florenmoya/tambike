@@ -9,6 +9,7 @@ import {
   ClipboardCheck,
   FileCheck2,
   Gauge,
+  LockKeyhole,
   LogIn,
   LogOut,
   Menu,
@@ -330,150 +331,150 @@ const protectedViews: Partial<
 > = {
   "organizer-dashboard": {
     allowed: ["organizer", "admin"],
-    loginTitle: "Log in to access organizer tools",
-    loginBody: "Organizer dashboards are available only to approved host accounts.",
-    roleTitle: "Organizer role required",
-    roleBody: "This surface is reserved for organizer or admin accounts.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use an approved host account to manage events.",
+    roleTitle: "Host access needed",
+    roleBody: "This area is for approved event hosts.",
   },
   "organizer-events": {
     allowed: ["organizer", "admin"],
-    loginTitle: "Log in to access organizer tools",
-    loginBody: "Organizer event lists are available only to approved host accounts.",
-    roleTitle: "Organizer role required",
-    roleBody: "This surface is reserved for organizer or admin accounts.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use an approved host account to manage events.",
+    roleTitle: "Host access needed",
+    roleBody: "This area is for approved event hosts.",
   },
   "organizer-create": {
     allowed: ["organizer", "admin"],
-    loginTitle: "Log in to access organizer tools",
+    loginTitle: "Log in to continue",
     loginBody: "Only approved organizer accounts can create event drafts.",
-    roleTitle: "Organizer role required",
+    roleTitle: "Host access needed",
     roleBody: "Apply as an organizer before creating event drafts.",
   },
   "organizer-event": {
     allowed: ["organizer", "admin"],
-    loginTitle: "Log in to access organizer tools",
-    loginBody: "Event status pages are available only to organizer and admin accounts.",
-    roleTitle: "Organizer role required",
-    roleBody: "This event status page is reserved for organizer or admin accounts.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use an approved host account to manage events.",
+    roleTitle: "Host access needed",
+    roleBody: "This area is for approved event hosts.",
   },
   "organizer-attendees": {
     allowed: ["organizer", "admin"],
-    loginTitle: "Log in to access organizer tools",
-    loginBody: "Attendee lists are available only to organizer and admin accounts.",
-    roleTitle: "Organizer role required",
-    roleBody: "This attendee list is reserved for organizer or admin accounts.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use an approved host account to manage attendees.",
+    roleTitle: "Host access needed",
+    roleBody: "This area is for approved event hosts.",
   },
   "organizer-scanner": {
     allowed: ["organizer", "venue", "admin"],
-    loginTitle: "Log in to access scanner tools",
-    loginBody: "Scanner tools require an organizer, venue, or admin account.",
-    roleTitle: "Scanner role required",
-    roleBody: "Use an organizer, venue, or admin account to scan passes.",
+    loginTitle: "Log in to scan passes",
+    loginBody: "Use an event, venue, or ops account.",
+    roleTitle: "Scanner access needed",
+    roleBody: "Use an account assigned to event check-in.",
   },
   "organizer-report": {
     allowed: ["organizer", "venue", "admin"],
-    loginTitle: "Log in to access reports",
-    loginBody: "Event reports require an organizer, venue, or admin account.",
-    roleTitle: "Report role required",
-    roleBody: "Use an organizer, venue, or admin account to view reports.",
+    loginTitle: "Log in to view reports",
+    loginBody: "Use an event, venue, or ops account.",
+    roleTitle: "Report access needed",
+    roleBody: "Use an account assigned to this event.",
   },
   "venue-dashboard": {
     allowed: ["venue", "admin"],
-    loginTitle: "Log in to access venue tools",
-    loginBody: "Venue dashboards are available only to venue or admin accounts.",
-    roleTitle: "Venue role required",
-    roleBody: "Use a venue or admin account to access venue tools.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a venue account to manage requests.",
+    roleTitle: "Venue access needed",
+    roleBody: "Use an account assigned to this venue.",
   },
   "venue-requests": {
     allowed: ["venue", "admin"],
-    loginTitle: "Log in to access venue tools",
-    loginBody: "Venue request queues are available only to venue or admin accounts.",
-    roleTitle: "Venue role required",
-    roleBody: "Use a venue or admin account to review venue requests.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a venue account to review requests.",
+    roleTitle: "Venue access needed",
+    roleBody: "Use an account assigned to this venue.",
   },
   "venue-events": {
     allowed: ["venue", "admin"],
-    loginTitle: "Log in to access venue tools",
-    loginBody: "Venue event lists are available only to venue or admin accounts.",
-    roleTitle: "Venue role required",
-    roleBody: "Use a venue or admin account to inspect venue events.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a venue account to manage events.",
+    roleTitle: "Venue access needed",
+    roleBody: "Use an account assigned to this venue.",
   },
   "venue-request": {
     allowed: ["venue", "admin"],
-    loginTitle: "Log in to access venue tools",
-    loginBody: "Venue approvals are available only to venue or admin accounts.",
-    roleTitle: "Venue role required",
-    roleBody: "Use a venue or admin account to approve requests.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a venue account to review this request.",
+    roleTitle: "Venue access needed",
+    roleBody: "Use an account assigned to this venue.",
   },
   "venue-checkin": {
     allowed: ["venue", "organizer", "admin"],
-    loginTitle: "Log in to access scanner tools",
-    loginBody: "Venue check-in tools require a venue, organizer, or admin account.",
-    roleTitle: "Scanner role required",
-    roleBody: "Use a venue, organizer, or admin account to scan passes.",
+    loginTitle: "Log in to scan passes",
+    loginBody: "Use an event, venue, or ops account.",
+    roleTitle: "Scanner access needed",
+    roleBody: "Use an account assigned to event check-in.",
   },
   "venue-report": {
     allowed: ["venue", "organizer", "admin"],
-    loginTitle: "Log in to access reports",
-    loginBody: "Venue reports require a venue, organizer, or admin account.",
-    roleTitle: "Report role required",
-    roleBody: "Use a venue, organizer, or admin account to view reports.",
+    loginTitle: "Log in to view reports",
+    loginBody: "Use an event, venue, or ops account.",
+    roleTitle: "Report access needed",
+    roleBody: "Use an account assigned to this event.",
   },
   "admin-dashboard": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Admin operations require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This surface is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-organizers": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Organizer verification requires a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This queue is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-venue-claims": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Venue claims require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This queue is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-event-reviews": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Event reviews require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This queue is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-event-review": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Publishing decisions require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This review is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-moderation": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Moderation reports require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This queue is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-users": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "User management requires a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This screen is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
   "admin-leads": {
     allowed: ["admin"],
-    loginTitle: "Log in to access admin tools",
-    loginBody: "Lead exports require a Tambike ops account.",
-    roleTitle: "Admin role required",
-    roleBody: "This screen is reserved for Tambike ops admins.",
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
   },
 };
 
@@ -1540,8 +1541,8 @@ function TestRideLeadScreen({ eventId }: { eventId?: string }) {
     <LightView>
       <HeroPanel
         eyebrow="Test ride"
-        title="Test ride lead capture"
-        body={`${event.title} lead capture for motorcycle interest, current bike, preferred schedule, and consent.`}
+        title="Request a test ride"
+        body={`Tell ${event.title} what you ride now and when you want to try the bike.`}
       />
       <form
         className="prototype-form"
@@ -1577,7 +1578,7 @@ function TestRideLeadScreen({ eventId }: { eventId?: string }) {
         <button className="checkout-button" type="submit">
           Save lead
         </button>
-        {saved && <PassStrip title="Lead saved" body="Lead capture is ready for admin CSV export." />}
+        {saved && <PassStrip title="Request saved" body="The Tambike team can follow up from here." />}
       </form>
     </LightView>
   );
@@ -1618,7 +1619,7 @@ function PassDetail({ passId }: { passId?: string }) {
     <LightView>
       <section className="pass-detail">
         <div className="mobile-pass">
-          <PassStrip title="Tambike Pass" body={passCreated ? "Ready for check-in" : "Pass preview"} />
+          <PassStrip title="Tambike Pass" body={passCreated ? "Ready for check-in" : "Ready after registration"} />
           <h1>Tambike Pass</h1>
           <p>
             {event.title}
@@ -1630,7 +1631,6 @@ function PassDetail({ passId }: { passId?: string }) {
           <div className="qr-frame" aria-label="QR code for Tambike Pass">
             <QRCodeSVG value={qrToken} size={188} level="M" />
           </div>
-          <p className="qr-token">QR token: {qrToken}</p>
           <div className="chip-list">
             <span>Attendance: {attendanceType === "ride-out" ? "Join ride-out" : "Go direct"}</span>
             <span>Pass ID: {passIdValue}</span>
@@ -1858,7 +1858,7 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
           </button>
           {error && <p className="inline-error" aria-live="polite">{error}</p>}
           {adminDecision === "published" && (
-            <PassStrip title="Published" body="Audit log: Admin approved publish" />
+            <PassStrip title="Published" body="Event is live for riders." />
           )}
         </aside>
         <InfoPanel eyebrow="Risk flags" title="Review signals">
@@ -2119,7 +2119,7 @@ function Dashboard({
 }) {
   return (
     <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="Use the current account and navigation to inspect each operating surface." />
+      <HeroPanel eyebrow={eyebrow} title={title} body="Keep event work moving from request to check-in." />
       {action}
       <div className="dashboard-grid">
         {[
@@ -2300,72 +2300,85 @@ function LoginScreen() {
 
   return (
     <LightView>
-      <section className="auth-stage">
-          <HeroPanel
-            eyebrow="Account access"
-            title="Log in to Tambike"
-            body="Use your app session for rider passes, organizer tools, venue approvals, and admin review."
-          />
-          <aside className="auth-console" aria-label="Account access guide">
-          <span>Account map</span>
-          <h2>Each role opens a different operating surface.</h2>
-          <div className="auth-console__grid">
-            <Detail label="Rider" value="Passes, profile, RSVP" />
-            <Detail label="Organizer" value="Drafts, scanner, report" />
-            <Detail label="Venue" value="Requests and check-in" />
-            <Detail label="Admin" value="Risk review queues" />
+      <section className="login-portal" aria-labelledby="login-title">
+        <div className="login-media" aria-hidden="true">
+          <div className="login-media__caption">
+            <span>Tambike nights</span>
+            <strong>Find the next meet. Keep your pass ready.</strong>
           </div>
-          <Link className="buy-secondary as-link" href="/signup">
-            Create rider account
-          </Link>
-        </aside>
-      </section>
-      <form
-        className="prototype-form auth-form"
-        method="post"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!isHydrated) {
-            return;
-          }
+        </div>
 
-          setError("");
-          setPending(true);
-          const formData = new FormData(event.currentTarget);
-
-          try {
-            const user = await loginWithPassword(
-              String(formData.get("email") ?? ""),
-              String(formData.get("password") ?? ""),
-            );
-            if (user) {
-              router.push(destinationFor(user.role));
+        <form
+          className="login-card"
+          method="post"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!isHydrated) {
+              return;
             }
-          } catch (actionError) {
-            setError(actionErrorMessage(actionError));
-          } finally {
-            setPending(false);
-          }
-        }}
-      >
-        <label className="checkout-field">
-          <span>Email</span>
-          <input name="email" required type="email" placeholder="mina.rider@example.com" />
-        </label>
-        <label className="checkout-field">
-          <span>Password</span>
-          <input name="password" required type="password" autoComplete="current-password" />
-        </label>
-        {error && <p className="inline-error" aria-live="polite">{error}</p>}
-        <button
-          ref={markLoginReady}
-          className="checkout-button"
-          type="submit"
-          disabled={pending || !isHydrated}
+
+            setError("");
+            setPending(true);
+            const formData = new FormData(event.currentTarget);
+
+            try {
+              const user = await loginWithPassword(
+                String(formData.get("email") ?? ""),
+                String(formData.get("password") ?? ""),
+              );
+              if (user) {
+                router.push(destinationFor(user.role));
+              }
+            } catch (actionError) {
+              setError(actionErrorMessage(actionError));
+            } finally {
+              setPending(false);
+            }
+          }}
         >
-          {pending ? "Logging in..." : "Log in"}
-        </button>
-      </form>
+          <Link className="login-brand" href="/">
+            <span className="brand-mark" aria-hidden="true">
+              TB
+            </span>
+            <span>Tambike</span>
+          </Link>
+
+          <div className="login-card__header">
+            <span>
+              <LockKeyhole aria-hidden="true" />
+              Sign in
+            </span>
+            <h1 id="login-title">Welcome back</h1>
+            <p>Continue with your Tambike account.</p>
+          </div>
+
+          <label className="login-field">
+            <span>Email</span>
+            <input name="email" required type="email" placeholder="name@example.com" />
+          </label>
+          <label className="login-field">
+            <span>Password</span>
+            <input name="password" required type="password" autoComplete="current-password" />
+          </label>
+
+          {error && <p className="inline-error" aria-live="polite">{error}</p>}
+
+          <button
+            ref={markLoginReady}
+            className="login-submit"
+            type="submit"
+            disabled={pending || !isHydrated}
+          >
+            <LogIn aria-hidden="true" />
+            {pending ? "Logging in..." : "Log in"}
+          </button>
+
+          <div className="login-card__footer">
+            <span>New rider?</span>
+            <Link href="/signup">Create rider account</Link>
+          </div>
+        </form>
+      </section>
     </LightView>
   );
 }
@@ -2378,25 +2391,8 @@ function SignupScreen() {
 
   return (
     <LightView>
-      <section className="auth-stage">
-          <HeroPanel
-            eyebrow="Rider signup"
-            title="Build a rider pass profile"
-            body="Create a rider profile that can RSVP, generate Tambike Passes, and update basic ride details."
-          />
-        <aside className="auth-console" aria-label="Signup permissions">
-          <span>Default access</span>
-          <h2>New riders start with browsing and pass generation only.</h2>
-          <div className="auth-console__grid">
-            <Detail label="Can do" value="RSVP and check passes" />
-            <Detail label="Can edit" value="Area, bike, club" />
-            <Detail label="Needs approval" value="Hosting events" />
-            <Detail label="Session" value="Real app session" />
-          </div>
-        </aside>
-      </section>
       <form
-        className="prototype-form auth-form"
+        className="signup-portal"
         onSubmit={async (event) => {
           event.preventDefault();
           setError("");
@@ -2415,8 +2411,6 @@ function SignupScreen() {
               email: String(formData.get("email") ?? ""),
               password,
               area: String(formData.get("area") ?? ""),
-              bikeModel: String(formData.get("bikeModel") ?? ""),
-              clubName: String(formData.get("clubName") ?? ""),
             });
             router.push("/profile");
           } catch (actionError) {
@@ -2426,38 +2420,70 @@ function SignupScreen() {
           }
         }}
       >
-        <label className="checkout-field">
-          <span>Display name</span>
-          <input name="displayName" required placeholder="Jay New Rider" />
-        </label>
-        <label className="checkout-field">
-          <span>Email</span>
-          <input name="email" required type="email" placeholder="jay.new@example.com" />
-        </label>
-        <label className="checkout-field">
-          <span>Password</span>
-          <input name="password" required type="password" minLength={8} autoComplete="new-password" />
-        </label>
-        <label className="checkout-field">
-          <span>Confirm password</span>
-          <input name="confirmPassword" required type="password" minLength={8} autoComplete="new-password" />
-        </label>
-        <label className="checkout-field">
-          <span>Area / city</span>
-          <input name="area" required placeholder="Quezon City" />
-        </label>
-        <label className="checkout-field">
-          <span>Bike model</span>
-          <input name="bikeModel" placeholder="Honda Click 160" />
-        </label>
-        <label className="checkout-field">
-          <span>Club name</span>
-          <input name="clubName" placeholder="QC Night Riders" />
-        </label>
-        {error && <p className="inline-error" aria-live="polite">{error}</p>}
-        <button className="checkout-button" type="submit" disabled={pending}>
-          {pending ? "Creating account..." : "Create rider account"}
-        </button>
+        <section className="signup-card" aria-labelledby="signup-title">
+          <Link className="login-brand" href="/">
+            <span className="brand-mark" aria-hidden="true">
+              TB
+            </span>
+            <span>Tambike</span>
+          </Link>
+
+          <div className="login-card__header">
+            <span>
+              <UserPlus aria-hidden="true" />
+              Rider signup
+            </span>
+            <h1 id="signup-title">Create rider account</h1>
+            <p>Start with RSVPs and passes. Apply to host or claim a venue later.</p>
+          </div>
+
+          <div className="signup-role-note" aria-label="Account type">
+            <ShieldCheck aria-hidden="true" />
+            <div>
+              <span>Account type</span>
+              <strong>Rider</strong>
+            </div>
+          </div>
+
+          <div className="signup-grid">
+            <label className="login-field">
+              <span>Display name</span>
+              <input name="displayName" required placeholder="Jay New Rider" />
+            </label>
+            <label className="login-field">
+              <span>Email</span>
+              <input name="email" required type="email" placeholder="jay.new@example.com" />
+            </label>
+            <label className="login-field">
+              <span>Password</span>
+              <input name="password" required type="password" minLength={8} autoComplete="new-password" />
+            </label>
+            <label className="login-field">
+              <span>Confirm password</span>
+              <input name="confirmPassword" required type="password" minLength={8} autoComplete="new-password" />
+            </label>
+            <label className="login-field signup-wide">
+              <span>Area / city</span>
+              <input name="area" required placeholder="Quezon City" />
+            </label>
+          </div>
+
+          {error && <p className="inline-error" aria-live="polite">{error}</p>}
+
+          <button className="login-submit" type="submit" disabled={pending}>
+            <UserPlus aria-hidden="true" />
+            {pending ? "Creating rider account..." : "Create rider account"}
+          </button>
+
+          <div className="login-card__footer">
+            <span>Already have an account?</span>
+            <Link href="/login">Log in</Link>
+          </div>
+        </section>
+        <section className="signup-media" aria-hidden="true">
+          <span>Tambike</span>
+          <strong>Meet up, ride out, check in.</strong>
+        </section>
       </form>
     </LightView>
   );
@@ -2499,7 +2525,7 @@ function ProfileScreen() {
   const [saved, setSaved] = useState(false);
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view profile" body="The profile screen shows the current app-session user and their rider/organizer permissions." />;
+    return <AuthRequired title="Log in to view profile" body="Your account keeps ride details and passes together." />;
   }
 
   return (
@@ -2511,8 +2537,8 @@ function ProfileScreen() {
       />
       <div className="profile-summary">
         <PassStrip title={`Area: ${currentUser.area}`} body={`Role: ${roleLabels[currentUser.role]}`} />
-        {currentUser.bikeModel && <PassStrip title={`Bike: ${currentUser.bikeModel}`} body="Optional rider profile data" />}
-        {currentUser.clubName && <PassStrip title={`Club: ${currentUser.clubName}`} body="Optional rider profile data" />}
+        {currentUser.bikeModel && <PassStrip title={`Motorcycle: ${currentUser.bikeModel}`} body="Optional rider detail" />}
+        {currentUser.clubName && <PassStrip title={`Riding group: ${currentUser.clubName}`} body="Optional rider detail" />}
       </div>
       <form
         className="prototype-form"
@@ -2537,17 +2563,17 @@ function ProfileScreen() {
           <input name="area" required defaultValue={currentUser.area} />
         </label>
         <label className="checkout-field">
-          <span>Bike model</span>
-          <input name="bikeModel" defaultValue={currentUser.bikeModel ?? ""} />
+          <span>Motorcycle (optional)</span>
+          <input name="bikeModel" defaultValue={currentUser.bikeModel ?? ""} placeholder="Yamaha Mio Gear" />
         </label>
         <label className="checkout-field">
-          <span>Club name</span>
-          <input name="clubName" defaultValue={currentUser.clubName ?? ""} />
+          <span>Riding group (optional)</span>
+          <input name="clubName" defaultValue={currentUser.clubName ?? ""} placeholder="Weekend Tambike Crew" />
         </label>
         <button className="checkout-button" type="submit">
           Save profile
         </button>
-        {saved && <PassStrip title="Profile saved" body="Profile details updated for this app session." />}
+        {saved && <PassStrip title="Profile saved" body="Your ride details were updated." />}
       </form>
     </LightView>
   );
@@ -2663,7 +2689,7 @@ function FormPrototype({
 }) {
   return (
     <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="UI-only form prototype with minimal data collection and no sensitive ID, license, or plate uploads." />
+      <HeroPanel eyebrow={eyebrow} title={title} body="Send the basic details and the Tambike team will review the request." />
       <form className="prototype-form">
         {fields.map((field) => (
           <label key={field} className="checkout-field">

@@ -455,7 +455,7 @@ export class TambikeBackend {
     const user = this.requireRole(sessionToken, "admin");
     const rows = ["event_id,lead_name,email,interest,status"];
     const leadEvents = Array.from(this.events.values()).filter(
-      (event) => event.type === "Test Ride" || event.tags.includes("Lead capture"),
+      (event) => event.type === "Test Ride" || event.tags.includes("Lead collection"),
     );
 
     for (const event of leadEvents) {
