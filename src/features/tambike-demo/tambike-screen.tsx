@@ -109,7 +109,6 @@ const roleLabels: Record<Role, string> = {
 };
 
 const primaryEventId = defaultPass.eventId;
-const primaryPassId = defaultPass.id;
 const featuredEventIds = [
   "tambike-cafe-classico",
   "boys-underbone-laguna-tambike",
@@ -117,6 +116,7 @@ const featuredEventIds = [
   "ccph-cebu-official-tambike",
   "tambike-night-malabon",
   "fullprint-manila-tambike",
+  "boys-garage-crossmeet-tambike",
 ];
 const featuredCarouselIntervalMs = 5_000;
 const featuredWheelBurstDurationMs = 2_800;
@@ -266,7 +266,7 @@ function getFeaturedEvents(events: Event[]) {
     return event ? [event] : [];
   });
 
-  return featuredEvents.length ? featuredEvents : events.slice(0, 6);
+  return featuredEvents.length ? featuredEvents : events.slice(0, featuredEventIds.length);
 }
 
 const eventVisuals: Record<
@@ -533,8 +533,9 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
     </>
   );
   const guard = protectedViews[view];
+  const guardedContent = guard ? <RoleGuard {...guard}>{content}</RoleGuard> : content;
 
-  return guard ? <RoleGuard {...guard}>{content}</RoleGuard> : content;
+  return <AppShell>{guardedContent}</AppShell>;
 }
 
 function SpeedometerNavGauge() {
@@ -747,20 +748,6 @@ function TambikeFooter() {
           ))}
         </div>
 
-        <aside className="footer-dispatch" aria-label="Tambike dispatch status">
-          <span>Next checkpoint</span>
-          <strong>Pass flow, event review, scanner, and reports are ready for live operations.</strong>
-          <div className="footer-dispatch__actions">
-            <Link href={`/events/${primaryEventId}`}>
-              <Route aria-hidden="true" />
-              Featured ride
-            </Link>
-            <Link href="/login">
-              <Ticket aria-hidden="true" />
-              Log in
-            </Link>
-          </div>
-        </aside>
       </div>
       <div className="footer-legal">
         <span>© 2026 Tambike</span>
@@ -806,7 +793,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
   const visibleEvents = filterEventsByQuery(publicEvents, query).filter(activeFilter.matches);
   const featuredEvents = getFeaturedEvents(publicEvents);
   const primaryListings = isFiltered || hasSearch ? visibleEvents : visibleEvents.slice(0, 5);
-  const secondaryListings = isFiltered || hasSearch ? [] : visibleEvents.slice(5).concat(visibleEvents.slice(0, 4));
+  const secondaryListings = isFiltered || hasSearch ? [] : visibleEvents.slice(5);
   const [activeFeaturedIndex, setActiveFeaturedIndex] = useState(0);
   const [dragDirection, setDragDirection] = useState<"previous" | "next" | null>(null);
   const [wheelDirection, setWheelDirection] = useState<FeaturedWheelDirection>("next");
@@ -1235,19 +1222,6 @@ function EventDetail({ eventId }: { eventId?: string }) {
 
   return (
     <section className="event-detail-view" style={detailStyle}>
-      <div className="event-detail-topbar">
-        <Link className="brand" href="/" aria-label="Tambike home">
-          <span className="brand-mark" aria-hidden="true">
-            TB
-          </span>
-          <span className="brand-core">Tambike</span>
-        </Link>
-        <nav className="event-detail-nav" aria-label="Event navigation">
-          <Link href="/home">Home</Link>
-          <Link href="/events">Explore</Link>
-          <Link href="/passes">Passes</Link>
-        </nav>
-      </div>
       <div className="event-detail-shell">
         <section className="event-detail-stage">
           <div className="event-detail-poster-stack">
@@ -2731,32 +2705,8 @@ function FormPrototype({
 }
 
 function LightView({ children }: { children: React.ReactNode }) {
-  const { role } = useDemo();
-  const showOperatorLinks = ["organizer", "venue", "admin"].includes(role);
-
   return (
     <section className="buy-view">
-      <div className="buy-topbar">
-        <Link className="buy-back" href="/events">
-          Events
-        </Link>
-        <Link className="brand brand-dark" href="/">
-          <span className="brand-mark" aria-hidden="true">
-            TB
-          </span>
-          <span className="brand-core">Tambike</span>
-        </Link>
-        <nav className="buy-nav" aria-label="Context links">
-          <Link href={`/events/${primaryEventId}`}>Event</Link>
-          <Link href={`/passes/${primaryPassId}`}>Pass</Link>
-          {showOperatorLinks && (
-            <>
-              <Link href={`/organizer/events/${primaryEventId}/scanner`}>Scanner</Link>
-              <Link href={`/organizer/events/${primaryEventId}/report`}>Report</Link>
-            </>
-          )}
-        </nav>
-      </div>
       <div className="buy-shell">{children}</div>
     </section>
   );

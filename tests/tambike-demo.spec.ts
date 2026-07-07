@@ -145,20 +145,30 @@ test("featured event carousel drags left to highlight the next small-bike cover"
   await expect(featuredTitle).toHaveText("Boys of Underbone Laguna Tambike", { timeout: 1_500 });
 });
 
-test("featured event carousel reveals the outer card on large screens", async ({ page }) => {
+test("featured event carousel reveals balanced outer cards on large screens", async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 900 });
   await page.goto("/events", { waitUntil: "domcontentloaded" });
 
   const widePeek = page.locator(".feature-card.is-wide-peek");
-  await expect(widePeek).toHaveCount(1);
-  await expect(widePeek).toHaveCSS("opacity", "0.28");
+  await expect(widePeek).toHaveCount(2);
 
-  const box = await widePeek.boundingBox();
-  expect(box).not.toBeNull();
-  if (!box) return;
+  const boxes = await widePeek.evaluateAll((cards) =>
+    cards.map((card) => {
+      const box = card.getBoundingClientRect();
+      return {
+        opacity: getComputedStyle(card).opacity,
+        x: box.x,
+        right: box.x + box.width,
+      };
+    }),
+  );
 
-  expect(box.x).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width).toBeLessThanOrEqual(2048);
+  expect(boxes).toHaveLength(2);
+  for (const box of boxes) {
+    expect(box.opacity).toBe("0.28");
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(2048);
+  }
 });
 
 test("featured event carousel loops wrapped cards forward from tire control", async ({ page }) => {
@@ -185,16 +195,23 @@ test("featured event carousel loops wrapped cards forward from tire control", as
 
   await expect
     .poll(async () => {
+      const carouselBox = await carousel.boundingBox();
       const activeCenter = await cardCenterX("FullPrint Manila Tambike");
+      const nightCenter = await cardCenterX("Tambike Night");
+      const garageCenter = await cardCenterX("Boys of Garage Crossmeet Tambike");
       const tambikeCenter = await cardCenterX("Tambike at Cafe Classico");
       const underboneCenter = await cardCenterX("Boys of Underbone Laguna Tambike");
       const upperEastCenter = await cardCenterX("CCPH Upper East Tambike");
 
       return (
+        Boolean(carouselBox) &&
         Number.isFinite(activeCenter) &&
-        tambikeCenter > activeCenter &&
-        underboneCenter > tambikeCenter &&
-        upperEastCenter > underboneCenter
+        Math.abs(activeCenter - ((carouselBox?.x ?? 0) + (carouselBox?.width ?? 0) / 2)) <= 2 &&
+        nightCenter < activeCenter &&
+        upperEastCenter < nightCenter &&
+        garageCenter > activeCenter &&
+        tambikeCenter > garageCenter &&
+        underboneCenter > tambikeCenter
       );
     })
     .toBe(true);
@@ -214,6 +231,7 @@ test("featured event carousel prioritizes small-bike tambike covers", async ({ p
     "CCPH Cebu Official Tambike",
     "Tambike Night",
     "FullPrint Manila Tambike",
+    "Boys of Garage Crossmeet Tambike",
   ]);
   await expect(page.getByAltText("Boys of Underbone Laguna Tambike poster").first()).toHaveAttribute(
     "src",
@@ -354,12 +372,31 @@ test("all events secondary grid fills three desktop rows", async ({ page }) => {
   await page.goto("/events");
 
   const secondaryCards = page.locator(".event-grid-secondary .event-card");
-  await expect(secondaryCards).toHaveCount(11);
+  await expect(secondaryCards).toHaveCount(15);
   await expect(secondaryCards.locator("h3")).toContainText([
+    "Laguna MotoFest 2026",
+    "NGO Street Drag Final",
+    "IR Philippine Endurance RD3",
+    "Mindanao Wide Motocross 2nd Leg",
     "Boys of Garage Crossmeet Tambike",
     "CCPH Upper East Tambike",
     "CCPH Cebu Official Tambike",
   ]);
+  await expect(page.getByAltText("Laguna MotoFest 2026 poster").first()).toHaveAttribute(
+    "src",
+    /poster-laguna-motofest-2026\.jpg/,
+  );
+  await expect(page.getByAltText("CALABARZON Endurance Ride poster").first()).toHaveAttribute(
+    "src",
+    /poster-calabarzon-endurance-ride\.jpg/,
+  );
+  await expect(page.getByAltText("Mindanao Wide Motocross 2nd Leg poster").first()).toHaveAttribute(
+    "src",
+    /poster-mindanao-wide-motocross-2026-2nd-leg\.jpg/,
+  );
+
+  const titles = await page.locator(".listings .event-card h3").allTextContents();
+  expect(new Set(titles).size).toBe(titles.length);
 });
 
 test("event filter pills navigate to useful event sets", async ({ page }) => {
@@ -371,6 +408,11 @@ test("event filter pills navigate to useful event sets", async ({ page }) => {
   await expect(page.locator(".category-strip .is-active")).toHaveText("Race");
   await expect(page.locator(".feature-card.is-featured h2")).toHaveText("Tambike at Cafe Classico");
   await expect(page.locator(".event-grid .event-card h3")).toHaveText([
+    "MotoIR National Round 5",
+    "Motul MotoIR Youth Cup Races 15-16",
+    "Petron SGP Round 3",
+    "NGO Street Drag Final",
+    "Mindanao Wide Motocross 2nd Leg",
     "MotoIR National Round 4",
   ]);
 });
@@ -393,7 +435,7 @@ test("events page includes redesigned Tambike footer shortcuts", async ({ page }
   await expect(footer).toBeVisible();
   await expect(footer.getByText("Ride bulletin")).toBeVisible();
   await expect(footer.getByText("Built for tambike nights, charity rides, track days, and venue-hosted motorcycle ganaps.")).toBeVisible();
-  await expect(footer.getByText("Pass flow, event review, scanner, and reports are ready for live operations.")).toBeVisible();
+  await expect(footer.getByText(/Next checkpoint|Pass flow, event review|Featured ride/i)).toHaveCount(0);
   await expect(footer.getByText(/Mock/i)).toHaveCount(0);
   await expect(footer.getByRole("navigation", { name: "Footer event links" }).getByRole("link", { name: "Explore events" })).toHaveAttribute("href", "/events");
   await expect(footer.getByRole("navigation", { name: "Footer rider links" }).getByRole("link", { name: "My passes" })).toHaveAttribute("href", "/passes");
@@ -418,6 +460,42 @@ test("guest header nav avoids duplicate auth links and matches dashboard control
   await expect(guestNav).toHaveCSS("border-bottom-style", "solid");
 });
 
+test("secondary pages use the same guest site navigation as event discovery", async ({
+  page,
+}) => {
+  const routes = ["/login", "/events/tambike-cafe-classico"] as const;
+
+  for (const route of routes) {
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+
+    const header = page.locator(".site-header");
+    await expect(header).toHaveAttribute("data-role", "guest");
+    await expect(page.getByLabel("Tambike home")).toBeVisible();
+    const openNavigation = page.getByRole("button", { name: "Open navigation" });
+    if (await openNavigation.isVisible()) {
+      await openNavigation.click();
+    }
+
+    await expect(
+      page.getByRole("navigation", { name: /Guest navigation/i }).getByRole("link", {
+        name: "Home",
+      }),
+    ).toHaveAttribute("href", "/home");
+    await expect(
+      page.getByRole("navigation", { name: /Guest navigation/i }).getByRole("link", {
+        name: "Explore",
+      }),
+    ).toHaveAttribute("href", "/events");
+    await expect(page.getByRole("link", { name: "Host an Event" })).toBeVisible();
+    if ((page.viewportSize()?.width ?? 0) > 640) {
+      await expect(page.getByRole("link", { name: "Log in" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Sign up" })).toBeVisible();
+    }
+    await expect(page.locator(".buy-topbar")).toHaveCount(0);
+    await expect(page.locator(".event-detail-topbar")).toHaveCount(0);
+  }
+});
+
 test("mobile app pages keep navigation compact without internal overflow", async ({
   page,
   isMobile,
@@ -425,14 +503,16 @@ test("mobile app pages keep navigation compact without internal overflow", async
   test.skip(!isMobile, "mobile responsiveness regression");
 
   await page.goto("/login", { waitUntil: "domcontentloaded" });
-  const buyTopbarBox = await page.locator(".buy-topbar").boundingBox();
-  expect(buyTopbarBox).not.toBeNull();
-  expect(buyTopbarBox?.height).toBeLessThanOrEqual(76);
+  const loginHeaderBox = await page.locator(".site-header").boundingBox();
+  expect(loginHeaderBox).not.toBeNull();
+  expect(loginHeaderBox?.height).toBeLessThanOrEqual(76);
+  await expect(page.locator(".buy-topbar")).toHaveCount(0);
 
   await page.goto("/events/tambike-cafe-classico", { waitUntil: "domcontentloaded" });
-  const detailTopbarBox = await page.locator(".event-detail-topbar").boundingBox();
-  expect(detailTopbarBox).not.toBeNull();
-  expect(detailTopbarBox?.height).toBeLessThanOrEqual(84);
+  const detailHeaderBox = await page.locator(".site-header").boundingBox();
+  expect(detailHeaderBox).not.toBeNull();
+  expect(detailHeaderBox?.height).toBeLessThanOrEqual(76);
+  await expect(page.locator(".event-detail-topbar")).toHaveCount(0);
 
   const overflowingDetailSelectors = await page.evaluate(() =>
     [".event-detail-shell", ".event-detail-stage", ".event-detail-poster-stack"].filter(
@@ -500,25 +580,28 @@ test("mobile event listings continue across primary and secondary grids", async 
     });
   });
 
-  const boysCard = listingRows.find((card) =>
-    card.title?.includes("Boys of Underbone Laguna Tambike"),
+  const calabarzonCard = listingRows.find((card) =>
+    card.title?.includes("CALABARZON Endurance Ride"),
   );
-  const swabzCard = listingRows.find((card) =>
-    card.title?.includes("Swabz Classic Bike Tambike"),
+  const lagunaCard = listingRows.find((card) =>
+    card.title?.includes("Laguna MotoFest 2026"),
   );
+  const titles = listingRows.flatMap((card) => (card.title ? [card.title] : []));
 
-  expect(boysCard).toBeTruthy();
-  expect(swabzCard).toBeTruthy();
-  expect(Math.abs((boysCard?.y ?? 0) - (swabzCard?.y ?? 0))).toBeLessThanOrEqual(2);
+  expect(calabarzonCard).toBeTruthy();
+  expect(lagunaCard).toBeTruthy();
+  expect(new Set(titles).size).toBe(titles.length);
+  expect(Math.abs((calabarzonCard?.y ?? 0) - (lagunaCard?.y ?? 0))).toBeLessThanOrEqual(2);
 });
 
 test("tablet app pages keep the utility navigation on one row", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
   await page.goto("/login", { waitUntil: "domcontentloaded" });
 
-  const buyTopbarBox = await page.locator(".buy-topbar").boundingBox();
-  expect(buyTopbarBox).not.toBeNull();
-  expect(buyTopbarBox?.height).toBeLessThanOrEqual(84);
+  const headerBox = await page.locator(".site-header").boundingBox();
+  expect(headerBox).not.toBeNull();
+  expect(headerBox?.height).toBeLessThanOrEqual(84);
+  await expect(page.locator(".buy-topbar")).toHaveCount(0);
 });
 
 test("rider navigation separates discovery, passes, profile, and hosting", async ({ page }) => {

@@ -763,6 +763,7 @@ svg {
   min-height: 100vh;
   background: var(--concrete);
   color: var(--ink);
+  padding-top: clamp(82px, 8vw, 108px);
 }
 
 .buy-topbar {
@@ -2573,13 +2574,12 @@ svg {
   width: min(1480px, 100%);
   margin-inline: auto;
   display: grid;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(430px, 1.28fr) minmax(260px, 0.72fr);
+  grid-template-columns: minmax(280px, 0.8fr) minmax(430px, 1.6fr);
   align-items: stretch;
   gap: clamp(18px, 2vw, 32px);
 }
 
-.footer-brand-panel,
-.footer-dispatch {
+.footer-brand-panel {
   border: 1px solid rgba(255, 238, 184, 0.16);
   border-bottom: 5px solid rgba(0, 0, 0, 0.64);
   border-radius: 8px;
@@ -2609,8 +2609,7 @@ svg {
   gap: 9px;
 }
 
-.footer-callout span,
-.footer-dispatch > span {
+.footer-callout span {
   color: var(--signal);
   font-size: 11px;
   line-height: 1;
@@ -2735,53 +2734,6 @@ svg {
 .footer-link-group a:hover,
 .footer-link-group a:focus-visible {
   transform: translateX(3px);
-}
-
-.footer-dispatch {
-  display: grid;
-  align-content: space-between;
-  gap: 22px;
-  padding: clamp(18px, 2vw, 24px);
-}
-
-.footer-dispatch strong {
-  color: #fff;
-  font-size: clamp(18px, 1.6vw, 26px);
-  line-height: 1.02;
-  font-weight: 1000;
-}
-
-.footer-dispatch__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.footer-dispatch__actions a {
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-bottom: 4px solid rgba(0, 0, 0, 0.62);
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.025)),
-    rgba(13, 16, 18, 0.82);
-  color: rgba(255, 244, 218, 0.84);
-  padding: 7px 12px;
-  font-size: 12px;
-  font-weight: 900;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -7px 11px rgba(0, 0, 0, 0.23),
-    0 5px 0 rgba(0, 0, 0, 0.26);
-}
-
-.footer-dispatch__actions svg {
-  width: 16px;
-  height: 16px;
-  color: var(--signal);
 }
 
 .footer-legal {
@@ -3107,8 +3059,7 @@ svg {
     padding: 42px 16px 28px;
   }
 
-  .footer-brand-panel,
-  .footer-dispatch {
+  .footer-brand-panel {
     padding: 16px;
   }
 
@@ -3119,11 +3070,6 @@ svg {
 
   .footer-link-group {
     gap: 9px;
-  }
-
-  .footer-dispatch__actions a {
-    flex: 1 1 144px;
-    justify-content: center;
   }
 
   .footer-legal {
@@ -3156,6 +3102,7 @@ svg {
   isolation: isolate;
   position: relative;
   overflow: hidden;
+  padding-top: clamp(82px, 8vw, 108px);
   background:
     linear-gradient(135deg, rgba(255, 190, 69, 0.14), transparent 28%),
     linear-gradient(215deg, rgba(122, 39, 72, 0.22), transparent 34%),
@@ -5212,10 +5159,6 @@ svg {
     transform: none;
   }
 
-  .footer-dispatch__actions a {
-    min-width: 0;
-    flex-basis: 132px;
-  }
 }
 
 @media (max-width: 860px) {
