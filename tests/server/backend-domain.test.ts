@@ -67,7 +67,7 @@ describe("Tambike backend domain rules", () => {
     expect(users.map((user) => user.email).sort()).toEqual([
       "marco.organizer@example.com",
       "mina.rider@example.com",
-      "ops@tambike.example",
+      "admin@bayanko.ph",
       "ana.venue@example.com",
     ].sort());
   });
@@ -200,7 +200,7 @@ describe("Tambike backend domain rules", () => {
       "marco.organizer@example.com",
       "password123",
     );
-    const adminSession = await backend.loginWithPassword("ops@tambike.example", "password123");
+    const adminSession = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
 
     await expect(
       backend.exportAttendeesCsv(organizerSession.sessionToken, "arai-hjc-charity-ride"),

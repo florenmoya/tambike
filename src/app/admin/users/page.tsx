@@ -1,5 +1,5 @@
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { AdminConsole } from "@/features/admin/admin-console";
 
 export default function Page() {
-  return <TambikeScreen view="admin-users" />;
+  return <AdminConsole section="users" />;
 }

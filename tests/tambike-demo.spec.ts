@@ -27,13 +27,20 @@ const accountCredentials = {
   rider: "mina.rider@example.com",
   organizer: "marco.organizer@example.com",
   venue: "ana.venue@example.com",
-  admin: "ops@tambike.example",
+  admin: "admin@bayanko.ph",
+} as const;
+
+const accountPasswords = {
+  rider: "password123",
+  organizer: "password123",
+  venue: "password123",
+  admin: "secret_123",
 } as const;
 
 async function logInAs(page: Page, role: keyof typeof accountCredentials) {
   await page.goto("/login", { waitUntil: "domcontentloaded" });
   await page.getByLabel(/Email/i).fill(accountCredentials[role]);
-  await page.getByLabel(/Password/i).fill("password123");
+  await page.getByLabel(/Password/i).fill(accountPasswords[role]);
   await page.getByRole("button", { name: /^Log in$/i }).click();
 }
 

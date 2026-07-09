@@ -401,7 +401,7 @@ export const mockUsers: UserProfile[] = [
   {
     id: "user-tambike-ops",
     displayName: "Tambike Ops",
-    email: "ops@tambike.example",
+    email: "admin@bayanko.ph",
     role: "admin",
     verificationStatus: "APPROVED",
     area: "Metro Manila",

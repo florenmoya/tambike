@@ -1,5 +1,5 @@
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { OrganizerConsole } from "@/features/organizer/organizer-console";
 
 export default function Page() {
-  return <TambikeScreen view="organizer-create" />;
+  return <OrganizerConsole section="create" />;
 }

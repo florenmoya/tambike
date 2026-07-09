@@ -57,7 +57,14 @@ import {
   getEventCtaState,
   type EventQueryInput,
 } from "./event-state";
-import type { AttendanceType, Event, EventType, ReportMetric, Role, ScannerOutcome } from "./types";
+import type {
+  AttendanceType,
+  Event,
+  EventType,
+  ReportMetric,
+  Role,
+  ScannerOutcome,
+} from "./types";
 
 export type TambikeView =
   | "discovery"
@@ -113,6 +120,7 @@ const roleLabels: Record<Role, string> = {
 };
 
 const primaryEventId = defaultPass.eventId;
+
 const featuredEventIds = [
   "tambike-cafe-classico",
   "boys-underbone-laguna-tambike",
@@ -171,37 +179,33 @@ async function shareOrCopy({ title, text, url }: { title: string; text: string; 
   return "copied" as const;
 }
 
-const navigationByRole: Record<Role, Array<{ label: string; href: string }>> = {
-  guest: [
-    { label: "Home", href: "/home" },
-    { label: "Explore", href: "/events" },
-  ],
-  rider: [
-    { label: "Home", href: "/home" },
-    { label: "Explore", href: "/events" },
-    { label: "Passes", href: "/passes" },
-    { label: "Profile", href: "/profile" },
-  ],
-  organizer: [
-    { label: "Dashboard", href: "/organizer/dashboard" },
-    { label: "My Events", href: `/organizer/events/${primaryEventId}` },
-    { label: "Create Event", href: "/organizer/events/create" },
-    { label: "Attendees", href: `/organizer/events/${primaryEventId}/attendees` },
-    { label: "Reports", href: "/organizer/reports" },
-  ],
-  venue: [
-    { label: "Dashboard", href: "/venue/dashboard" },
-    { label: "Event Requests", href: `/venue/requests/${venueApproval.id}` },
-    { label: "Approved Events", href: `/venue/events/${primaryEventId}/checkin` },
-    { label: "Reports", href: "/venue/reports" },
-  ],
-  admin: [
-    { label: "Dashboard", href: "/admin" },
-    { label: "Verifications", href: "/admin/verifications/organizers" },
-    { label: "Venue Claims", href: "/admin/venues/claims" },
-    { label: "Event Reviews", href: "/admin/events/review" },
-    { label: "Reports", href: "/admin/reports" },
-  ],
+const publicNavigationLinks = [
+  { label: "Home", href: "/home" },
+  { label: "Explore", href: "/events" },
+];
+
+type PanelLink = {
+  label: string;
+  href: string;
+  icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
+};
+
+const panelLinkByRole: Partial<Record<Role, PanelLink>> = {
+  organizer: {
+    label: "Organizer Panel",
+    href: "/organizer/dashboard",
+    icon: Gauge,
+  },
+  venue: {
+    label: "Venue Panel",
+    href: "/venue/dashboard",
+    icon: Building2,
+  },
+  admin: {
+    label: "Admin Panel",
+    href: "/admin",
+    icon: ShieldCheck,
+  },
 };
 
 const footerLinkGroups: Array<{
@@ -675,8 +679,9 @@ function SpeedometerNavGauge() {
 function AppShell({ children }: { children: React.ReactNode }) {
   const { role, currentUser, logout } = useDemo();
   const [navOpen, setNavOpen] = useState(false);
-  const links = navigationByRole[role];
+  const panelLink = panelLinkByRole[role];
   const showHostCta = role === "guest" || role === "rider";
+  const PanelIcon = panelLink?.icon;
 
   return (
     <div className="tambike-shell">
@@ -689,9 +694,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
             <span className="brand-core">Tambike</span>
           </Link>
         </div>
-        <nav className="main-nav" aria-label={`${roleLabels[role]} navigation`}>
+        <nav className="main-nav" aria-label="Public navigation">
           <SpeedometerNavGauge />
-          {links.map((link) => (
+          {publicNavigationLinks.map((link) => (
             <Link key={link.href} href={link.href} onClick={() => setNavOpen(false)}>
               {link.label}
             </Link>
@@ -706,6 +711,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
           )}
           {currentUser ? (
             <>
+              {panelLink && PanelIcon ? (
+                <Link className="panel-link" href={panelLink.href}>
+                  <PanelIcon aria-hidden={true} />
+                  <span>{panelLink.label}</span>
+                </Link>
+              ) : null}
               <Link className="account-chip" href="/profile">
                 <User aria-hidden="true" />
                 <span>{currentUser.displayName}</span>
@@ -2671,11 +2682,6 @@ function ProfileScreen() {
         title={currentUser.displayName}
         body={`${currentUser.email} · ${currentUser.verificationStatus} · Joined ${currentUser.joinedAt}`}
       />
-      <div className="profile-summary">
-        <PassStrip title={`Area: ${currentUser.area}`} body={`Role: ${roleLabels[currentUser.role]}`} />
-        {currentUser.bikeModel && <PassStrip title={`Motorcycle: ${currentUser.bikeModel}`} body="Optional rider detail" />}
-        {currentUser.clubName && <PassStrip title={`Riding group: ${currentUser.clubName}`} body="Optional rider detail" />}
-      </div>
       <form
         className="prototype-form"
         onSubmit={async (event) => {

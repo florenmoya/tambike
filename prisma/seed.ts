@@ -28,6 +28,7 @@ const eventTypeMap: Record<EventType, string> = {
 
 async function main() {
   const passwordHash = await bcrypt.hash("password123", 10);
+  const adminPasswordHash = await bcrypt.hash("secret_123", 10);
   const internalOwnerPasswordHash = await bcrypt.hash(randomUUID(), 10);
 
   await prisma.auditLog.deleteMany();
@@ -53,7 +54,7 @@ async function main() {
         id: user.id,
         displayName: user.displayName,
         email: user.email,
-        passwordHash,
+        passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
         role: user.role,
         verificationStatus: user.verificationStatus,
         area: user.area,

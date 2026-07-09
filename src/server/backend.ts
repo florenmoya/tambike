@@ -148,7 +148,11 @@ function defaultRulesForEvent(type: EventType) {
 
 async function createSeed(): Promise<BackendSeed> {
   const passwordHash = await bcrypt.hash("password123", 10);
-  const users = mockUsers.map<BackendUser>((user) => ({ ...user, passwordHash }));
+  const adminPasswordHash = await bcrypt.hash("secret_123", 10);
+  const users = mockUsers.map<BackendUser>((user) => ({
+    ...user,
+    passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
+  }));
 
   return {
     users,
