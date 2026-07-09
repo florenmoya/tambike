@@ -76,6 +76,7 @@ export type TambikeView =
   | "organizer-attendees"
   | "organizer-scanner"
   | "organizer-report"
+  | "organizer-reports"
   | "venue-claim"
   | "venue-dashboard"
   | "venue-requests"
@@ -83,6 +84,7 @@ export type TambikeView =
   | "venue-request"
   | "venue-checkin"
   | "venue-report"
+  | "venue-reports"
   | "admin-dashboard"
   | "admin-organizers"
   | "admin-venue-claims"
@@ -91,6 +93,8 @@ export type TambikeView =
   | "admin-moderation"
   | "admin-users"
   | "admin-leads"
+  | "admin-reports"
+  | "admin-report"
   | "event-register"
   | "event-test-ride";
 
@@ -117,6 +121,9 @@ const featuredEventIds = [
   "tambike-night-malabon",
   "fullprint-manila-tambike",
   "boys-garage-crossmeet-tambike",
+  "swabz-classic-bike-tambike",
+  "yloco-bandits-classic-tambike",
+  "kape-mo-to-tagaytay-tambike",
 ];
 const featuredCarouselIntervalMs = 5_000;
 const featuredWheelBurstDurationMs = 2_800;
@@ -129,6 +136,8 @@ const eventIdFromPassId = (passId?: string) =>
   passId?.startsWith("pass-") ? passId.slice("pass-".length) : defaultPass.eventId;
 const findEvent = (events: Event[], eventId?: string) =>
   events.find((event) => event.id === eventId) ?? getEvent(eventId);
+const reportableEventStatuses = new Set<Event["status"]>(["PUBLISHED", "ONGOING", "COMPLETED"]);
+const isReportableEvent = (event: Event) => reportableEventStatuses.has(event.status);
 
 function actionErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -178,20 +187,20 @@ const navigationByRole: Record<Role, Array<{ label: string; href: string }>> = {
     { label: "My Events", href: `/organizer/events/${primaryEventId}` },
     { label: "Create Event", href: "/organizer/events/create" },
     { label: "Attendees", href: `/organizer/events/${primaryEventId}/attendees` },
-    { label: "Reports", href: `/organizer/events/${primaryEventId}/report` },
+    { label: "Reports", href: "/organizer/reports" },
   ],
   venue: [
     { label: "Dashboard", href: "/venue/dashboard" },
     { label: "Event Requests", href: `/venue/requests/${venueApproval.id}` },
     { label: "Approved Events", href: `/venue/events/${primaryEventId}/checkin` },
-    { label: "Reports", href: `/venue/events/${primaryEventId}/report` },
+    { label: "Reports", href: "/venue/reports" },
   ],
   admin: [
     { label: "Dashboard", href: "/admin" },
     { label: "Verifications", href: "/admin/verifications/organizers" },
     { label: "Venue Claims", href: "/admin/venues/claims" },
     { label: "Event Reviews", href: "/admin/events/review" },
-    { label: "Reports", href: `/organizer/events/${primaryEventId}/report` },
+    { label: "Reports", href: "/admin/reports" },
   ],
 };
 
@@ -232,8 +241,8 @@ const footerLinkGroups: Array<{
       },
       {
         label: "Reports",
-        href: `/organizer/events/${primaryEventId}/report`,
-        roles: ["organizer", "venue", "admin"],
+        href: "/organizer/reports",
+        roles: ["organizer", "admin"],
       },
     ],
   },
@@ -380,6 +389,13 @@ const protectedViews: Partial<
     roleTitle: "Report access needed",
     roleBody: "Use an account assigned to this event.",
   },
+  "organizer-reports": {
+    allowed: ["organizer", "admin"],
+    loginTitle: "Log in to view reports",
+    loginBody: "Use an approved host account to view event reports.",
+    roleTitle: "Host access needed",
+    roleBody: "Reports are available to approved event hosts.",
+  },
   "venue-dashboard": {
     allowed: ["venue", "admin"],
     loginTitle: "Log in to continue",
@@ -421,6 +437,13 @@ const protectedViews: Partial<
     loginBody: "Use an event, venue, or ops account.",
     roleTitle: "Report access needed",
     roleBody: "Use an account assigned to this event.",
+  },
+  "venue-reports": {
+    allowed: ["venue", "admin"],
+    loginTitle: "Log in to view reports",
+    loginBody: "Use a venue account to view event reports.",
+    roleTitle: "Venue access needed",
+    roleBody: "Reports are available to venue staff assigned to these events.",
   },
   "admin-dashboard": {
     allowed: ["admin"],
@@ -478,6 +501,20 @@ const protectedViews: Partial<
     roleTitle: "Ops access needed",
     roleBody: "Use a Tambike ops account.",
   },
+  "admin-reports": {
+    allowed: ["admin"],
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
+  },
+  "admin-report": {
+    allowed: ["admin"],
+    loginTitle: "Log in to continue",
+    loginBody: "Use a Tambike ops account.",
+    roleTitle: "Ops access needed",
+    roleBody: "Use a Tambike ops account.",
+  },
 };
 
 export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
@@ -515,6 +552,7 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "organizer-attendees" && <AttendeesScreen eventId={id} />}
       {view === "organizer-scanner" && <ScannerScreen eventId={id} owner="organizer" />}
       {view === "organizer-report" && <ReportScreen eventId={id} owner="organizer" />}
+      {view === "organizer-reports" && <ReportsIndexScreen owner="organizer" />}
       {view === "venue-claim" && <VenueClaimScreen />}
       {view === "venue-dashboard" && <VenueDashboard />}
       {view === "venue-requests" && <VenueRequestsScreen />}
@@ -522,6 +560,7 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "venue-request" && <VenueRequestScreen requestId={id} />}
       {view === "venue-checkin" && <ScannerScreen eventId={id} owner="venue" />}
       {view === "venue-report" && <ReportScreen eventId={id} owner="venue" />}
+      {view === "venue-reports" && <ReportsIndexScreen owner="venue" />}
       {view === "admin-dashboard" && <AdminDashboard />}
       {view === "admin-organizers" && <AdminQueue title="Organizer verifications" />}
       {view === "admin-venue-claims" && <AdminQueue title="Venue claim queue" />}
@@ -530,6 +569,8 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "admin-moderation" && <AdminModerationScreen />}
       {view === "admin-users" && <AdminUsersScreen />}
       {view === "admin-leads" && <AdminLeadsScreen />}
+      {view === "admin-reports" && <ReportsIndexScreen owner="admin" />}
+      {view === "admin-report" && <ReportScreen eventId={id} owner="admin" />}
     </>
   );
   const guard = protectedViews[view];
@@ -1875,13 +1916,28 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
   );
 }
 
-function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "venue" }) {
+function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "venue" | "admin" }) {
   const { events } = useDemo();
   const event = findEvent(events, eventId);
+  const eyebrow =
+    owner === "admin" ? "Admin report" : owner === "venue" ? "Venue report" : "Organizer report";
+
+  if (!isReportableEvent(event)) {
+    return (
+      <LightView>
+        <HeroPanel
+          eyebrow={eyebrow}
+          title="Report not ready"
+          body={`${event.title} is still in ${event.status.replaceAll("_", " ").toLowerCase()}. Reports appear after the event is live or completed.`}
+        />
+      </LightView>
+    );
+  }
+
   return (
     <LightView>
       <HeroPanel
-        eyebrow={owner === "venue" ? "Venue report" : "Organizer report"}
+        eyebrow={eyebrow}
         title="Event Report"
         body={`${event.title} performance summary for RSVP, attendance, perks, and host-again decisions.`}
       />
@@ -1894,6 +1950,87 @@ function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer"
           </p>
         </InfoPanel>
       </div>
+    </LightView>
+  );
+}
+
+function ReportsIndexScreen({ owner }: { owner: "organizer" | "venue" | "admin" }) {
+  const { currentUser, events } = useDemo();
+  const isAdmin = currentUser?.role === "admin";
+  const reports = events.filter((event) => {
+    if (!isReportableEvent(event)) {
+      return false;
+    }
+
+    if (owner === "admin" || isAdmin) {
+      return true;
+    }
+
+    if (owner === "venue") {
+      return event.venueId === currentUser?.venueId;
+    }
+
+    return event.organizerId === currentUser?.organizerProfileId;
+  });
+  const reportHrefFor = (event: Event) => {
+    if (owner === "admin") return `/admin/reports/${event.id}`;
+    if (owner === "venue") return `/venue/events/${event.id}/report`;
+    return `/organizer/events/${event.id}/report`;
+  };
+  const copy = {
+    organizer: {
+      title: "Organizer reports",
+      eyebrow: "Organizer reports",
+      body: "Post-event summaries for events owned by the logged-in organizer, with attendance and perk performance drill-downs.",
+      detail: "Host-owned summaries",
+    },
+    venue: {
+      title: "Venue reports",
+      eyebrow: "Venue reports",
+      body: "Venue-linked event summaries for attendance, peak arrivals, redemptions, issues, and host-again decisions.",
+      detail: "Venue-linked summaries",
+    },
+    admin: {
+      title: "Admin reports",
+      eyebrow: "Admin reports",
+      body: "Operations view of event reports across organizers and venues for manual exports, moderation follow-up, and partner reporting.",
+      detail: "Platform summaries",
+    },
+  }[owner];
+  const summaryMetrics: ReportMetric[] = [
+    { label: "Reports", value: String(reports.length), detail: copy.detail },
+    {
+      label: "Expected riders",
+      value: String(reports.reduce((total, event) => total + event.expectedRiders, 0)),
+      detail: "Across listed events",
+    },
+    {
+      label: "QR passes",
+      value: String(reports.reduce((total, event) => total + event.going, 0)),
+      detail: "Generated from RSVP flow",
+    },
+  ];
+
+  return (
+    <LightView>
+      <HeroPanel eyebrow={copy.eyebrow} title={copy.title} body={copy.body} />
+      <MetricStrip metrics={summaryMetrics} />
+      {reports.length ? (
+        <div className="queue-list">
+          {reports.map((event) => (
+            <Link key={event.id} href={reportHrefFor(event)}>
+              <FileCheck2 aria-hidden="true" />
+              <span>{event.title}</span>
+              <strong>{event.status.replaceAll("_", " ")}</strong>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h2>No reports yet</h2>
+          <p>Completed or active event reports will appear here after check-ins start.</p>
+        </div>
+      )}
     </LightView>
   );
 }
