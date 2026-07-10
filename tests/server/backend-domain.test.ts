@@ -199,6 +199,30 @@ describe("Tambike backend domain rules", () => {
     ).rejects.toThrow("INVALID_INPUT");
   });
 
+  test("allows only one concurrent admin organizer creation for the same email", async () => {
+    const backend = await createTambikeTestBackend();
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+
+    const results = await Promise.allSettled([
+      backend.createOrganizerForAdmin(admin.sessionToken, validAdminOrganizerInput),
+      backend.createOrganizerForAdmin(admin.sessionToken, validAdminOrganizerInput),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: "INVALID_INPUT" }) });
+
+    const verifications = await backend.listOrganizerVerifications(admin.sessionToken);
+    expect(
+      verifications.filter((verification) => verification.ownerEmail === validAdminOrganizerInput.email),
+    ).toHaveLength(1);
+    expect(
+      backend
+        .getSnapshot()
+        .users.filter((user) => user.email === validAdminOrganizerInput.email),
+    ).toHaveLength(1);
+  });
+
   test("creates non-guessable pass tokens when a rider registers going", async () => {
     const backend = await createTambikeTestBackend();
     const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");

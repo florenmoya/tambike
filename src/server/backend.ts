@@ -284,6 +284,7 @@ export class TambikeBackend {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
   private readonly organizerVerifications = new Map<string, OrganizerVerificationRecord>();
+  private readonly reservedOrganizerEmails = new Set<string>();
   private readonly rsvps = new Map<string, RSVP & { userId: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
@@ -473,40 +474,46 @@ export class TambikeBackend {
   ) {
     const admin = this.requireRole(sessionToken, "admin");
     const email = requiredTrimmedOrganizerField(input.email).toLowerCase();
-    if (this.findUserByEmail(email)) {
+    if (this.findUserByEmail(email) || this.reservedOrganizerEmails.has(email)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    validateSignupPassword(input.password);
-    const application = validateOrganizerApplicationInput(input);
-    const area = requiredTrimmedOrganizerField(input.area);
-    const userId = `user-${randomUUID()}`;
-    const organizerId = `organizer-${randomUUID()}`;
-    const user: BackendUser = {
-      id: userId,
-      displayName: application.displayName,
-      email,
-      role: "organizer",
-      verificationStatus: "APPROVED",
-      area,
-      joinedAt: "July 11, 2026",
-      organizerProfileId: organizerId,
-      passwordHash: await bcrypt.hash(input.password, 10),
-    };
-    const record: OrganizerVerificationRecord = {
-      id: organizerId,
-      ownerUserId: user.id,
-      ownerEmail: user.email,
-      ownerName: user.displayName,
-      ownerRole: "organizer",
-      status: "APPROVED",
-      ...application,
-      pastEvents: 0,
-      activeEvents: 0,
-    };
-    this.users.set(user.id, user);
-    this.organizerVerifications.set(record.id, record);
-    this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
-    return cloneOrganizerVerification(record);
+    this.reservedOrganizerEmails.add(email);
+
+    try {
+      validateSignupPassword(input.password);
+      const application = validateOrganizerApplicationInput(input);
+      const area = requiredTrimmedOrganizerField(input.area);
+      const userId = `user-${randomUUID()}`;
+      const organizerId = `organizer-${randomUUID()}`;
+      const user: BackendUser = {
+        id: userId,
+        displayName: application.displayName,
+        email,
+        role: "organizer",
+        verificationStatus: "APPROVED",
+        area,
+        joinedAt: "July 11, 2026",
+        organizerProfileId: organizerId,
+        passwordHash: await bcrypt.hash(input.password, 10),
+      };
+      const record: OrganizerVerificationRecord = {
+        id: organizerId,
+        ownerUserId: user.id,
+        ownerEmail: user.email,
+        ownerName: user.displayName,
+        ownerRole: "organizer",
+        status: "APPROVED",
+        ...application,
+        pastEvents: 0,
+        activeEvents: 0,
+      };
+      this.users.set(user.id, user);
+      this.organizerVerifications.set(record.id, record);
+      this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
+      return cloneOrganizerVerification(record);
+    } finally {
+      this.reservedOrganizerEmails.delete(email);
+    }
   }
 
   async listOrganizerVerifications(sessionToken: string) {
