@@ -26,6 +26,14 @@ const eventTypeMap: Record<EventType, string> = {
   Race: "RACE",
 };
 
+const demoScannerPass = {
+  eventId: "arai-hjc-charity-ride",
+  userId: "user-demo-scan-rider",
+  rsvpId: "rsvp-arai-hjc-charity-ride-user-demo-scan-rider",
+  passId: "pass-arai-hjc-charity-ride-user-demo-scan-rider",
+  qrToken: "tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s",
+};
+
 async function main() {
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
@@ -42,7 +50,6 @@ async function main() {
   await prisma.eventApproval.deleteMany();
   await prisma.perk.deleteMany();
   await prisma.event.deleteMany();
-  await prisma.venueClaim.deleteMany();
   await prisma.venue.deleteMany();
   await prisma.organizerProfile.deleteMany();
   await prisma.session.deleteMany();
@@ -81,6 +88,18 @@ async function main() {
       });
     }
   }
+
+  await prisma.user.create({
+    data: {
+      id: demoScannerPass.userId,
+      displayName: "Seeded Scan Rider",
+      email: "scan-rider@seed.tambike.local",
+      passwordHash: internalOwnerPasswordHash,
+      role: "rider",
+      verificationStatus: "UNVERIFIED",
+      area: "Antipolo",
+    },
+  });
 
   for (const organizer of organizers) {
     const ownerId = `user-${organizer.id}`;
@@ -169,6 +188,27 @@ async function main() {
       },
     });
   }
+
+  await prisma.rSVP.create({
+    data: {
+      id: demoScannerPass.rsvpId,
+      eventId: demoScannerPass.eventId,
+      userId: demoScannerPass.userId,
+      status: "going",
+      attendanceType: "direct",
+      clubName: "Weekend Tambike Crew",
+    },
+  });
+  await prisma.pass.create({
+    data: {
+      id: demoScannerPass.passId,
+      eventId: demoScannerPass.eventId,
+      userId: demoScannerPass.userId,
+      rsvpId: demoScannerPass.rsvpId,
+      qrTokenHash: demoScannerPass.qrToken,
+      status: "active",
+    },
+  });
 
   await prisma.eventApproval.create({
     data: {

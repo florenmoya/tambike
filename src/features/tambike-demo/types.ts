@@ -16,7 +16,9 @@ export type EventStatus =
   | "PUBLISHED"
   | "ONGOING"
   | "COMPLETED"
-  | "NEEDS_CHANGES";
+  | "NEEDS_CHANGES"
+  | "REJECTED"
+  | "CANCELLED";
 
 export type EventType =
   | "Tambike"
@@ -40,6 +42,19 @@ export type ScannerOutcome =
   | "wrong-event"
   | "cancelled"
   | "inactive";
+
+export type ScanMethod = "qr" | "manual";
+
+export type ScanPassCode =
+  | "CHECKED_IN"
+  | "ALREADY_CHECKED_IN"
+  | "WRONG_EVENT"
+  | "CANCELLED_PASS"
+  | "NOT_FOUND"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "INVALID_INPUT"
+  | "ERROR";
 
 export interface Venue {
   id: string;
@@ -159,6 +174,24 @@ export interface Pass {
   qrToken: string;
   status: "active" | "checked_in" | "cancelled";
   generatedAt: string;
+}
+
+export interface DemoState {
+  currentUser: UserProfile | null;
+  users: UserProfile[];
+  events: Event[];
+  passes: Pass[];
+  passCreated: boolean;
+}
+
+export interface ScanPassResult {
+  ok: boolean;
+  code: ScanPassCode;
+  outcome: ScannerOutcome;
+  title: string;
+  body: string;
+  pass?: Pass;
+  state: DemoState;
 }
 
 export interface CheckIn {

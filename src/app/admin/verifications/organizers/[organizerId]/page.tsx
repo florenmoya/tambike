@@ -1,5 +1,6 @@
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { AdminConsole } from "@/features/admin/admin-console";
 
-export default function Page() {
-  return <TambikeScreen view="admin-organizers" />;
+export default async function Page({ params }: { params: Promise<{ organizerId: string }> }) {
+  const { organizerId } = await params;
+  return <AdminConsole section="organizers" organizerId={organizerId} />;
 }

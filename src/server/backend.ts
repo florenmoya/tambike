@@ -94,6 +94,15 @@ type AuditRecord = {
 type BackendSeed = {
   users: BackendUser[];
   events: Event[];
+  rsvps: Array<RSVP & { userId: string }>;
+  passes: Array<Pass & { userId: string }>;
+};
+
+const demoScannerPass = {
+  eventId: "arai-hjc-charity-ride",
+  userId: "user-demo-scan-rider",
+  passId: "pass-arai-hjc-charity-ride-user-demo-scan-rider",
+  qrToken: "tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s",
 };
 
 function slugify(value: string) {
@@ -149,14 +158,45 @@ function defaultRulesForEvent(type: EventType) {
 async function createSeed(): Promise<BackendSeed> {
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
-  const users = mockUsers.map<BackendUser>((user) => ({
-    ...user,
-    passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
-  }));
+  const users: BackendUser[] = [
+    ...mockUsers.map<BackendUser>((user) => ({
+      ...user,
+      passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
+    })),
+    {
+      id: demoScannerPass.userId,
+      displayName: "Seeded Scan Rider",
+      email: "scan-rider@seed.tambike.local",
+      role: "rider",
+      verificationStatus: "UNVERIFIED",
+      area: "Antipolo",
+      joinedAt: "July 9, 2026",
+      passwordHash,
+    },
+  ];
 
   return {
     users,
     events: demoEvents.map(cloneEvent),
+    rsvps: [
+      {
+        eventId: demoScannerPass.eventId,
+        userId: demoScannerPass.userId,
+        status: "going",
+        attendanceType: "direct",
+        clubName: "Weekend Tambike Crew",
+      },
+    ],
+    passes: [
+      {
+        id: demoScannerPass.passId,
+        eventId: demoScannerPass.eventId,
+        userId: demoScannerPass.userId,
+        qrToken: demoScannerPass.qrToken,
+        status: "active",
+        generatedAt: "2026-07-09T00:00:00.000Z",
+      },
+    ],
   };
 }
 
@@ -176,6 +216,14 @@ export class TambikeBackend {
 
     for (const event of seed.events) {
       this.events.set(event.id, cloneEvent(event));
+    }
+
+    for (const rsvp of seed.rsvps) {
+      this.rsvps.set(`${rsvp.eventId}:${rsvp.userId}`, { ...rsvp });
+    }
+
+    for (const pass of seed.passes) {
+      this.passes.set(pass.id, { ...pass });
     }
   }
 
@@ -489,7 +537,9 @@ export class TambikeBackend {
   }
 
   listPublicUsers() {
-    return Array.from(this.users.values()).map(cloneUser);
+    return Array.from(this.users.values())
+      .filter((user) => !user.email.endsWith("@seed.tambike.local"))
+      .map(cloneUser);
   }
 
   listEvents(query?: EventQueryInput) {

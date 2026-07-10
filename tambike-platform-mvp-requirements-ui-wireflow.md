@@ -78,8 +78,8 @@ The app is an event/ticket/pass system for tambike culture, not a filter-heavy v
 | Rider discovery | Home feed, Explore events, event detail pages, public event viewing without login. |
 | RSVP and pass | Interested, Going/Register, QR Tambike Pass, My Passes. |
 | Organizer flow | Organizer verification application, create event wizard, my events, event status tracking. |
-| Venue flow | Claim venue, review event requests, approve/reject/approve with conditions, event day check-in support. |
-| Admin flow | Manual organizer verification, venue claims, event reviews, moderation queue, basic user management. |
+| Venue flow | Review event requests, approve/reject/approve with conditions, event day check-in support. |
+| Admin flow | Manual organizer verification, venue directory oversight, event reviews, moderation queue, basic user management. |
 | Check-in | QR scanning by organizer/venue/admin, manual check-in fallback, attendance count. |
 | Perks | Basic perk declaration and check-in unlock. Redemption can be manual in MVP. |
 | Reports | Basic post-event report: RSVP count, check-ins, no-show rate, perk redemptions, notes. |
@@ -107,7 +107,7 @@ The app is an event/ticket/pass system for tambike culture, not a filter-heavy v
 | Guest | Logged-out visitor. | Browse landing page, Home/Explore, and public event detail pages. Cannot RSVP or create events. |
 | Rider | Logged-in end user. | Interested, Going/Register, view QR pass, share events, check in, claim perks/badges. |
 | Organizer | Verified user who can host events. | Create drafts, submit events to venues, manage RSVPs, scan check-ins, view reports. |
-| Venue Owner/Staff | Verified venue representative. | Claim venue, approve/reject event requests, set conditions, scan passes, view venue reports. |
+| Venue Owner/Staff | Verified venue representative. | Approve/reject event requests, set conditions, scan passes, view venue reports. |
 | Brand/Dealer | Verified business partner. | Create/host brand events or test ride campaigns; export leads manually in MVP. |
 | Admin | Platform operator. | Verify users/venues, review events, moderate reports, manage platform data and statuses. |
 
@@ -186,7 +186,7 @@ REJECTED, CANCELLED, SUSPENDED
 | --- | --- | --- |
 | AUTH-001 | Guests can browse public event pages without login. | Given a logged-out user, when they open Home/Explore or a public event link, then they can view event details but cannot RSVP. |
 | AUTH-002 | Users can sign up and become Riders by default. | After sign-up, the user receives Rider permissions and can RSVP/register for events. |
-| AUTH-003 | Login is required only for high-intent actions. | Interested, Going, Register, QR Pass, Create Event, Claim Venue, and Test Ride Interest require login. |
+| AUTH-003 | Login is required only for high-intent actions. | Interested, Going, Register, QR Pass, Create Event, and Test Ride Interest require login. |
 | AUTH-004 | Profile should collect minimal optional rider data. | Name/display name required; bike model, city/area, and club name optional. No ID/license/plate in MVP. |
 
 ### 5.2 Organizer Verification
@@ -202,10 +202,9 @@ REJECTED, CANCELLED, SUSPENDED
 
 | ID | Requirement | Acceptance Criteria |
 | --- | --- | --- |
-| VEN-001 | Venue owners can claim a venue. | Claim form captures venue name, address, Google Maps link, contact person, role, FB page, contact number, and notes/proof. |
-| VEN-002 | Admin manually verifies venue claim. | Admin can approve, reject, request more proof, and assign venue owner/staff. |
-| VEN-003 | Verified venue can review event requests. | Venue dashboard shows pending requests with organizer, date, expected riders, event type, perks, rules, ride-out flag. |
-| VEN-004 | Venue can approve, reject, or approve with conditions. | Conditions may include max capacity, allowed time, required rules, parking/staffing notes, and organizer instructions. |
+| VEN-001 | Verified venue can review event requests. | Venue dashboard shows pending requests with organizer, date, expected riders, event type, perks, rules, ride-out flag. |
+| VEN-002 | Venue can approve, reject, or approve with conditions. | Conditions may include max capacity, allowed time, required rules, parking/staffing notes, and organizer instructions. |
+| VEN-003 | Admin maintains venue records. | Venue names, addresses, maps, capacity notes, and operating rules are available for event review. |
 
 ### 5.4 Event Creation
 
@@ -279,7 +278,7 @@ Use a mobile-first responsive web application / PWA for MVP. This minimizes app-
 | Rider | Home \| Explore \| My Passes \| Create \| Profile |
 | Organizer | Dashboard \| My Events \| Create Event \| Attendees \| Reports \| Profile |
 | Venue | Dashboard \| Event Requests \| Approved Events \| Check-ins \| Venue Profile \| Reports |
-| Admin | Dashboard \| Verifications \| Venue Claims \| Event Reviews \| Users \| Reports \| Settings |
+| Admin | Dashboard \| Verifications \| Event Reviews \| Users \| Reports \| Settings |
 
 ### 6.3 Route Map
 
@@ -311,7 +310,6 @@ Use a mobile-first responsive web application / PWA for MVP. This minimizes app-
 /organizer/events/:eventId/scanner
 /organizer/events/:eventId/report
 
-/venue/claim
 /venue/dashboard
 /venue/requests
 /venue/requests/:requestId
@@ -323,8 +321,6 @@ Use a mobile-first responsive web application / PWA for MVP. This minimizes app-
 /admin
 /admin/verifications/organizers
 /admin/verifications/organizers/:id
-/admin/venues/claims
-/admin/venues/claims/:id
 /admin/events/review
 /admin/events/review/:id
 /admin/moderation
@@ -376,9 +372,7 @@ Profile / Create
 ### 7.3 Venue Primary Flow
 
 ```text
-Claim venue
--> Admin verifies claim
--> Receive event request
+Receive event request
 -> Review organizer + event details
 -> Approve / reject / set conditions
 -> Event published
@@ -393,7 +387,6 @@ Claim venue
 ```text
 Admin dashboard
 -> Review organizer applications
--> Review venue claims
 -> Review risky events
 -> Approve / reject / request changes
 -> Monitor published events
@@ -418,7 +411,7 @@ Admin dashboard
 | QR Tambike Pass | Proof of registration and check-in token. | Show event info, QR code, pass status, benefits/perks, Waze/Maps, Share, View Event. |
 | My Passes | Manage upcoming and past participation. | Tabs: Upcoming, Past, Perks. Cards show event, date, status, View QR, Open Waze, Share. |
 | Past Event / Badge | Post-event retention. | Show attended event, check-in timestamp, badge, photos/recap placeholder, follow organizer/venue, similar events. |
-| Profile | User identity and role upgrades. | Rider info, followed hosts/venues, organizer application status, venue claim CTA, settings. |
+| Profile | User identity and role upgrades. | Rider info, followed hosts/venues, organizer application status, settings. |
 
 ### 8.2 Organizer Screens
 
@@ -437,7 +430,6 @@ Admin dashboard
 
 | Screen | Primary Purpose | Key UI Requirements / Acceptance Criteria |
 | --- | --- | --- |
-| Claim Venue | Allow venue ownership request. | Form: venue name, address, Google Maps link, contact person, role, FB page, contact number, proof/notes. |
 | Venue Dashboard | Venue command center. | Cards: Pending Requests, Upcoming Approved Events, Today's Check-ins, Past Reports. |
 | Event Request Detail | Approve or reject proposed events. | Show event title, organizer, verification status, date/time, expected riders, event type, ride-out, perks, rules. Actions: Approve, Approve with Conditions, Reject. |
 | Approved Events | Track venue calendar. | Tabs: Upcoming, Ongoing, Completed, Cancelled. Show RSVP and expected riders. Actions: View, Scanner, Report Issue. |
@@ -448,11 +440,9 @@ Admin dashboard
 
 | Screen | Primary Purpose | Key UI Requirements / Acceptance Criteria |
 | --- | --- | --- |
-| Admin Dashboard | Platform operations summary. | Cards: Pending Organizer Verifications, Venue Claims, Event Reviews, Published Events, Flagged Events, Recent Check-ins. |
+| Admin Dashboard | Platform operations summary. | Cards: Pending Organizer Verifications, Event Reviews, Published Events, Flagged Events, Recent Check-ins. |
 | Organizer Verification Queue | Review role applications. | Columns: name, type, FB link, submitted date, status, risk level. Actions: View, Approve, Reject, Request More Info, Suspend. |
 | Organizer Verification Detail | Decide application. | Applicant info, links, past events, internal notes, risk rating, decision buttons. |
-| Venue Claim Queue | Review venue ownership. | List of claims with venue name, claimant, contact, proof status. Actions: Approve, Reject, Request Proof, Assign Owner. |
-| Venue Claim Detail | Decide venue claim. | Venue info, map link, claimant info, proof/notes, duplicate checks, admin decision. |
 | Event Review Queue | Review risky events. | Show events requiring review due to type, ride-out, raffle/promo, high attendance, new organizer, flags. |
 | Event Review Detail | Approve or block event. | Event summary, organizer, venue approval status, risk flags, perks, ride-out info, rules. Actions: Approve Publish, Reject, Request Changes, Escalate. |
 | Moderation / Flagged Events | Handle safety and trust issues. | Flag reasons: racing language, stunt language, illegal raffle, no venue approval, fake event, report, noise complaint, unsafe behavior. |
@@ -543,7 +533,7 @@ Admin dashboard
 | ID | Requirement | Acceptance Criteria |
 | --- | --- | --- |
 | ADM-001 | Admin can approve/reject organizer applications. | All decisions are logged with admin, timestamp, status, and notes. |
-| ADM-002 | Admin can approve/reject venue claims. | Venue owner/staff is assigned only after approval. |
+| ADM-002 | Admin can maintain venue records. | Venue status and operating notes are visible to event reviewers. |
 | ADM-003 | Admin can review risky events before publishing. | Review queue displays risk flags and event data needed for decision. |
 | ADM-004 | Admin can request changes. | Event moves to Needs Changes and organizer receives reason. |
 | ADM-005 | Admin can suspend event or user. | Suspended events are hidden from public listings; suspended organizers cannot create/submit. |
@@ -650,8 +640,8 @@ Revenue is handled manually/off-app first through B2B deals.
 | P0 | Foundation | Auth, user roles, public routing, base layout, event model, status model. |
 | P1 | Rider event flow | Home, Explore, Event Detail, RSVP, QR Pass, My Passes, Share. |
 | P2 | Organizer flow | Organizer Application, Dashboard, Create Event Wizard, My Events, Event Status, Attendees. |
-| P3 | Venue flow | Claim Venue, Venue Dashboard, Event Request Detail, Approve/Reject/Conditions, Venue Scanner. |
-| P4 | Admin flow | Admin Dashboard, Organizer Verification, Venue Claims, Event Review, Moderation, User Management. |
+| P3 | Venue flow | Venue Dashboard, Event Request Detail, Approve/Reject/Conditions, Venue Scanner. |
+| P4 | Admin flow | Admin Dashboard, Organizer Verification, Event Review, Moderation, User Management. |
 | P5 | Check-in and reporting | QR scanner, manual check-in, event report, venue report, export. |
 | P6 | Brand/dealer minimal | Brand Event Page, Test Ride Interest Form, Admin Lead Export. |
 
@@ -714,7 +704,6 @@ Revenue is handled manually/off-app first through B2B deals.
 | S17 | Attendee List | Organizer | P3 |
 | S18 | QR Scanner | Organizer/Venue | P3 |
 | S19 | Event Report | Organizer | P5 |
-| S20 | Claim Venue | Venue | P3 |
 | S21 | Venue Dashboard | Venue | P3 |
 | S22 | Event Request Detail | Venue | P3 |
 | S23 | Approved Events | Venue | P3 |
@@ -723,8 +712,6 @@ Revenue is handled manually/off-app first through B2B deals.
 | S26 | Admin Dashboard | Admin | P4 |
 | S27 | Organizer Verification Queue | Admin | P4 |
 | S28 | Organizer Verification Detail | Admin | P4 |
-| S29 | Venue Claim Queue | Admin | P4 |
-| S30 | Venue Claim Detail | Admin | P4 |
 | S31 | Event Review Queue | Admin | P4 |
 | S32 | Event Review Detail | Admin | P4 |
 | S33 | Moderation / Flagged Events | Admin | P4 |
@@ -779,10 +766,10 @@ ORGANIZER:
 Apply Verification -> Create Event -> Venue Approval -> Admin Review if needed -> Published -> Check-ins -> Report
 
 VENUE:
-Claim Venue -> Review Event Request -> Approve/Reject/Conditions -> Event Day Check-in -> Report
+Review Event Request -> Approve/Reject/Conditions -> Event Day Check-in -> Report
 
 ADMIN:
-Verify Organizer -> Verify Venue -> Review Risky Events -> Moderate -> Archive/Report
+Verify Organizer -> Review Risky Events -> Moderate -> Archive/Report
 ```
 
 ## Document Status

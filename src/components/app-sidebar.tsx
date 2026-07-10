@@ -11,7 +11,6 @@ import {
   UploadCloudIcon,
   UsersIcon,
   UserRoundCheckIcon,
-  WarehouseIcon,
 } from "lucide-react";
 
 import type { AdminSection } from "@/features/admin/admin-console";
@@ -33,7 +32,6 @@ import {
 type SidebarMetric = {
   pendingOrganizers: number;
   pendingEvents: number;
-  venueClaims: number;
 };
 
 const primaryNav: Array<{
@@ -62,13 +60,6 @@ const primaryNav: Array<{
     section: "events",
     icon: <FileCheck2Icon />,
     badge: "pendingEvents",
-  },
-  {
-    title: "Venue claims",
-    href: "/admin/venues/claims",
-    section: "venues",
-    icon: <WarehouseIcon />,
-    badge: "venueClaims",
   },
   {
     title: "Reports",
@@ -187,7 +178,7 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg">
-              <Link href="/profile">
+              <Link href="/admin/users">
                 <div className="flex size-8 items-center justify-center rounded-lg bg-sidebar-accent text-sidebar-accent-foreground">
                   {user.displayName
                     .split(" ")

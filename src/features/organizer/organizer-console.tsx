@@ -58,14 +58,16 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from "@/components/ui/sidebar";
-import { defaultPass, demoEvents, getVenue, mockUsers, venues } from "@/features/tambike-demo/data";
+import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
+import { demoEvents, getVenue, mockUsers, venues } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type {
   CreateEventInput,
   Event,
   EventStatus,
   EventType,
-  ScannerOutcome,
+  ScanMethod,
+  ScanPassResult,
   UserProfile,
 } from "@/features/tambike-demo/types";
 
@@ -183,8 +185,7 @@ export function OrganizerConsole({
     currentUser,
     events,
     createEventDraft,
-    scannerOutcome,
-    setScannerOutcome,
+    scanPass,
     checkedInCount,
   } = useDemo();
 
@@ -223,7 +224,13 @@ export function OrganizerConsole({
   const metrics = getSidebarMetrics(organizerEvents);
   const cards = getSectionCards(organizerEvents, checkedInCount);
   const chartData = getChartData(organizerEvents);
-  const activeEventId = selectedEvent?.id ?? organizerEvents[0]?.id ?? defaultPass.eventId;
+  const activeEventId = selectedEvent?.id ?? organizerEvents[0]?.id ?? null;
+  const createDisabledReason =
+    currentUser.role !== "organizer"
+      ? "Admin accounts can review organizer activity, but only approved organizer accounts can create event drafts."
+      : currentUser.verificationStatus !== "APPROVED"
+        ? "Organizer approval is required before creating event drafts."
+        : "";
   const copy = sectionCopy[section];
 
   return (
@@ -259,6 +266,7 @@ export function OrganizerConsole({
             {section === "create" ? (
               <CreateEventSection
                 canCreate={currentUser.role === "organizer" && currentUser.verificationStatus === "APPROVED"}
+                disabledReason={createDisabledReason}
                 createEventDraft={createEventDraft}
               />
             ) : null}
@@ -267,8 +275,7 @@ export function OrganizerConsole({
             {section === "scanner" && selectedEvent ? (
               <ScannerSection
                 event={selectedEvent}
-                scannerOutcome={scannerOutcome}
-                setScannerOutcome={setScannerOutcome}
+                scanPass={scanPass}
                 checkedInCount={checkedInCount}
               />
             ) : null}
@@ -290,7 +297,7 @@ function OrganizerSidebar({
 }: React.ComponentProps<typeof Sidebar> & {
   currentSection: OrganizerSection;
   metrics: SidebarMetrics;
-  activeEventId: string;
+  activeEventId: string | null;
   user: UserProfile;
 }) {
   const primaryNav: Array<{
@@ -333,32 +340,34 @@ function OrganizerSidebar({
     href: string;
     section: OrganizerSection;
     icon: React.ReactNode;
-  }> = [
-    {
-      title: "Event workspace",
-      href: `/organizer/events/${activeEventId}`,
-      section: "event",
-      icon: <ClipboardCheckIcon />,
-    },
-    {
-      title: "Attendees",
-      href: `/organizer/events/${activeEventId}/attendees`,
-      section: "attendees",
-      icon: <UsersIcon />,
-    },
-    {
-      title: "Scanner",
-      href: `/organizer/events/${activeEventId}/scanner`,
-      section: "scanner",
-      icon: <ScanLineIcon />,
-    },
-    {
-      title: "Event report",
-      href: `/organizer/events/${activeEventId}/report`,
-      section: "report",
-      icon: <FileCheck2Icon />,
-    },
-  ];
+  }> = activeEventId
+    ? [
+        {
+          title: "Event workspace",
+          href: `/organizer/events/${activeEventId}`,
+          section: "event",
+          icon: <ClipboardCheckIcon />,
+        },
+        {
+          title: "Attendees",
+          href: `/organizer/events/${activeEventId}/attendees`,
+          section: "attendees",
+          icon: <UsersIcon />,
+        },
+        {
+          title: "Scanner",
+          href: `/organizer/events/${activeEventId}/scanner`,
+          section: "scanner",
+          icon: <ScanLineIcon />,
+        },
+        {
+          title: "Event report",
+          href: `/organizer/events/${activeEventId}/report`,
+          section: "report",
+          icon: <FileCheck2Icon />,
+        },
+      ]
+    : [];
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -406,27 +415,29 @@ function OrganizerSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Current event</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {eventNav.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={currentSection === item.section}
-                    tooltip={item.title}
-                  >
-                    <Link href={item.href}>
-                      {item.icon}
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {eventNav.length > 0 ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>Current event</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {eventNav.map((item) => (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={currentSection === item.section}
+                      tooltip={item.title}
+                    >
+                      <Link href={item.href}>
+                        {item.icon}
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
 
       <SidebarFooter>
@@ -480,7 +491,7 @@ function OverviewSection({
   cards: SectionCard[];
   chartData: AdminChartPoint[];
   eventRows: OrganizerEventRow[];
-  activeEventId: string;
+  activeEventId: string | null;
 }) {
   return (
     <>
@@ -510,24 +521,32 @@ function OverviewSection({
             <CardDescription>Fast paths for the active event workspace.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
-            <Button asChild>
-              <Link href={`/organizer/events/${activeEventId}/attendees`}>
-                <UsersIcon data-icon="inline-start" />
-                Open attendees
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href={`/organizer/events/${activeEventId}/scanner`}>
-                <QrCodeIcon data-icon="inline-start" />
-                Open scanner
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href={`/organizer/events/${activeEventId}/report`}>
-                <FileCheck2Icon data-icon="inline-start" />
-                Open report
-              </Link>
-            </Button>
+            {activeEventId ? (
+              <>
+                <Button asChild>
+                  <Link href={`/organizer/events/${activeEventId}/attendees`}>
+                    <UsersIcon data-icon="inline-start" />
+                    Open attendees
+                  </Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link href={`/organizer/events/${activeEventId}/scanner`}>
+                    <QrCodeIcon data-icon="inline-start" />
+                    Open scanner
+                  </Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link href={`/organizer/events/${activeEventId}/report`}>
+                    <FileCheck2Icon data-icon="inline-start" />
+                    Open report
+                  </Link>
+                </Button>
+              </>
+            ) : (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+                Create an event draft before opening attendees, scanner, or reports.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -557,9 +576,11 @@ function EventsSection({ rows }: { rows: OrganizerEventRow[] }) {
 function CreateEventSection({
   canCreate,
   createEventDraft,
+  disabledReason,
 }: {
   canCreate: boolean;
   createEventDraft: (input: CreateEventInput) => Promise<Event | null>;
+  disabledReason: string;
 }) {
   const [createdEvent, setCreatedEvent] = React.useState<Event | null>(null);
   const [error, setError] = React.useState("");
@@ -653,6 +674,11 @@ function CreateEventSection({
             <Field label="Perk preview">
               <Input name="perkPreview" required placeholder="Free sticker for checked-in riders" />
             </Field>
+            {!canCreate ? (
+              <div className="md:col-span-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+                {disabledReason}
+              </div>
+            ) : null}
             <div className="md:col-span-2 flex flex-wrap items-center gap-2">
               <Button type="submit" disabled={pending || !canCreate}>
                 <CalendarPlusIcon data-icon="inline-start" />
@@ -747,77 +773,21 @@ function AttendeesSection({ event }: { event: Event }) {
 
 function ScannerSection({
   event,
-  scannerOutcome,
-  setScannerOutcome,
+  scanPass,
   checkedInCount,
 }: {
   event: Event;
-  scannerOutcome: ScannerOutcome;
-  setScannerOutcome: (outcome: ScannerOutcome) => void;
+  scanPass: (eventId: string, qrToken: string, method: ScanMethod) => Promise<ScanPassResult>;
   checkedInCount: number;
 }) {
-  const outcomeCopy = {
-    idle: "Ready to scan",
-    valid: "Valid Tambike Pass",
-    already: "Already checked in",
-    "wrong-event": "Pass belongs to another event",
-    cancelled: "Pass was cancelled",
-    inactive: "Pass is inactive",
-  } satisfies Record<ScannerOutcome, string>;
-
   return (
-    <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>{event.title}</CardTitle>
-          <CardDescription>Event-day QR scanner simulation for the organizer console.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="flex min-h-72 items-center justify-center rounded-lg border bg-muted/30">
-            <div className="grid place-items-center gap-4 text-center">
-              <div className="grid size-40 place-items-center rounded-xl border bg-background">
-                <QrCodeIcon className="size-24 text-muted-foreground" />
-              </div>
-              <div>
-                <div className="text-lg font-semibold">{outcomeCopy[scannerOutcome]}</div>
-                <div className="text-sm text-muted-foreground">Checked in: {checkedInCount}</div>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => setScannerOutcome("valid")}>
-              Valid pass
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setScannerOutcome("already")}>
-              Already used
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setScannerOutcome("wrong-event")}>
-              Wrong event
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setScannerOutcome("inactive")}>
-              Inactive
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Scanner rules</CardTitle>
-          <CardDescription>Staff checks before admitting a rider.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <InfoList
-            title="Checks"
-            items={[
-              "Match QR pass to this event.",
-              "Reject cancelled or inactive passes.",
-              "Mark duplicate scans as already checked in.",
-              "Use manual lookup when camera scan fails.",
-            ]}
-          />
-        </CardContent>
-      </Card>
-    </div>
+    <QrScannerPanel
+      event={event}
+      checkedInCount={checkedInCount}
+      reportHref={`/organizer/events/${event.id}/report`}
+      scanPass={scanPass}
+      scannerLabel="Organizer scanner"
+    />
   );
 }
 

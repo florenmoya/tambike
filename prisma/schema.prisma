@@ -113,7 +113,6 @@ model User {
 
   sessions              Session[]
   organizerProfile      OrganizerProfile?
-  venueClaims           VenueClaim[]
   ownedVenues           Venue[]             @relation("VenueOwner")
   rsvps                 RSVP[]
   passes                Pass[]
@@ -171,29 +170,7 @@ model Venue {
   updatedAt      DateTime           @updatedAt
 
   owner       User?        @relation("VenueOwner", fields: [ownerUserId], references: [id])
-  claims      VenueClaim[]
   events      Event[]
-}
-
-model VenueClaim {
-  id            String             @id @default(cuid())
-  venueId       String?
-  claimantId    String
-  venueName     String
-  address       String
-  googleMapsUrl String
-  contactPerson String
-  claimantRole  String
-  fbPage        String?
-  contactNumber String
-  proofNotes    String?
-  status        VerificationStatus @default(PENDING)
-  adminNotes    String?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-
-  venue    Venue? @relation(fields: [venueId], references: [id])
-  claimant User   @relation(fields: [claimantId], references: [id], onDelete: Cascade)
 }
 
 model Event {

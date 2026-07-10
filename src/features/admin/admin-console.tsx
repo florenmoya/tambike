@@ -1,8 +1,10 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import Link from "next/link";
 import type { Column, ColumnDef } from "@tanstack/react-table";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   ArrowUpDownIcon,
   CalendarClockIcon,
@@ -10,11 +12,13 @@ import {
   DownloadIcon,
   EllipsisVerticalIcon,
   FileWarningIcon,
+  Maximize2Icon,
   ShieldAlertIcon,
   UploadCloudIcon,
   UserRoundCheckIcon,
   UsersIcon,
   WarehouseIcon,
+  XIcon,
 } from "lucide-react";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -41,7 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { adminApproval, organizers, reportMetrics, venueApproval, venues } from "@/features/tambike-demo/data";
+import { adminApproval, organizers, reportMetrics, venues } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type { Event, UserProfile, VerificationStatus } from "@/features/tambike-demo/types";
 
@@ -49,7 +53,6 @@ export type AdminSection =
   | "overview"
   | "organizers"
   | "events"
-  | "venues"
   | "reports"
   | "users"
   | "validation"
@@ -69,21 +72,13 @@ type OrganizerRow = {
 type EventReviewRow = {
   id: string;
   title: string;
+  poster: string;
   type: string;
   status: Event["status"];
   organizer: string;
   venue: string;
   riders: number;
   risk: string;
-};
-
-type VenueClaimRow = {
-  id: string;
-  venue: string;
-  area: string;
-  status: VerificationStatus;
-  capacity: string;
-  rules: number;
 };
 
 type UserRow = {
@@ -93,6 +88,8 @@ type UserRow = {
   role: string;
   status: VerificationStatus;
   area: string;
+  organizerProfileId?: string;
+  venueId?: string;
 };
 
 type ValidationRow = {
@@ -114,10 +111,19 @@ type ReportRow = {
   noShow: string;
 };
 
+type RowActionItem = {
+  label: string;
+  href?: string;
+  external?: boolean;
+  disabled?: boolean;
+  destructive?: boolean;
+  onSelect?: () => void;
+};
+
 const sectionCopy: Record<AdminSection, { title: string; description: string; status?: string }> = {
   overview: {
     title: "Admin overview",
-    description: "Review organizer readiness, event approvals, venue claims, validation imports, and rider operations.",
+    description: "Review organizer readiness, event approvals, validation imports, and rider operations.",
     status: "Ops",
   },
   organizers: {
@@ -129,11 +135,6 @@ const sectionCopy: Record<AdminSection, { title: string; description: string; st
     title: "Event review",
     description: "Screen events that need admin review before publishing to riders.",
     status: "Publishing",
-  },
-  venues: {
-    title: "Venue claims",
-    description: "Validate venue ownership, house rules, and staff assignment before event approval.",
-    status: "Venue",
   },
   reports: {
     title: "Reports",
@@ -157,8 +158,33 @@ const sectionCopy: Record<AdminSection, { title: string; description: string; st
   },
 };
 
-export function AdminConsole({ section }: { section: AdminSection }) {
-  const { currentUser, events, users } = useDemo();
+export function AdminConsole({
+  organizerId,
+  reportEventId,
+  reviewId,
+  section,
+}: {
+  section: AdminSection;
+  organizerId?: string;
+  reportEventId?: string;
+  reviewId?: string;
+}) {
+  const { adminDecision, approvePublish, currentUser, events, users } = useDemo();
+  const [organizerStatusOverrides, setOrganizerStatusOverrides] = React.useState<Record<string, VerificationStatus>>({});
+  const [userStatusOverrides, setUserStatusOverrides] = React.useState<Record<string, VerificationStatus>>({});
+  const [eventStatusOverrides, setEventStatusOverrides] = React.useState<Record<string, Event["status"]>>({});
+
+  const setOrganizerStatus = React.useCallback((organizerId: string, status: VerificationStatus) => {
+    setOrganizerStatusOverrides((current) => ({ ...current, [organizerId]: status }));
+  }, []);
+
+  const setUserStatus = React.useCallback((userId: string, status: VerificationStatus) => {
+    setUserStatusOverrides((current) => ({ ...current, [userId]: status }));
+  }, []);
+
+  const setEventStatus = React.useCallback((eventId: string, status: Event["status"]) => {
+    setEventStatusOverrides((current) => ({ ...current, [eventId]: status }));
+  }, []);
 
   if (!currentUser) {
     return (
@@ -178,25 +204,48 @@ export function AdminConsole({ section }: { section: AdminSection }) {
     );
   }
 
-  const organizerRows = getOrganizerRows(users, events);
-  const eventRows = getEventRows(events);
-  const venueRows = getVenueRows();
-  const userRows = getUserRows(users);
+  const effectiveEvents = events.map((event) => {
+    const status = eventStatusOverrides[event.id];
+    return status ? { ...event, status } : event;
+  });
+  const organizerRows = getOrganizerRows(users, effectiveEvents, organizerStatusOverrides);
+  const eventRows = getEventRows(effectiveEvents);
+  const userRows = getUserRows(users, userStatusOverrides);
   const validationRows = getValidationRows();
-  const reportRows = getReportRows(events);
+  const reportRows = getReportRows(effectiveEvents);
   const metrics = {
     pendingOrganizers: organizerRows.filter((row) => row.status !== "APPROVED").length,
     pendingEvents: eventRows.filter((row) => row.status === "PENDING_ADMIN_REVIEW").length,
-    venueClaims: venueRows.filter((row) => row.status !== "APPROVED").length,
   };
   const cards = getSectionCards({
     organizers: organizerRows,
     events: eventRows,
-    venues: venueRows,
     users: userRows,
   });
-  const chartData = getChartData(events);
-  const copy = sectionCopy[section];
+  const chartData = getChartData(effectiveEvents);
+  const organizerDetail = organizerId ? organizerRows.find((row) => row.id === organizerId) ?? null : null;
+  const reportEvent = reportEventId ? effectiveEvents.find((event) => event.id === reportEventId) ?? null : null;
+  const reviewEvent = reviewId ? findReviewEvent(effectiveEvents, reviewId) : null;
+  const hasDetail = Boolean(reviewId || organizerId || reportEventId);
+  const copy = reviewId
+    ? {
+        title: reviewEvent?.title ?? "Event review detail",
+        description: "Review publish readiness, risk flags, venue assignment, and organizer context.",
+        status: "Review",
+      }
+    : organizerId
+      ? {
+          title: organizerDetail?.organizer ?? "Organizer review",
+          description: "Verify organizer profile quality, owner match, and event history.",
+          status: "Organizer",
+        }
+      : reportEventId
+          ? {
+              title: reportEvent?.title ?? "Report detail",
+              description: "Review event attendance, conversion, and operating outcomes.",
+              status: "Report",
+            }
+    : sectionCopy[section];
 
   return (
     <SidebarProvider
@@ -213,7 +262,24 @@ export function AdminConsole({ section }: { section: AdminSection }) {
         <SiteHeader title={copy.title} description={copy.description} status={copy.status} />
         <div className="@container/main flex flex-1 flex-col">
           <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
-            {section === "overview" ? (
+            {reviewId ? (
+              <EventReviewDetail
+                adminDecision={adminDecision}
+                event={reviewEvent}
+                onApprove={approvePublish}
+                onSetStatus={setEventStatus}
+                reviewId={reviewId}
+              />
+            ) : null}
+            {organizerId ? (
+              <OrganizerVerificationDetail
+                organizerId={organizerId}
+                onSetStatus={setOrganizerStatus}
+                row={organizerDetail}
+              />
+            ) : null}
+            {reportEventId ? <AdminReportDetail event={reportEvent} eventId={reportEventId} /> : null}
+            {!hasDetail && section === "overview" ? (
               <OverviewSection
                 cards={cards}
                 chartData={chartData}
@@ -221,13 +287,16 @@ export function AdminConsole({ section }: { section: AdminSection }) {
                 eventRows={eventRows}
               />
             ) : null}
-            {section === "organizers" ? <OrganizersSection rows={organizerRows} /> : null}
-            {section === "events" ? <EventsSection rows={eventRows} /> : null}
-            {section === "venues" ? <VenuesSection rows={venueRows} /> : null}
-            {section === "reports" ? <ReportsSection rows={reportRows} /> : null}
-            {section === "users" ? <UsersSection rows={userRows} /> : null}
-            {section === "validation" ? <ValidationSection rows={validationRows} /> : null}
-            {section === "moderation" ? <ModerationSection rows={eventRows} /> : null}
+            {!hasDetail && section === "organizers" ? (
+              <OrganizersSection onSetStatus={setOrganizerStatus} rows={organizerRows} />
+            ) : null}
+            {!hasDetail && section === "events" ? <EventsSection rows={eventRows} /> : null}
+            {!hasDetail && section === "reports" ? <ReportsSection rows={reportRows} /> : null}
+            {!hasDetail && section === "users" ? (
+              <UsersSection currentUserId={currentUser.id} onSetStatus={setUserStatus} rows={userRows} />
+            ) : null}
+            {!hasDetail && section === "validation" ? <ValidationSection rows={validationRows} /> : null}
+            {!hasDetail && section === "moderation" ? <ModerationSection rows={eventRows} /> : null}
           </div>
         </div>
       </SidebarInset>
@@ -267,6 +336,8 @@ function OverviewSection({
   organizerRows: OrganizerRow[];
   eventRows: EventReviewRow[];
 }) {
+  const reviewRows = getReviewQueueRows(eventRows);
+
   return (
     <>
       <SectionCards cards={cards} />
@@ -281,7 +352,7 @@ function OverviewSection({
           </CardHeader>
           <CardContent>
             <DataTable
-              columns={organizerColumns}
+              columns={getOrganizerColumns()}
               data={organizerRows.slice(0, 8)}
               filterColumn="organizer"
               filterPlaceholder="Filter organizers..."
@@ -296,8 +367,8 @@ function OverviewSection({
           </CardHeader>
           <CardContent>
             <DataTable
-              columns={eventColumns}
-              data={eventRows.slice(0, 8)}
+              columns={getEventColumns()}
+              data={reviewRows.slice(0, 8)}
               filterColumn="title"
               filterPlaceholder="Filter events..."
               pageSize={5}
@@ -309,7 +380,15 @@ function OverviewSection({
   );
 }
 
-function OrganizersSection({ rows }: { rows: OrganizerRow[] }) {
+function OrganizersSection({
+  onSetStatus,
+  rows,
+}: {
+  onSetStatus: (organizerId: string, status: VerificationStatus) => void;
+  rows: OrganizerRow[];
+}) {
+  const columns = React.useMemo(() => getOrganizerColumns(onSetStatus), [onSetStatus]);
+
   return (
     <TablePanel
       title="Organizer management"
@@ -324,7 +403,7 @@ function OrganizersSection({ rows }: { rows: OrganizerRow[] }) {
       }
     >
       <DataTable
-        columns={organizerColumns}
+        columns={columns}
         data={rows}
         filterColumn="organizer"
         filterPlaceholder="Filter by organizer..."
@@ -334,25 +413,366 @@ function OrganizersSection({ rows }: { rows: OrganizerRow[] }) {
 }
 
 function EventsSection({ rows }: { rows: EventReviewRow[] }) {
+  const reviewRows = getReviewQueueRows(rows);
+
   return (
     <TablePanel
       title="Event approvals"
-      description="Review risk flags, expected rider count, venue assignment, and publish readiness."
+      description="Review only events that still need an admin publishing decision."
     >
-      <DataTable columns={eventColumns} data={rows} filterColumn="title" filterPlaceholder="Filter events..." />
+      <DataTable columns={getEventColumns()} data={reviewRows} filterColumn="title" filterPlaceholder="Filter events..." />
     </TablePanel>
   );
 }
 
-function VenuesSection({ rows }: { rows: VenueClaimRow[] }) {
+function EventReviewDetail({
+  adminDecision,
+  event,
+  onApprove,
+  onSetStatus,
+  reviewId,
+}: {
+  adminDecision: "pending" | "published";
+  event: Event | null;
+  onApprove: (eventId: string) => Promise<void>;
+  onSetStatus: (eventId: string, status: Event["status"]) => void;
+  reviewId: string;
+}) {
+  const [error, setError] = React.useState("");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+
+  if (!event) {
+    return (
+      <TablePanel
+        title="Review not found"
+        description="This review id does not match the current admin approval queue."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/events/review">Back to queue</Link>
+          </Button>
+        }
+      >
+        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+          Review id: <span className="font-mono text-foreground">{reviewId}</span>
+        </div>
+      </TablePanel>
+    );
+  }
+
+  const organizer = organizers.find((item) => item.id === event.organizerId);
+  const venue = venues.find((item) => item.id === event.venueId);
+  const isClosed = event.status === "NEEDS_CHANGES" || event.status === "REJECTED" || event.status === "CANCELLED";
+  const isPublished =
+    !isClosed && (event.status === "PUBLISHED" || (event.id === adminApproval.eventId && adminDecision === "published"));
+  const isPendingReview = event.status === "PENDING_ADMIN_REVIEW";
+  const isDisabled = event.status === "CANCELLED";
+  const detailItems = [
+    ["Type", event.type],
+    ["Date", `${event.date} · ${event.time}`],
+    ["Area", event.area],
+    ["Expected riders", String(event.expectedRiders)],
+  ];
+  const actionTitle = isDisabled
+    ? "Event disabled"
+    : isPublished
+      ? "Published event controls"
+      : event.status === "NEEDS_CHANGES"
+        ? "Changes requested"
+        : isPendingReview
+          ? "Pending admin decision"
+          : "Review controls";
+  const actionDescription = isDisabled
+    ? "This event is hidden from public operations until an admin restores it to review."
+    : isPublished
+      ? "This event is live. Approval is complete, so the available admin action is to disable the public listing."
+      : event.status === "NEEDS_CHANGES"
+        ? "The organizer needs to update the listing before admin approval can continue."
+        : event.id === adminApproval.eventId
+          ? adminApproval.notes
+          : "Review risk flags, venue assignment, and organizer context before publishing.";
+
   return (
-    <TablePanel
-      title="Venue claims"
-      description="Verify venue ownership and house rules before organizers can request approvals."
-    >
-      <DataTable columns={venueColumns} data={rows} filterColumn="venue" filterPlaceholder="Filter venues..." />
-    </TablePanel>
+    <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:px-6">
+      <div className="grid gap-4">
+        <Card>
+          <CardHeader className="gap-3">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-start">
+              <div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">Admin review</Badge>
+                  <EventStatusBadge status={event.status} />
+                </div>
+                <CardTitle className="mt-3 text-2xl">{event.title}</CardTitle>
+                <CardDescription className="mt-1">{event.shortDescription}</CardDescription>
+              </div>
+              <EventPosterPreview poster={event.poster} title={event.title} variant="detail" />
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {detailItems.map(([label, value]) => (
+                <div key={label} className="rounded-lg border bg-muted/30 p-3">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+                  <div className="mt-1 text-sm font-medium">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-2">
+              <h2 className="text-sm font-semibold">Review signals</h2>
+              <div className="flex flex-wrap gap-2">
+                {event.riskFlags.map((flag) => (
+                  <Badge key={flag} variant="outline" className="border-destructive/30 text-destructive">
+                    <ShieldAlertIcon data-icon="inline-start" />
+                    {flag}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Organizer</CardTitle>
+              <CardDescription>{organizer?.type ?? "Organizer profile"}</CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm">
+              <div className="font-medium">{organizer?.displayName ?? "Unknown organizer"}</div>
+              <div className="mt-1 text-muted-foreground">
+                {organizer?.verificationStatus.toLowerCase() ?? "status unknown"} · {organizer?.pastEvents ?? 0} past events
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Venue</CardTitle>
+              <CardDescription>{venue?.area ?? event.area}</CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm">
+              <div className="font-medium">{venue?.name ?? "Venue needed"}</div>
+              <div className="mt-1 text-muted-foreground">{venue?.capacityNote ?? "No venue capacity note."}</div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <Card className="h-fit lg:sticky lg:top-24">
+        <CardHeader>
+          <CardTitle>{actionTitle}</CardTitle>
+          <CardDescription>{actionDescription}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {isPublished ? (
+            <ActionNotice
+              title="Published to riders"
+              body="This record no longer needs approval. Use disable only when the listing must be removed from public operations."
+              tone="success"
+            />
+          ) : null}
+          {event.status === "NEEDS_CHANGES" ? (
+            <ActionNotice
+              title="Changes requested"
+              body="Approval actions are paused until the organizer updates the event."
+              tone="warning"
+            />
+          ) : null}
+          {isDisabled ? (
+            <ActionNotice
+              title="Disabled event"
+              body="Riders should not be able to register while this event is disabled."
+              tone="danger"
+            />
+          ) : null}
+          {isPendingReview ? (
+            <Button
+              disabled={isSubmitting}
+              onClick={async () => {
+                setError("");
+                setIsSubmitting(true);
+                try {
+                  await onApprove(event.id);
+                } catch (actionError) {
+                  setError(getActionErrorMessage(actionError));
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+            >
+              {isSubmitting ? "Publishing..." : "Approve publish"}
+            </Button>
+          ) : null}
+          {isPendingReview ? (
+            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "NEEDS_CHANGES")}>
+              Request changes
+            </Button>
+          ) : null}
+          {!isPendingReview && !isPublished && !isDisabled ? (
+            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "PENDING_ADMIN_REVIEW")}>
+              Restore to review
+            </Button>
+          ) : null}
+          {!isDisabled ? (
+            <Button type="button" variant="destructive" onClick={() => onSetStatus(event.id, "CANCELLED")}>
+              Disable event
+            </Button>
+          ) : (
+            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "PENDING_ADMIN_REVIEW")}>
+              Restore to review
+            </Button>
+          )}
+          <Button asChild variant="outline">
+            <Link href="/admin/events/review">Back to review queue</Link>
+          </Button>
+          {event.sourceUrl ? (
+            <Button asChild variant="ghost">
+              <Link href={event.sourceUrl} target="_blank" rel="noreferrer">
+                Open source listing
+              </Link>
+            </Button>
+          ) : null}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </CardContent>
+      </Card>
+    </div>
   );
+}
+
+function OrganizerVerificationDetail({
+  organizerId,
+  onSetStatus,
+  row,
+}: {
+  organizerId: string;
+  onSetStatus: (organizerId: string, status: VerificationStatus) => void;
+  row: OrganizerRow | null;
+}) {
+  if (!row) {
+    return (
+      <TablePanel
+        title="Organizer not found"
+        description="This organizer id does not match the current verification queue."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/verifications/organizers">Back to organizers</Link>
+          </Button>
+        }
+      >
+        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+          Organizer id: <span className="font-mono text-foreground">{organizerId}</span>
+        </div>
+      </TablePanel>
+    );
+  }
+
+  const items = [
+    ["Owner account", row.owner],
+    ["Profile type", row.type],
+    ["Past events", String(row.pastEvents)],
+    ["Live events", String(row.activeEvents)],
+  ];
+  const isApproved = row.status === "APPROVED";
+  const isSuspended = row.status === "SUSPENDED";
+  const isRejected = row.status === "REJECTED";
+  const actionTitle = isSuspended ? "Organizer disabled" : isApproved ? "Account controls" : "Verification actions";
+  const actionDescription = isSuspended
+    ? "This organizer is blocked from host operations until an admin restores the record."
+    : isApproved
+      ? "Approval is complete. The available admin control is to disable the organizer if operations need to stop."
+      : "Approve, reject, or disable the organizer after checking supporting records.";
+
+  return (
+    <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:px-6">
+      <Card>
+        <CardHeader className="gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary">Organizer verification</Badge>
+            <StatusBadge status={row.status} />
+          </div>
+          <CardTitle className="text-2xl">{row.organizer}</CardTitle>
+          <CardDescription>Review owner match, profile source, and event history before approval.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          {items.map(([label, value]) => (
+            <div key={label} className="rounded-lg border bg-muted/30 p-3">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+              <div className="mt-1 text-sm font-medium">{value}</div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Card className="h-fit lg:sticky lg:top-24">
+        <CardHeader>
+          <CardTitle>{actionTitle}</CardTitle>
+          <CardDescription>{actionDescription}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {isApproved ? (
+            <ActionNotice
+              title="Approved organizer"
+              body="Owner and profile checks are complete. Approval actions are hidden for this status."
+              tone="success"
+            />
+          ) : null}
+          {isSuspended ? (
+            <ActionNotice
+              title="Disabled organizer"
+              body="This host is blocked from creating or managing events until restored."
+              tone="danger"
+            />
+          ) : null}
+          {isRejected ? (
+            <ActionNotice
+              title="Rejected organizer"
+              body="This profile did not pass review. Reopen it only after supporting records change."
+              tone="warning"
+            />
+          ) : null}
+          {!isApproved && !isSuspended ? (
+            <>
+              <Button type="button" onClick={() => onSetStatus(row.id, "APPROVED")}>
+                Approve organizer
+              </Button>
+              <Button type="button" variant="outline" onClick={() => onSetStatus(row.id, "REJECTED")}>
+                Reject organizer
+              </Button>
+              <Button asChild variant="outline">
+                <Link href="/admin/leads">Open validation upload</Link>
+              </Button>
+            </>
+          ) : null}
+          {isSuspended ? (
+            <Button type="button" variant="outline" onClick={() => onSetStatus(row.id, "APPROVED")}>
+              Restore organizer
+            </Button>
+          ) : (
+            <Button type="button" variant="destructive" onClick={() => onSetStatus(row.id, "SUSPENDED")}>
+              Disable organizer
+            </Button>
+          )}
+          <Button asChild variant="ghost">
+            <Link href="/admin/verifications/organizers">Back to organizers</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function findReviewEvent(events: Event[], reviewId: string) {
+  if (reviewId === adminApproval.id) {
+    return events.find((event) => event.id === adminApproval.eventId) ?? null;
+  }
+
+  return events.find((event) => event.id === reviewId) ?? null;
+}
+
+function getActionErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "The admin action could not be completed.";
 }
 
 function ReportsSection({ rows }: { rows: ReportRow[] }) {
@@ -383,13 +803,95 @@ function ReportsSection({ rows }: { rows: ReportRow[] }) {
   );
 }
 
-function UsersSection({ rows }: { rows: UserRow[] }) {
+function AdminReportDetail({ event, eventId }: { event: Event | null; eventId: string }) {
+  if (!event) {
+    return (
+      <TablePanel
+        title="Report not found"
+        description="This event id does not match the current report dataset."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/reports">Back to reports</Link>
+          </Button>
+        }
+      >
+        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+          Event id: <span className="font-mono text-foreground">{eventId}</span>
+        </div>
+      </TablePanel>
+    );
+  }
+
+  const organizer = organizers.find((item) => item.id === event.organizerId);
+  const checkIns = Math.floor(event.going * 0.82);
+  const noShow = event.going > 0 ? `${Math.max(0, Math.round(((event.going - checkIns) / event.going) * 100))}%` : "0%";
+  const metrics = [
+    ["Going", String(event.going), "QR passes generated"],
+    ["Interested", String(event.interested), "Saved or shared"],
+    ["Check-ins", String(checkIns), "Scanned or manually marked"],
+    ["No-show", noShow, "Going vs actual check-ins"],
+  ];
+
+  return (
+    <div className="grid gap-4 px-4 lg:px-6">
+      <Card>
+        <CardHeader className="gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary">Admin report</Badge>
+            <EventStatusBadge status={event.status} />
+          </div>
+          <CardTitle className="text-2xl">{event.title}</CardTitle>
+          <CardDescription>{organizer?.displayName ?? "Unknown organizer"} · {event.area}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {metrics.map(([label, value, detail]) => (
+            <div key={label} className="rounded-lg border bg-muted/30 p-3">
+              <div className="text-sm text-muted-foreground">{label}</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Report notes</CardTitle>
+          <CardDescription>Admin-facing summary for post-event review and export.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-3">
+          {reportMetrics.slice(0, 3).map((metric) => (
+            <div key={metric.label} className="rounded-lg border bg-muted/30 p-3">
+              <div className="text-sm text-muted-foreground">{metric.label}</div>
+              <div className="mt-1 text-xl font-semibold">{metric.value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{metric.detail}</div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function UsersSection({
+  currentUserId,
+  onSetStatus,
+  rows,
+}: {
+  currentUserId: string;
+  onSetStatus: (userId: string, status: VerificationStatus) => void;
+  rows: UserRow[];
+}) {
+  const columns = React.useMemo(
+    () => getUserColumns(onSetStatus, currentUserId),
+    [currentUserId, onSetStatus],
+  );
+
   return (
     <TablePanel
       title="User accounts"
       description="Role, status, and area overview for rider, organizer, venue, and ops accounts."
     >
-      <DataTable columns={userColumns} data={rows} filterColumn="name" filterPlaceholder="Filter users..." />
+      <DataTable columns={columns} data={rows} filterColumn="name" filterPlaceholder="Filter users..." />
     </TablePanel>
   );
 }
@@ -429,7 +931,7 @@ function ModerationSection({ rows }: { rows: EventReviewRow[] }) {
       description="Risk-heavy events, ride-outs, and race/track submissions that need policy review."
     >
       <DataTable
-        columns={eventColumns}
+        columns={getEventColumns()}
         data={flaggedRows}
         filterColumn="title"
         filterPlaceholder="Filter flagged events..."
@@ -465,150 +967,276 @@ function TablePanel({
   );
 }
 
-const organizerColumns: ColumnDef<OrganizerRow>[] = [
-  selectColumn<OrganizerRow>(),
-  {
-    accessorKey: "organizer",
-    header: ({ column }) => <SortableHeader column={column}>Organizer</SortableHeader>,
-    cell: ({ row }) => (
-      <div className="min-w-56">
-        <div className="font-medium">{row.original.organizer}</div>
-        <div className="text-sm text-muted-foreground">{row.original.type}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "owner",
-    header: "Owner",
-    cell: ({ row }) => row.original.owner,
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <StatusBadge status={row.original.status} />,
-  },
-  {
-    accessorKey: "pastEvents",
-    header: ({ column }) => <SortableHeader column={column}>Past events</SortableHeader>,
-    cell: ({ row }) => <span className="tabular-nums">{row.original.pastEvents}</span>,
-  },
-  {
-    accessorKey: "activeEvents",
-    header: "Live",
-    cell: ({ row }) => <span className="tabular-nums">{row.original.activeEvents}</span>,
-  },
-  actionsColumn<OrganizerRow>((row) => [
-    { label: "Open organizer review", href: `/admin/verifications/organizers/${row.id}` },
-    { label: "View public events", href: "/events" },
-    { label: "Open source profile", href: `https://${row.fbLink}`, external: true },
-  ]),
-];
+function ActionNotice({
+  body,
+  title,
+  tone = "neutral",
+}: {
+  body: string;
+  title: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}) {
+  const toneClasses = {
+    neutral: "border-border bg-muted/30 text-muted-foreground",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100",
+    warning: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100",
+    danger: "border-destructive/30 bg-destructive/10 text-destructive",
+  } satisfies Record<"neutral" | "success" | "warning" | "danger", string>;
 
-const eventColumns: ColumnDef<EventReviewRow>[] = [
-  selectColumn<EventReviewRow>(),
-  {
-    accessorKey: "title",
-    header: ({ column }) => <SortableHeader column={column}>Event</SortableHeader>,
-    cell: ({ row }) => (
-      <div className="min-w-64">
-        <div className="font-medium">{row.original.title}</div>
-        <div className="text-sm text-muted-foreground">
-          {row.original.organizer} · {row.original.venue}
+  return (
+    <div className={`rounded-lg border p-3 text-sm ${toneClasses[tone]}`}>
+      <div className="flex items-center gap-2 font-medium">
+        {tone === "success" ? <CheckCircle2Icon className="size-4" /> : <ShieldAlertIcon className="size-4" />}
+        {title}
+      </div>
+      <p className="mt-1">{body}</p>
+    </div>
+  );
+}
+
+function EventPosterPreview({
+  poster,
+  title,
+  variant,
+}: {
+  poster: string;
+  title: string;
+  variant: "detail" | "thumbnail";
+}) {
+  const isDetail = variant === "detail";
+
+  return (
+    <DialogPrimitive.Root>
+      <DialogPrimitive.Trigger asChild>
+        <button
+          type="button"
+          className={
+            isDetail
+              ? "group relative block overflow-hidden rounded-lg border bg-muted/30 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              : "group relative block h-16 w-11 shrink-0 overflow-hidden rounded-md border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          }
+        >
+          <Image
+            src={poster}
+            alt={`${title} poster`}
+            width={1024}
+            height={1536}
+            sizes={isDetail ? "(max-width: 640px) 100vw, 160px" : "44px"}
+            loading={isDetail ? "eager" : "lazy"}
+            className={isDetail ? "h-auto w-full object-contain" : "h-full w-full object-cover"}
+          />
+          <span className="absolute inset-0 grid place-items-center bg-black/0 text-white transition-colors group-hover:bg-black/45 group-focus-visible:bg-black/45">
+            <Maximize2Icon className="size-4 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+          </span>
+          <span className="sr-only">Open enlarged poster</span>
+        </button>
+      </DialogPrimitive.Trigger>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100svh-2rem)] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 outline-none">
+          <DialogPrimitive.Title className="sr-only">{title} poster</DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">
+            Enlarged event poster preview. Click outside, press Escape, or use Close to return to the review.
+          </DialogPrimitive.Description>
+          <Image
+            src={poster}
+            alt={`${title} poster`}
+            width={1024}
+            height={1536}
+            sizes="(max-width: 768px) 92vw, 70vw"
+            loading="eager"
+            className="max-h-[calc(100svh-2rem)] max-w-[calc(100vw-2rem)] rounded-lg object-contain shadow-2xl"
+          />
+          <DialogPrimitive.Close asChild>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon-sm"
+              className="absolute right-3 top-3 shadow-lg"
+            >
+              <XIcon />
+              <span className="sr-only">Close poster preview</span>
+            </Button>
+          </DialogPrimitive.Close>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+function getOrganizerColumns(
+  onSetStatus?: (organizerId: string, status: VerificationStatus) => void,
+): ColumnDef<OrganizerRow>[] {
+  return [
+    selectColumn<OrganizerRow>(),
+    {
+      accessorKey: "organizer",
+      header: ({ column }) => <SortableHeader column={column}>Organizer</SortableHeader>,
+      cell: ({ row }) => (
+        <div className="min-w-56">
+          <div className="font-medium">{row.original.organizer}</div>
+          <div className="text-sm text-muted-foreground">{row.original.type}</div>
         </div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "type",
-    header: "Type",
-    cell: ({ row }) => <Badge variant="outline">{row.original.type}</Badge>,
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <EventStatusBadge status={row.original.status} />,
-  },
-  {
-    accessorKey: "riders",
-    header: ({ column }) => <SortableHeader column={column}>Riders</SortableHeader>,
-    cell: ({ row }) => <span className="tabular-nums">{row.original.riders}</span>,
-  },
-  {
-    accessorKey: "risk",
-    header: "Risk",
-    cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.risk}</span>,
-  },
-  actionsColumn<EventReviewRow>((row) => [
-    { label: "Review event", href: `/admin/events/review/${adminApproval.id}` },
-    { label: "Open public event", href: `/events/${row.id}` },
-    { label: "Open report", href: `/admin/reports/${row.id}` },
-  ]),
-];
+      ),
+    },
+    {
+      accessorKey: "owner",
+      header: "Owner",
+      cell: ({ row }) => row.original.owner,
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: "pastEvents",
+      header: ({ column }) => <SortableHeader column={column}>Past events</SortableHeader>,
+      cell: ({ row }) => <span className="tabular-nums">{row.original.pastEvents}</span>,
+    },
+    {
+      accessorKey: "activeEvents",
+      header: "Live",
+      cell: ({ row }) => <span className="tabular-nums">{row.original.activeEvents}</span>,
+    },
+    actionsColumn<OrganizerRow>((row) => {
+      const items: RowActionItem[] = [
+        { label: "Open organizer record", href: `/admin/verifications/organizers/${row.id}` },
+        { label: "Open source profile", href: `https://${row.fbLink}`, external: true },
+      ];
 
-const venueColumns: ColumnDef<VenueClaimRow>[] = [
-  selectColumn<VenueClaimRow>(),
-  {
-    accessorKey: "venue",
-    header: ({ column }) => <SortableHeader column={column}>Venue</SortableHeader>,
-    cell: ({ row }) => (
-      <div className="min-w-56">
-        <div className="font-medium">{row.original.venue}</div>
-        <div className="text-sm text-muted-foreground">{row.original.area}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <StatusBadge status={row.original.status} />,
-  },
-  {
-    accessorKey: "capacity",
-    header: "Capacity note",
-    cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.capacity}</span>,
-  },
-  {
-    accessorKey: "rules",
-    header: "Rules",
-    cell: ({ row }) => <span className="tabular-nums">{row.original.rules}</span>,
-  },
-  actionsColumn<VenueClaimRow>(() => [
-    { label: "Open claim", href: `/admin/venues/claims/${venueApproval.id}` },
-    { label: "View related requests", href: "/venue/requests" },
-  ]),
-];
+      if (onSetStatus) {
+        items.push(
+          row.status === "SUSPENDED"
+            ? {
+                label: "Restore organizer",
+                onSelect: () => onSetStatus(row.id, "APPROVED"),
+              }
+            : {
+                label: "Disable organizer",
+                destructive: true,
+                onSelect: () => onSetStatus(row.id, "SUSPENDED"),
+              },
+        );
+      }
 
-const userColumns: ColumnDef<UserRow>[] = [
-  selectColumn<UserRow>(),
-  {
-    accessorKey: "name",
-    header: ({ column }) => <SortableHeader column={column}>Name</SortableHeader>,
-    cell: ({ row }) => (
-      <div className="min-w-48">
-        <div className="font-medium">{row.original.name}</div>
-        <div className="text-sm text-muted-foreground">{row.original.email}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "role",
-    header: "Role",
-    cell: ({ row }) => <Badge variant="secondary">{row.original.role}</Badge>,
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <StatusBadge status={row.original.status} />,
-  },
-  {
-    accessorKey: "area",
-    header: "Area",
-  },
-  actionsColumn<UserRow>(() => [
-    { label: "Open profile", href: "/profile" },
-    { label: "View users", href: "/admin/users" },
-  ]),
-];
+      return items;
+    }),
+  ];
+}
+
+function getEventColumns(): ColumnDef<EventReviewRow>[] {
+  return [
+    selectColumn<EventReviewRow>(),
+    {
+      accessorKey: "title",
+      header: ({ column }) => <SortableHeader column={column}>Event</SortableHeader>,
+      cell: ({ row }) => (
+        <div className="flex min-w-64 items-center gap-3">
+          <EventPosterPreview poster={row.original.poster} title={row.original.title} variant="thumbnail" />
+          <div>
+          <div className="font-medium">{row.original.title}</div>
+          <div className="text-sm text-muted-foreground">
+            {row.original.organizer} · {row.original.venue}
+          </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      accessorKey: "type",
+      header: "Type",
+      cell: ({ row }) => <Badge variant="outline">{row.original.type}</Badge>,
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => <EventStatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: "riders",
+      header: ({ column }) => <SortableHeader column={column}>Riders</SortableHeader>,
+      cell: ({ row }) => <span className="tabular-nums">{row.original.riders}</span>,
+    },
+    {
+      accessorKey: "risk",
+      header: "Risk",
+      cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.risk}</span>,
+    },
+    actionsColumn<EventReviewRow>((row) => [
+      { label: "Open admin record", href: `/admin/events/review/${row.id}` },
+      {
+        label: "Open public event",
+        href: `/events/${row.id}`,
+        disabled: !isPublicEventStatus(row.status),
+      },
+      {
+        label: "Open report",
+        href: `/admin/reports/${row.id}`,
+        disabled: !isReportableEventStatus(row.status),
+      },
+    ]),
+  ];
+}
+
+function getUserColumns(
+  onSetStatus: (userId: string, status: VerificationStatus) => void,
+  currentUserId: string,
+): ColumnDef<UserRow>[] {
+  return [
+    selectColumn<UserRow>(),
+    {
+      accessorKey: "name",
+      header: ({ column }) => <SortableHeader column={column}>Name</SortableHeader>,
+      cell: ({ row }) => (
+        <div className="min-w-48">
+          <div className="font-medium">{row.original.name}</div>
+          <div className="text-sm text-muted-foreground">{row.original.email}</div>
+        </div>
+      ),
+    },
+    {
+      accessorKey: "role",
+      header: "Role",
+      cell: ({ row }) => <Badge variant="secondary">{row.original.role}</Badge>,
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: "area",
+      header: "Area",
+    },
+    actionsColumn<UserRow>((row) => {
+      const items: RowActionItem[] = [];
+
+      if (row.organizerProfileId) {
+        items.push({
+          label: "Open organizer record",
+          href: `/admin/verifications/organizers/${row.organizerProfileId}`,
+        });
+      }
+
+      if (row.status === "SUSPENDED") {
+        items.push({
+          label: "Restore account",
+          onSelect: () => onSetStatus(row.id, "APPROVED"),
+        });
+      } else {
+        items.push({
+          label: "Disable account",
+          destructive: true,
+          disabled: row.id === currentUserId,
+          onSelect: () => onSetStatus(row.id, "SUSPENDED"),
+        });
+      }
+
+      return items;
+    }),
+  ];
+}
 
 const validationColumns: ColumnDef<ValidationRow>[] = [
   selectColumn<ValidationRow>(),
@@ -712,7 +1340,7 @@ function selectColumn<TData>(): ColumnDef<TData> {
 }
 
 function actionsColumn<TData>(
-  getItems: (row: TData) => Array<{ label: string; href: string; external?: boolean }>,
+  getItems: (row: TData) => RowActionItem[],
 ): ColumnDef<TData> {
   return {
     id: "actions",
@@ -728,12 +1356,22 @@ function actionsColumn<TData>(
         <DropdownMenuContent align="end" className="w-52">
           {getItems(row.original).map((item, index) => (
             <React.Fragment key={item.label}>
-              {index === 2 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuItem asChild>
-                <Link href={item.href} target={item.external ? "_blank" : undefined} rel={item.external ? "noreferrer" : undefined}>
+              {index === 2 || item.destructive ? <DropdownMenuSeparator /> : null}
+              {item.href && !item.disabled ? (
+                <DropdownMenuItem asChild variant={item.destructive ? "destructive" : "default"}>
+                  <Link href={item.href} target={item.external ? "_blank" : undefined} rel={item.external ? "noreferrer" : undefined}>
+                    {item.label}
+                  </Link>
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  disabled={item.disabled}
+                  onSelect={item.onSelect}
+                  variant={item.destructive ? "destructive" : "default"}
+                >
                   {item.label}
-                </Link>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
+              )}
             </React.Fragment>
           ))}
         </DropdownMenuContent>
@@ -767,11 +1405,25 @@ function StatusBadge({ status }: { status: VerificationStatus }) {
 function EventStatusBadge({ status }: { status: Event["status"] }) {
   const label = status.replaceAll("_", " ").toLowerCase();
   if (status === "PUBLISHED" || status === "COMPLETED") {
-    return <Badge variant="outline">{label}</Badge>;
+    return (
+      <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300">
+        <CheckCircle2Icon data-icon="inline-start" />
+        {label}
+      </Badge>
+    );
   }
 
   if (status === "PENDING_ADMIN_REVIEW" || status === "PENDING_VENUE_APPROVAL") {
     return <Badge variant="secondary">{label}</Badge>;
+  }
+
+  if (status === "NEEDS_CHANGES" || status === "REJECTED" || status === "CANCELLED") {
+    return (
+      <Badge variant="destructive">
+        <ShieldAlertIcon data-icon="inline-start" />
+        {label}
+      </Badge>
+    );
   }
 
   return <Badge variant="outline">{label}</Badge>;
@@ -799,7 +1451,23 @@ function ValidationBadge({ result }: { result: ValidationRow["result"] }) {
   return <Badge variant="secondary">Validating</Badge>;
 }
 
-function getOrganizerRows(users: UserProfile[], events: Event[]): OrganizerRow[] {
+function isPublicEventStatus(status: Event["status"]) {
+  return status === "PUBLISHED" || status === "ONGOING" || status === "COMPLETED";
+}
+
+function isReportableEventStatus(status: Event["status"]) {
+  return isPublicEventStatus(status);
+}
+
+function getReviewQueueRows(rows: EventReviewRow[]) {
+  return rows.filter((row) => row.status === "PENDING_ADMIN_REVIEW");
+}
+
+function getOrganizerRows(
+  users: UserProfile[],
+  events: Event[],
+  statusOverrides: Record<string, VerificationStatus>,
+): OrganizerRow[] {
   return organizers.map((organizer) => {
     const owner = users.find((user) => user.organizerProfileId === organizer.id);
     const activeEvents = events.filter((event) => event.organizerId === organizer.id).length;
@@ -808,7 +1476,7 @@ function getOrganizerRows(users: UserProfile[], events: Event[]): OrganizerRow[]
       organizer: organizer.displayName,
       type: organizer.type,
       owner: owner?.displayName ?? "Owner match needed",
-      status: organizer.verificationStatus,
+      status: statusOverrides[organizer.id] ?? organizer.verificationStatus,
       pastEvents: organizer.pastEvents,
       activeEvents,
       fbLink: organizer.fbLink,
@@ -820,6 +1488,7 @@ function getEventRows(events: Event[]): EventReviewRow[] {
   return events.map((event) => ({
     id: event.id,
     title: event.title,
+    poster: event.poster,
     type: event.type,
     status: event.status,
     organizer: organizers.find((organizer) => organizer.id === event.organizerId)?.displayName ?? "Unknown organizer",
@@ -829,25 +1498,19 @@ function getEventRows(events: Event[]): EventReviewRow[] {
   }));
 }
 
-function getVenueRows(): VenueClaimRow[] {
-  return venues.map((venue) => ({
-    id: venue.id,
-    venue: venue.name,
-    area: venue.area,
-    status: venue.status,
-    capacity: venue.capacityNote,
-    rules: venue.houseRules.length,
-  }));
-}
-
-function getUserRows(users: UserProfile[]): UserRow[] {
+function getUserRows(
+  users: UserProfile[],
+  statusOverrides: Record<string, VerificationStatus>,
+): UserRow[] {
   return users.map((user) => ({
     id: user.id,
     name: user.displayName,
     email: user.email,
     role: user.role,
-    status: user.verificationStatus,
+    status: statusOverrides[user.id] ?? user.verificationStatus,
     area: user.area,
+    organizerProfileId: user.organizerProfileId,
+    venueId: user.venueId,
   }));
 }
 
@@ -862,9 +1525,9 @@ function getValidationRows(): ValidationRow[] {
       owner: "Tambike Ops",
     },
     {
-      id: "venue-owner-matching",
-      file: "venue-owner-matching.xlsx",
-      area: "Venue claims",
+      id: "venue-directory-checks",
+      file: "venue-directory-checks.xlsx",
+      area: "Venue directory",
       rows: 18,
       result: "Ready",
       owner: "Tambike Ops",
@@ -881,7 +1544,7 @@ function getValidationRows(): ValidationRow[] {
 }
 
 function getReportRows(events: Event[]): ReportRow[] {
-  return events.map((event) => {
+  return events.filter((event) => isReportableEventStatus(event.status)).map((event) => {
     const checkIns = Math.floor(event.going * 0.82);
     const noShow = event.going > 0 ? `${Math.max(0, Math.round(((event.going - checkIns) / event.going) * 100))}%` : "0%";
     return {
@@ -899,12 +1562,10 @@ function getReportRows(events: Event[]): ReportRow[] {
 function getSectionCards({
   organizers: organizerRows,
   events,
-  venues: venueRows,
   users,
 }: {
   organizers: OrganizerRow[];
   events: EventReviewRow[];
-  venues: VenueClaimRow[];
   users: UserRow[];
 }): SectionCard[] {
   const pendingReview = events.filter((event) => event.status === "PENDING_ADMIN_REVIEW").length;
@@ -926,9 +1587,9 @@ function getSectionCards({
     },
     {
       label: "Venue records",
-      value: String(venueRows.length),
-      detail: `${venueRows.filter((row) => row.status === "APPROVED").length} venues approved for organizer requests`,
-      trend: "Claims",
+      value: String(venues.length),
+      detail: `${venues.filter((venue) => venue.status === "APPROVED").length} venues approved for organizer requests`,
+      trend: "Directory",
       icon: <WarehouseIcon data-icon="inline-start" />,
     },
     {

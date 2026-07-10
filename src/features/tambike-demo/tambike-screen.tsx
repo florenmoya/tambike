@@ -84,7 +84,6 @@ export type TambikeView =
   | "organizer-scanner"
   | "organizer-report"
   | "organizer-reports"
-  | "venue-claim"
   | "venue-dashboard"
   | "venue-requests"
   | "venue-events"
@@ -94,7 +93,6 @@ export type TambikeView =
   | "venue-reports"
   | "admin-dashboard"
   | "admin-organizers"
-  | "admin-venue-claims"
   | "admin-event-reviews"
   | "admin-event-review"
   | "admin-moderation"
@@ -118,8 +116,6 @@ const roleLabels: Record<Role, string> = {
   venue: "Venue",
   admin: "Admin",
 };
-
-const primaryEventId = defaultPass.eventId;
 
 const featuredEventIds = [
   "tambike-cafe-classico",
@@ -192,17 +188,17 @@ type PanelLink = {
 
 const panelLinkByRole: Partial<Record<Role, PanelLink>> = {
   organizer: {
-    label: "Organizer Panel",
+    label: "Organizer console",
     href: "/organizer/dashboard",
     icon: Gauge,
   },
   venue: {
-    label: "Venue Panel",
+    label: "Venue console",
     href: "/venue/dashboard",
     icon: Building2,
   },
   admin: {
-    label: "Admin Panel",
+    label: "Admin console",
     href: "/admin",
     icon: ShieldCheck,
   },
@@ -233,21 +229,13 @@ const footerLinkGroups: Array<{
     ],
   },
   {
-    title: "Organizers",
-    ariaLabel: "Footer organizer links",
+    title: "Workspaces",
+    ariaLabel: "Footer workspace links",
     links: [
       { label: "Organizer application", href: "/organizer/apply" },
-      { label: "Create event", href: "/organizer/events/create" },
-      {
-        label: "Scanner",
-        href: `/organizer/events/${primaryEventId}/scanner`,
-        roles: ["organizer", "venue", "admin"],
-      },
-      {
-        label: "Reports",
-        href: "/organizer/reports",
-        roles: ["organizer", "admin"],
-      },
+      { label: "Organizer console", href: "/organizer/dashboard", roles: ["organizer"] },
+      { label: "Venue console", href: "/venue/dashboard", roles: ["venue"] },
+      { label: "Admin console", href: "/admin", roles: ["admin"] },
     ],
   },
 ];
@@ -463,13 +451,6 @@ const protectedViews: Partial<
     roleTitle: "Ops access needed",
     roleBody: "Use a Tambike ops account.",
   },
-  "admin-venue-claims": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
   "admin-event-reviews": {
     allowed: ["admin"],
     loginTitle: "Log in to continue",
@@ -557,7 +538,6 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "organizer-scanner" && <ScannerScreen eventId={id} owner="organizer" />}
       {view === "organizer-report" && <ReportScreen eventId={id} owner="organizer" />}
       {view === "organizer-reports" && <ReportsIndexScreen owner="organizer" />}
-      {view === "venue-claim" && <VenueClaimScreen />}
       {view === "venue-dashboard" && <VenueDashboard />}
       {view === "venue-requests" && <VenueRequestsScreen />}
       {view === "venue-events" && <VenueEventsScreen />}
@@ -567,7 +547,6 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "venue-reports" && <ReportsIndexScreen owner="venue" />}
       {view === "admin-dashboard" && <AdminDashboard />}
       {view === "admin-organizers" && <AdminQueue title="Organizer verifications" />}
-      {view === "admin-venue-claims" && <AdminQueue title="Venue claim queue" />}
       {view === "admin-event-reviews" && <AdminEventReviews />}
       {view === "admin-event-review" && <AdminEventReview reviewId={id} />}
       {view === "admin-moderation" && <AdminModerationScreen />}
@@ -805,7 +784,6 @@ function TambikeFooter() {
         <span>© 2026 Tambike</span>
         <div>
           {role === "admin" && <Link href="/admin/events/review">Review queue</Link>}
-          <Link href="/venue/claim">Claim venue</Link>
         </div>
       </div>
     </footer>
@@ -836,16 +814,12 @@ function FooterLinkGroup({
 function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQueryInput }) {
   const { events } = useDemo();
   const activeFilter = compact ? getEventFilter(query?.type) : eventFilters[0];
-  const isFiltered = activeFilter.value !== "all";
   const searchTerm = query?.q?.trim() ?? "";
-  const hasSearch = searchTerm.length > 0;
   const publicEvents = events.filter((event) =>
     ["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status),
   );
   const visibleEvents = filterEventsByQuery(publicEvents, query).filter(activeFilter.matches);
   const featuredEvents = getFeaturedEvents(publicEvents);
-  const primaryListings = isFiltered || hasSearch ? visibleEvents : visibleEvents.slice(0, 5);
-  const secondaryListings = isFiltered || hasSearch ? [] : visibleEvents.slice(5);
   const [activeFeaturedIndex, setActiveFeaturedIndex] = useState(0);
   const [dragDirection, setDragDirection] = useState<"previous" | "next" | null>(null);
   const [wheelDirection, setWheelDirection] = useState<FeaturedWheelDirection>("next");
@@ -1090,21 +1064,16 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
       </section>
       <section className="listings" aria-label="Published events">
         <div className="event-grid">
-          {primaryListings.map((event, index) => (
+          {visibleEvents.map((event, index) => (
             <EventCard key={event.id} event={event} priority={index === 0} />
           ))}
         </div>
-        {primaryListings.length === 0 && (
+        {visibleEvents.length === 0 && (
           <div className="empty-state">
             <h2>No events matched</h2>
             <p>Try another search term or clear the filters.</p>
           </div>
         )}
-        <div className="event-grid event-grid-secondary">
-          {secondaryListings.map((event, index) => (
-            <EventCard key={`${event.id}-secondary-${index}`} event={event} />
-          ))}
-        </div>
       </section>
     </>
   );
@@ -1148,13 +1117,12 @@ function FeatureCard({
   const distance = Math.abs(offset);
   const isFeatured = offset === 0;
   const isVisible = distance <= 2;
-  const isWidePeek = distance === 3;
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const titleParts = splitFeatureTitleEndPhrase(event.title);
   const featureStyle = {
     "--x": `calc(${offset} * (var(--feature-card-width) + var(--feature-gap)))`,
     "--scale": isFeatured ? "1.08" : distance === 1 ? "0.9" : distance === 2 ? "0.82" : "0.74",
-    "--opacity": isFeatured ? "1" : distance === 1 ? "0.78" : distance === 2 ? "0.42" : distance === 3 ? "0.28" : "0",
+    "--opacity": isFeatured ? "1" : distance === 1 ? "0.78" : distance === 2 ? "0.42" : "0",
     "--z": String(10 - distance),
     "--feature-tone": visual.poster,
   } as CSSProperties;
@@ -1165,7 +1133,6 @@ function FeatureCard({
         "feature-card",
         isFeatured && "is-featured",
         isVisible && "is-visible",
-        isWidePeek && "is-wide-peek",
       )}
       href={`/events/${event.id}`}
       style={featureStyle}
@@ -1182,7 +1149,7 @@ function FeatureCard({
           draggable={false}
           loading={isFeatured ? "eager" : "lazy"}
           fetchPriority={isFeatured ? "high" : "auto"}
-          sizes="(max-width: 760px) 68vw, (min-width: 1600px) 260px, 300px"
+          sizes="(max-width: 760px) 68vw, (min-width: 2400px) 460px, (min-width: 1600px) 400px, 300px"
         />
       </div>
       <div className="feature-caption">
@@ -1899,7 +1866,7 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
             onClick={async () => {
               setError("");
               try {
-                await approvePublish();
+                await approvePublish(event.id);
               } catch (actionError) {
                 setError(actionErrorMessage(actionError));
               }
@@ -2581,7 +2548,7 @@ function SignupScreen() {
               Rider signup
             </span>
             <h1 id="signup-title">Create rider account</h1>
-            <p>Start with RSVPs and passes. Apply to host or claim a venue later.</p>
+            <p>Start with RSVPs and passes. Apply to host events later.</p>
           </div>
 
           <div className="signup-role-note" aria-label="Account type">
@@ -2653,16 +2620,6 @@ function OrganizerApplyScreen() {
       eyebrow="Organizer verification"
       title="Apply to host events"
       fields={["Organizer type", "Display name", "Real name", "Contact number", "FB / page link", "Past event links"]}
-    />
-  );
-}
-
-function VenueClaimScreen() {
-  return (
-    <FormPrototype
-      eyebrow="Venue claim"
-      title="Claim a venue"
-      fields={["Venue name", "Address", "Google Maps link", "Contact person", "Role", "Proof / notes"]}
     />
   );
 }

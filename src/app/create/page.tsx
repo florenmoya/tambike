@@ -1,5 +1,5 @@
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <TambikeScreen view="organizer-create" />;
+  redirect("/organizer/events/create");
 }

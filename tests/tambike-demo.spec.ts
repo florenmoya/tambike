@@ -957,26 +957,27 @@ test("organizer scanner shows event-day validation states and report metrics", a
 
   await page.goto("/organizer/events/arai-hjc-charity-ride/scanner");
 
-  await expect(page.getByRole("heading", { name: /QR Scanner/i })).toBeVisible();
-  await page.getByRole("button", { name: /Valid pass/i }).click();
+  await expect(page.getByRole("heading", { name: /^Scanner$/i })).toBeVisible();
+  await expect(page.getByLabel(/Upload QR image/i)).toBeVisible();
+  await page
+    .getByLabel(/Manual token/i)
+    .fill("tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s");
+  await page.getByRole("button", { name: /^Check$/i }).click();
   await expect(page.getByText(/Checked in successfully/i)).toBeVisible();
 
-  await page.getByRole("button", { name: /Already checked in/i }).click();
-  await expect(page.getByText(/Already checked in at 7:18 PM/i)).toBeVisible();
+  await page
+    .getByLabel(/Manual token/i)
+    .fill("tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s");
+  await page.getByRole("button", { name: /^Check$/i }).click();
+  await expect(page.getByText(/Already checked in/i)).toBeVisible();
 
-  await page.getByRole("button", { name: /Wrong event/i }).click();
-  await expect(page.getByText(/Pass belongs to a different event/i)).toBeVisible();
+  await page.getByLabel(/Manual token/i).fill("tbk_unknown_pass");
+  await page.getByRole("button", { name: /^Check$/i }).click();
+  await expect(page.getByText(/QR pass not found/i)).toBeVisible();
 
-  await page.getByRole("button", { name: /Cancelled pass/i }).click();
-  await expect(page.getByText(/This pass was cancelled/i)).toBeVisible();
-
-  await page.getByRole("button", { name: /Inactive window/i }).click();
-  await expect(page.getByText(/Check-in window is not active/i)).toBeVisible();
-
-  await page.getByRole("link", { name: /View report/i }).click();
-  await expect(page.getByRole("heading", { name: /Event Report/i })).toBeVisible();
-  await expect(page.getByText(/No-show rate/i)).toBeVisible();
-  await expect(page.getByText(/Perk redemptions/i)).toBeVisible();
+  await page.getByRole("link", { name: /Open event report/i }).click();
+  await expect(page.getByRole("heading", { name: /Event report/i })).toBeVisible();
+  await expect(page.getByText(/Conversion/i)).toBeVisible();
 });
 
 test("venue can approve an event request with conditions", async ({ page }) => {

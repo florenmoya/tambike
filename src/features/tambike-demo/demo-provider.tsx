@@ -15,28 +15,24 @@ import {
   loginWithPasswordAction,
   logoutAction,
   registerForEventAction,
+  scanPassAction,
   signUpRiderAction,
   updateProfileAction,
 } from "@/server/actions";
 import type {
   AttendanceType,
   CreateEventInput,
+  DemoState,
   Event,
   Pass,
   ProfileInput,
   Role,
+  ScanMethod,
+  ScanPassResult,
   ScannerOutcome,
   SignupInput,
   UserProfile,
 } from "./types";
-
-export interface DemoState {
-  currentUser: UserProfile | null;
-  users: UserProfile[];
-  events: Event[];
-  passes: Pass[];
-  passCreated: boolean;
-}
 
 interface DemoContextValue {
   role: Role;
@@ -61,13 +57,14 @@ interface DemoContextValue {
   ) => Promise<string | null>;
   scannerOutcome: ScannerOutcome;
   setScannerOutcome: (outcome: ScannerOutcome) => void;
+  scanPass: (eventId: string, qrToken: string, method: ScanMethod) => Promise<ScanPassResult>;
   checkedInCount: number;
   venueConditions: string;
   setVenueConditions: (conditions: string) => void;
   venueDecision: "pending" | "approved_with_conditions";
   approveVenueWithConditions: () => Promise<void>;
   adminDecision: "pending" | "published";
-  approvePublish: () => Promise<void>;
+  approvePublish: (eventId: string) => Promise<void>;
 }
 
 const DemoContext = createContext<DemoContextValue | null>(null);
@@ -198,6 +195,20 @@ export function DemoProvider({
     }
   }, []);
 
+  const scanPass = useCallback(
+    async (eventId: string, qrToken: string, method: ScanMethod) => {
+      const result = await scanPassAction(eventId, qrToken, method);
+      applyState(result.state);
+      setScannerOutcomeState(result.outcome);
+      if (result.ok) {
+        setCheckedInCount((count) => count + 1);
+      }
+
+      return result;
+    },
+    [applyState],
+  );
+
   const approveVenueWithConditions = useCallback(async () => {
     const nextState = await approveVenueWithConditionsAction(
       "arai-hjc-charity-ride",
@@ -207,8 +218,8 @@ export function DemoProvider({
     setVenueDecision("approved_with_conditions");
   }, [applyState, venueConditions]);
 
-  const approvePublish = useCallback(async () => {
-    const nextState = await approvePublishAction("arai-hjc-charity-ride");
+  const approvePublish = useCallback(async (eventId: string) => {
+    const nextState = await approvePublishAction(eventId);
     applyState(nextState);
     setAdminDecision("published");
   }, [applyState]);
@@ -233,6 +244,7 @@ export function DemoProvider({
       registerForEvent,
       scannerOutcome,
       setScannerOutcome,
+      scanPass,
       checkedInCount,
       venueConditions,
       setVenueConditions,
@@ -259,6 +271,7 @@ export function DemoProvider({
       requireLogin,
       role,
       scannerOutcome,
+      scanPass,
       setScannerOutcome,
       signUpRider,
       updateProfile,

@@ -1,5 +1,5 @@
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { VenueConsole } from "@/features/venue/venue-console";
 
 export default function Page() {
-  return <TambikeScreen view="venue-dashboard" />;
+  return <VenueConsole section="overview" />;
 }

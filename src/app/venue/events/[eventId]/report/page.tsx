@@ -1,5 +1,5 @@
 import { demoEvents } from "@/features/tambike-demo/data";
-import { TambikeScreen } from "@/features/tambike-demo/tambike-screen";
+import { VenueConsole } from "@/features/venue/venue-console";
 
 export function generateStaticParams() {
   return demoEvents.map((event) => ({ eventId: event.id }));
@@ -7,5 +7,5 @@ export function generateStaticParams() {
 
 export default async function Page({ params }: { params: Promise<{ eventId: string }> }) {
   const { eventId } = await params;
-  return <TambikeScreen view="venue-report" id={eventId} />;
+  return <VenueConsole section="report" eventId={eventId} />;
 }

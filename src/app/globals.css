@@ -2022,12 +2022,20 @@ svg {
   margin: clamp(10px, 1.1vw, 18px) calc(50% - 50vw) 0;
 }
 
+@media (min-width: 761px) {
+  .featured-carousel,
+  .category-strip,
+  .event-search {
+    transform: translateX(8px);
+  }
+}
+
 .hero-showcase {
-  --feature-gap: clamp(20px, 1.8vw, 28px);
-  --feature-card-width: clamp(240px, 21vw, 300px);
+  --feature-gap: clamp(14px, 1.2vw, 20px);
+  --feature-card-width: clamp(265px, 20vw, 320px);
   position: relative;
   width: 100%;
-  height: clamp(500px, 34vw, 540px);
+  height: clamp(480px, 29vw, 670px);
   margin: 0 auto;
   display: block;
   overflow: visible;
@@ -2068,24 +2076,26 @@ svg {
   will-change: transform, opacity;
 }
 
-.feature-card.is-wide-peek {
-  opacity: 0;
-}
-
 .feature-card.is-featured {
   cursor: pointer;
   pointer-events: auto;
 }
 
+@media (min-width: 1024px) and (max-width: 1599px) {
+  .hero-showcase {
+    --feature-card-width: clamp(285px, 22vw, 320px);
+    height: clamp(500px, 38vw, 520px);
+  }
+}
+
 @media (min-width: 1600px) {
   .hero-showcase {
-    --feature-gap: clamp(16px, 1.1vw, 22px);
-    --feature-card-width: clamp(220px, 12.5vw, 260px);
-    height: clamp(450px, 27vw, 500px);
+    --feature-card-width: clamp(320px, 18vw, 430px);
+    height: clamp(520px, 29vw, 670px);
   }
 
-  .feature-card.is-wide-peek {
-    opacity: var(--opacity);
+  .feature-card {
+    top: 12px;
   }
 }
 
@@ -2169,7 +2179,8 @@ svg {
 }
 
 .feature-caption p {
-  margin: 0;
+  width: min(100%, 280px);
+  margin: 0 auto;
   color: rgba(255, 255, 255, 0.82);
   font-size: 11px;
   white-space: nowrap;
@@ -2467,10 +2478,6 @@ svg {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: clamp(19px, 1.7vw, 30px) clamp(8px, 0.95vw, 16px);
-}
-
-.event-grid + .event-grid {
-  margin-top: clamp(19px, 1.7vw, 30px);
 }
 
 .event-card {
@@ -2994,7 +3001,7 @@ svg {
     --feature-gap: 16px;
     --feature-card-width: min(68vw, 260px);
     width: 100vw;
-    height: clamp(430px, 116vw, 470px);
+    height: clamp(390px, 108vw, 420px);
     margin-left: calc(50% - 50vw);
     margin-right: calc(50% - 50vw);
     touch-action: pan-y;
@@ -3047,7 +3054,7 @@ svg {
 
   .listings {
     width: 100%;
-    padding: 4px 12px 46px;
+    padding: clamp(10px, 3vw, 14px) 12px 46px;
   }
 
   .filters {
@@ -5024,18 +5031,11 @@ svg {
   }
 
   .listings {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-    gap: 20px 10px;
+    display: block;
   }
 
   .listings > .event-grid {
-    display: contents;
-  }
-
-  .listings > .event-grid + .event-grid {
-    margin-top: 0;
+    display: grid;
   }
 
   .listings > .empty-state {
