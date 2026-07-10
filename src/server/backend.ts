@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { PrismaTambikeBackend } from "./prisma-backend";
 import { getRuntimeDatabaseUrl } from "./database-url";
-import { demoEvents, mockUsers, venues } from "@/features/tambike-demo/data";
+import { demoEvents, mockUsers, organizers, venues } from "@/features/tambike-demo/data";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -12,10 +12,13 @@ import {
 } from "@/features/tambike-demo/event-state";
 import type {
   AccountRole,
+  AdminCreateOrganizerInput,
   AttendanceType,
   CreateEventInput,
   Event,
   EventType,
+  OrganizerApplicationInput,
+  OrganizerVerificationRecord,
   Pass,
   ProfileInput,
   RSVP,
@@ -61,7 +64,10 @@ export type AuditAction =
   | "VENUE_APPROVED"
   | "ADMIN_PUBLISHED"
   | "ATTENDEE_EXPORT_CREATED"
-  | "LEAD_EXPORT_CREATED";
+  | "LEAD_EXPORT_CREATED"
+  | "ORGANIZER_APPLICATION_SUBMITTED"
+  | "ORGANIZER_APPLICATION_REVIEWED"
+  | "ORGANIZER_CREATED_BY_ADMIN";
 
 type BackendUser = UserProfile & {
   passwordHash: string;
@@ -94,6 +100,7 @@ type AuditRecord = {
 type BackendSeed = {
   users: BackendUser[];
   events: Event[];
+  organizerVerifications: OrganizerVerificationRecord[];
   rsvps: Array<RSVP & { userId: string }>;
   passes: Array<Pass & { userId: string }>;
 };
@@ -124,8 +131,18 @@ function cloneEvent(event: Event): Event {
   };
 }
 
-function cloneUser(user: UserProfile): UserProfile {
-  return { ...user };
+function cloneUser(user: BackendUser): UserProfile {
+  const { passwordHash: _passwordHash, ...profile } = user;
+  return { ...profile };
+}
+
+function cloneOrganizerVerification(
+  organizerVerification: OrganizerVerificationRecord,
+): OrganizerVerificationRecord {
+  return {
+    ...organizerVerification,
+    pastEventLinks: [...organizerVerification.pastEventLinks],
+  };
 }
 
 function makeSessionToken() {
@@ -140,6 +157,36 @@ function validateSignupPassword(password: string) {
   if (password.trim().length < 8) {
     throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
   }
+}
+
+function requiredTrimmedOrganizerField(value: string) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+
+  return trimmed;
+}
+
+function validateOrganizerApplicationInput(input: OrganizerApplicationInput) {
+  const pastEventLinks = Array.isArray(input.pastEventLinks)
+    ? input.pastEventLinks
+        .filter((link): link is string => typeof link === "string")
+        .map((link) => link.trim())
+        .filter(Boolean)
+    : [];
+  if (pastEventLinks.length === 0) {
+    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+
+  return {
+    organizerType: requiredTrimmedOrganizerField(input.organizerType),
+    displayName: requiredTrimmedOrganizerField(input.displayName),
+    realName: requiredTrimmedOrganizerField(input.realName),
+    contactNumber: requiredTrimmedOrganizerField(input.contactNumber),
+    fbLink: requiredTrimmedOrganizerField(input.fbLink),
+    pastEventLinks,
+  };
 }
 
 function passIdForEvent(eventId: string) {
@@ -175,9 +222,41 @@ async function createSeed(): Promise<BackendSeed> {
     },
   ];
 
+  const events = demoEvents.map(cloneEvent);
+  const organizerVerifications: OrganizerVerificationRecord[] = [];
+  const seededOrganizer = users.find(
+    (user) => user.role === "organizer" && user.organizerProfileId,
+  );
+  const seededOrganizerProfile = organizers.find(
+    (organizer) => organizer.id === seededOrganizer?.organizerProfileId,
+  );
+  if (seededOrganizer && seededOrganizerProfile) {
+    organizerVerifications.push({
+      id: seededOrganizerProfile.id,
+      ownerUserId: seededOrganizer.id,
+      ownerEmail: seededOrganizer.email,
+      ownerName: seededOrganizer.displayName,
+      ownerRole: "organizer",
+      status: seededOrganizer.verificationStatus,
+      organizerType: seededOrganizerProfile.type,
+      displayName: seededOrganizerProfile.displayName,
+      realName: seededOrganizer.displayName,
+      contactNumber: "09000000000",
+      fbLink: seededOrganizerProfile.fbLink,
+      pastEventLinks: [],
+      pastEvents: seededOrganizerProfile.pastEvents,
+      activeEvents: events.filter(
+        (event) =>
+          event.organizerId === seededOrganizerProfile.id &&
+          !["COMPLETED", "CANCELLED", "REJECTED"].includes(event.status),
+      ).length,
+    });
+  }
+
   return {
     users,
-    events: demoEvents.map(cloneEvent),
+    events,
+    organizerVerifications,
     rsvps: [
       {
         eventId: demoScannerPass.eventId,
@@ -204,6 +283,7 @@ export class TambikeBackend {
   private readonly users = new Map<string, BackendUser>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
+  private readonly organizerVerifications = new Map<string, OrganizerVerificationRecord>();
   private readonly rsvps = new Map<string, RSVP & { userId: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
@@ -216,6 +296,13 @@ export class TambikeBackend {
 
     for (const event of seed.events) {
       this.events.set(event.id, cloneEvent(event));
+    }
+
+    for (const organizerVerification of seed.organizerVerifications) {
+      this.organizerVerifications.set(
+        organizerVerification.id,
+        cloneOrganizerVerification(organizerVerification),
+      );
     }
 
     for (const rsvp of seed.rsvps) {
@@ -319,6 +406,112 @@ export class TambikeBackend {
     this.users.set(updated.id, updated);
     this.audit("PROFILE_UPDATED", user.id, user.id);
     return cloneUser(updated);
+  }
+
+  async applyAsOrganizer(sessionToken: string, input: OrganizerApplicationInput) {
+    const user = this.requireRole(sessionToken, "rider");
+    if (
+      user.organizerProfileId ||
+      Array.from(this.organizerVerifications.values()).some(
+        (organizerVerification) => organizerVerification.ownerUserId === user.id,
+      )
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const application = validateOrganizerApplicationInput(input);
+    const record: OrganizerVerificationRecord = {
+      id: `organizer-${user.id}`,
+      ownerUserId: user.id,
+      ownerEmail: user.email,
+      ownerName: user.displayName,
+      ownerRole: "organizer",
+      status: "PENDING",
+      ...application,
+      pastEvents: 0,
+      activeEvents: 0,
+    };
+    this.organizerVerifications.set(record.id, record);
+    this.users.set(user.id, {
+      ...user,
+      role: "organizer",
+      verificationStatus: "PENDING",
+      organizerProfileId: record.id,
+    });
+    this.audit("ORGANIZER_APPLICATION_SUBMITTED", user.id, record.id);
+    return cloneOrganizerVerification(record);
+  }
+
+  async reviewOrganizerApplication(
+    sessionToken: string,
+    organizerId: string,
+    status: "APPROVED" | "REJECTED",
+    adminNotes?: string,
+  ) {
+    if (status !== "APPROVED" && status !== "REJECTED") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const admin = this.requireRole(sessionToken, "admin");
+    const record = this.requireOrganizerVerification(organizerId);
+    const owner = this.requireUserById(record.ownerUserId);
+    const next = { ...record, status, adminNotes: adminNotes?.trim() || undefined };
+    this.organizerVerifications.set(record.id, next);
+    this.users.set(owner.id, {
+      ...owner,
+      role: "organizer",
+      verificationStatus: status,
+      organizerProfileId: record.id,
+    });
+    this.audit("ORGANIZER_APPLICATION_REVIEWED", admin.id, record.id);
+    return cloneOrganizerVerification(next);
+  }
+
+  async createOrganizerForAdmin(
+    sessionToken: string,
+    input: AdminCreateOrganizerInput,
+  ) {
+    const admin = this.requireRole(sessionToken, "admin");
+    const email = requiredTrimmedOrganizerField(input.email).toLowerCase();
+    if (this.findUserByEmail(email)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    validateSignupPassword(input.password);
+    const application = validateOrganizerApplicationInput(input);
+    const area = requiredTrimmedOrganizerField(input.area);
+    const userId = `user-${randomUUID()}`;
+    const organizerId = `organizer-${randomUUID()}`;
+    const user: BackendUser = {
+      id: userId,
+      displayName: application.displayName,
+      email,
+      role: "organizer",
+      verificationStatus: "APPROVED",
+      area,
+      joinedAt: "July 11, 2026",
+      organizerProfileId: organizerId,
+      passwordHash: await bcrypt.hash(input.password, 10),
+    };
+    const record: OrganizerVerificationRecord = {
+      id: organizerId,
+      ownerUserId: user.id,
+      ownerEmail: user.email,
+      ownerName: user.displayName,
+      ownerRole: "organizer",
+      status: "APPROVED",
+      ...application,
+      pastEvents: 0,
+      activeEvents: 0,
+    };
+    this.users.set(user.id, user);
+    this.organizerVerifications.set(record.id, record);
+    this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
+    return cloneOrganizerVerification(record);
+  }
+
+  async listOrganizerVerifications(sessionToken: string) {
+    this.requireRole(sessionToken, "admin");
+    return Array.from(this.organizerVerifications.values()).map(cloneOrganizerVerification);
   }
 
   async createEventDraft(sessionToken: string, input: CreateEventInput) {
@@ -590,6 +783,24 @@ export class TambikeBackend {
     }
 
     return event;
+  }
+
+  private requireUserById(userId: string) {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return user;
+  }
+
+  private requireOrganizerVerification(organizerId: string) {
+    const organizerVerification = this.organizerVerifications.get(organizerId);
+    if (!organizerVerification) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return organizerVerification;
   }
 
   private findUserByEmail(email: string) {
