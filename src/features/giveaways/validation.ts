@@ -54,6 +54,14 @@ const finiteInventorySchema = z
 
 const unlimitedInventorySchema = z.object({ kind: z.literal("unlimited") }).strict();
 
+const prizeItemSchema = z
+  .object({
+    id: identifier.optional(),
+    title: nonEmptyText,
+    description: nonEmptyText.optional(),
+  })
+  .strict();
+
 const prizePoolSchema = z
   .object({
     id: identifier,
@@ -61,36 +69,45 @@ const prizePoolSchema = z
     awardMode: z.enum(["random_draw", "first_come", "guaranteed", "manual_selection"]),
     fulfilmentMode: z.enum(["onsite", "digital_code", "delivery", "manual_contact"]),
     inventory: z.discriminatedUnion("kind", [finiteInventorySchema, unlimitedInventorySchema]),
-    items: z
-      .array(
-        z
-          .object({
-            id: identifier.optional(),
-            title: nonEmptyText,
-            description: nonEmptyText.optional(),
-          })
-          .strict(),
-      )
-      .min(1),
+    items: z.array(prizeItemSchema),
     eligibilityGroupIds: z.array(identifier).min(1).optional(),
     perRiderLimit: positiveInteger.optional(),
     presenceVerificationRequired: z.boolean().optional(),
   })
   .strict()
   .superRefine((pool, context) => {
-    if (pool.awardMode === "guaranteed" && pool.inventory.kind !== "unlimited") {
-      context.addIssue({
-        code: "custom",
-        path: ["inventory"],
-        message: "FINITE_GUARANTEED_PRIZE_POOL",
-      });
+    if (pool.awardMode === "guaranteed") {
+      if (pool.inventory.kind !== "unlimited") {
+        context.addIssue({
+          code: "custom",
+          path: ["inventory"],
+          message: "FINITE_GUARANTEED_PRIZE_POOL",
+        });
+      }
+      if (pool.items.length !== 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["items"],
+          message: "GUARANTEED_PRIZE_POOL_MUST_NOT_HAVE_ITEMS",
+        });
+      }
+      return;
     }
 
-    if (pool.awardMode !== "guaranteed" && pool.inventory.kind !== "finite") {
+    if (pool.inventory.kind !== "finite") {
       context.addIssue({
         code: "custom",
         path: ["inventory"],
         message: "FINITE_INVENTORY_REQUIRED",
+      });
+      return;
+    }
+
+    if (pool.items.length !== pool.inventory.quantity) {
+      context.addIssue({
+        code: "custom",
+        path: ["items"],
+        message: "FINITE_PRIZE_ITEM_COUNT_MISMATCH",
       });
     }
   });

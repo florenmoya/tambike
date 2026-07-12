@@ -67,6 +67,13 @@ function createValidGiveawayInput() {
   };
 }
 
+function createGiveawayInputWithPrizePool(prizePool: Record<string, unknown>) {
+  return {
+    ...createValidGiveawayInput(),
+    prizePools: [prizePool],
+  };
+}
+
 describe("giveaway draw engine", () => {
   test("generates a 32-byte CSPRNG draw seed and commits the exact lowercase SHA-256 hash", () => {
     expect(generateDrawSeed()).toHaveLength(32);
@@ -173,6 +180,51 @@ describe("giveaway input validation", () => {
     input.prizePools[0].awardMode = "guaranteed";
 
     expect(createGiveawaySchema.safeParse(input).success).toBe(false);
+  });
+
+  test("accepts guaranteed unlimited pools with no item rows", () => {
+    const pool = {
+      ...createValidGiveawayInput().prizePools[0],
+      awardMode: "guaranteed",
+      inventory: { kind: "unlimited" },
+      items: [],
+    };
+
+    expect(createGiveawaySchema.safeParse(createGiveawayInputWithPrizePool(pool)).success).toBe(true);
+  });
+
+  test.each(["random_draw", "first_come", "manual_selection"])(
+    "accepts %s pools only when finite item rows match inventory quantity",
+    (awardMode) => {
+      const pool = {
+        ...createValidGiveawayInput().prizePools[0],
+        awardMode,
+        inventory: { kind: "finite", quantity: 2 },
+        items: [{ title: "First prize" }, { title: "Second prize" }],
+      };
+
+      expect(createGiveawaySchema.safeParse(createGiveawayInputWithPrizePool(pool)).success).toBe(true);
+    },
+  );
+
+  test.each([
+    ["a finite guaranteed pool", "guaranteed", { kind: "finite", quantity: 1 }, []],
+    ["an item on an unlimited guaranteed pool", "guaranteed", { kind: "unlimited" }, [{ title: "Extra" }]],
+    ["an unlimited random draw pool", "random_draw", { kind: "unlimited" }, []],
+    ["an unlimited first-come pool", "first_come", { kind: "unlimited" }, []],
+    ["an unlimited manual selection pool", "manual_selection", { kind: "unlimited" }, []],
+    ["too few finite item rows", "random_draw", { kind: "finite", quantity: 2 }, [{ title: "Only one" }]],
+    ["too many finite item rows", "first_come", { kind: "finite", quantity: 1 }, [{ title: "One" }, { title: "Two" }]],
+    ["a non-positive finite quantity", "manual_selection", { kind: "finite", quantity: 0 }, []],
+  ])("rejects %s", (_label, awardMode, inventory, items) => {
+    const pool = {
+      ...createValidGiveawayInput().prizePools[0],
+      awardMode,
+      inventory,
+      items,
+    };
+
+    expect(createGiveawaySchema.safeParse(createGiveawayInputWithPrizePool(pool)).success).toBe(false);
   });
 
   test.each([

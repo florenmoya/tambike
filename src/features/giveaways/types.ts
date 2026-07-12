@@ -59,9 +59,18 @@ export interface GiveawayEligibilityGroupInput {
   conditions: GiveawayEligibilityConditionInput[];
 }
 
+export interface GiveawayUnlimitedPrizeInventoryInput {
+  kind: "unlimited";
+}
+
+export interface GiveawayFinitePrizeInventoryInput {
+  kind: "finite";
+  quantity: number;
+}
+
 export type GiveawayPrizeInventoryInput =
-  | { kind: "unlimited" }
-  | { kind: "finite"; quantity: number };
+  | GiveawayUnlimitedPrizeInventoryInput
+  | GiveawayFinitePrizeInventoryInput;
 
 export interface GiveawayPrizeItemInput {
   id?: string;
@@ -69,17 +78,32 @@ export interface GiveawayPrizeItemInput {
   description?: string;
 }
 
-export interface GiveawayPrizePoolInput {
+export interface GiveawayPrizePoolBaseInput {
   id: string;
   title: string;
-  awardMode: GiveawayAwardMode;
   fulfilmentMode: GiveawayFulfilmentMode;
-  inventory: GiveawayPrizeInventoryInput;
-  items: GiveawayPrizeItemInput[];
   eligibilityGroupIds?: string[];
   perRiderLimit?: number;
   presenceVerificationRequired?: boolean;
 }
+
+export interface GiveawayGuaranteedPrizePoolInput extends GiveawayPrizePoolBaseInput {
+  awardMode: "guaranteed";
+  inventory: GiveawayUnlimitedPrizeInventoryInput;
+  /** Guaranteed unlimited pools create no finite prize-item rows. */
+  items: [];
+}
+
+export interface GiveawayFinitePrizePoolInput extends GiveawayPrizePoolBaseInput {
+  awardMode: Exclude<GiveawayAwardMode, "guaranteed">;
+  inventory: GiveawayFinitePrizeInventoryInput;
+  /** One input creates one authoritative finite prize-item row. */
+  items: [GiveawayPrizeItemInput, ...GiveawayPrizeItemInput[]];
+}
+
+export type GiveawayPrizePoolInput =
+  | GiveawayGuaranteedPrizePoolInput
+  | GiveawayFinitePrizePoolInput;
 
 export interface GiveawayWinnerLimitsInput {
   perRider: number;
@@ -160,6 +184,7 @@ export interface PublicGiveawayPrizePoolSummary {
   awardMode: GiveawayAwardMode;
   fulfilmentMode: GiveawayFulfilmentMode;
   inventoryKind: GiveawayPrizeInventoryInput["kind"];
+  /** Number of authoritative finite item rows, when the pool is finite. */
   itemQuantity?: number;
   items: Array<Pick<GiveawayPrizeItemInput, "id" | "title" | "description">>;
   presenceVerificationRequired: boolean;
