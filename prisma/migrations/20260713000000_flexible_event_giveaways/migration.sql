@@ -4,6 +4,7 @@ CREATE TYPE "GiveawayKind" AS ENUM ('raffle', 'giveaway');
 CREATE TYPE "GiveawayStatus" AS ENUM ('draft', 'scheduled', 'open', 'paused', 'locked', 'drawing', 'claims_open', 'completed', 'cancelled', 'suspended');
 CREATE TYPE "GiveawayComplianceStatus" AS ENUM ('draft', 'pending_review', 'approved', 'changes_requested', 'rejected');
 CREATE TYPE "GiveawayEntryMode" AS ENUM ('automatic', 'opt_in', 'claim_code', 'manual_only');
+CREATE TYPE "GiveawayEntryPath" AS ENUM ('automatic', 'opt_in', 'campaign_code', 'manual');
 CREATE TYPE "GiveawayVisibility" AS ENUM ('event_page', 'registered_riders', 'eligible_riders', 'hidden');
 CREATE TYPE "GiveawayEligibilitySource" AS ENUM ('active_rsvp_pass', 'confirmed_check_in', 'staff_confirmed_check_in', 'perk_redemption', 'campaign_code', 'manual');
 CREATE TYPE "GiveawayEntryStatus" AS ENUM ('eligible', 'locked', 'disqualified', 'withdrawn');
@@ -31,6 +32,7 @@ CREATE TABLE "EventGiveaway" (
   "complianceStatus" "GiveawayComplianceStatus" NOT NULL DEFAULT 'draft',
   "entryMode" "GiveawayEntryMode" NOT NULL,
   "maxEntriesPerRider" INTEGER NOT NULL,
+  "presenceVerificationRequired" BOOLEAN NOT NULL DEFAULT false,
   "visibility" "GiveawayVisibility" NOT NULL DEFAULT 'hidden',
   "timeZone" TEXT NOT NULL,
   "entryOpensAt" TIMESTAMP(3),
@@ -108,6 +110,7 @@ CREATE TABLE "GiveawayEligibilityCondition" (
 CREATE TABLE "GiveawayCampaignCode" (
   "id" TEXT NOT NULL,
   "giveawayId" TEXT NOT NULL,
+  "createdByUserId" TEXT NOT NULL,
   "tokenHash" TEXT NOT NULL,
   "expiresAt" TIMESTAMP(3) NOT NULL,
   "maxUses" INTEGER NOT NULL,
@@ -127,14 +130,37 @@ CREATE TABLE "GiveawayEntry" (
   "giveawayId" TEXT NOT NULL,
   "riderId" TEXT NOT NULL,
   "status" "GiveawayEntryStatus" NOT NULL DEFAULT 'eligible',
+  "entryPath" "GiveawayEntryPath" NOT NULL,
   "currentWeight" INTEGER NOT NULL DEFAULT 1,
   "qualifiedSourceFingerprint" TEXT NOT NULL,
+  "qualifiedEligibilityGroupIds" JSONB NOT NULL,
+  "manualGrantActive" BOOLEAN NOT NULL DEFAULT false,
+  "acknowledgedMechanicsVersionId" TEXT,
+  "acknowledgedMechanicsChecksum" TEXT,
+  "acknowledgedMechanicsAt" TIMESTAMP(3),
   "opaquePublicReference" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
   CONSTRAINT "GiveawayEntry_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "GiveawayEntry_currentWeight_positive" CHECK ("currentWeight" > 0)
+  CONSTRAINT "GiveawayEntry_currentWeight_positive" CHECK ("currentWeight" > 0),
+  CONSTRAINT "GiveawayEntry_qualifiedEligibilityGroupIds_array" CHECK (jsonb_typeof("qualifiedEligibilityGroupIds") = 'array'),
+  CONSTRAINT "GiveawayEntry_optIn_acknowledgement" CHECK (
+    ("entryPath" = 'opt_in' AND "acknowledgedMechanicsVersionId" IS NOT NULL AND "acknowledgedMechanicsChecksum" IS NOT NULL AND "acknowledgedMechanicsAt" IS NOT NULL)
+    OR ("entryPath" <> 'opt_in' AND "acknowledgedMechanicsVersionId" IS NULL AND "acknowledgedMechanicsChecksum" IS NULL AND "acknowledgedMechanicsAt" IS NULL)
+  ),
+  CONSTRAINT "GiveawayEntry_manual_grant_path" CHECK ("entryPath" = 'manual' OR "manualGrantActive" = false)
+);
+
+CREATE TABLE "GiveawayCampaignCodeClaim" (
+  "id" TEXT NOT NULL,
+  "campaignCodeId" TEXT NOT NULL,
+  "riderId" TEXT NOT NULL,
+  "entryId" TEXT NOT NULL,
+  "idempotencyKey" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  CONSTRAINT "GiveawayCampaignCodeClaim_pkey" PRIMARY KEY ("id")
 );
 
 CREATE TABLE "GiveawayEntryEvent" (
@@ -259,7 +285,7 @@ CREATE TABLE "GiveawayDraw" (
   "inputDigest" TEXT NOT NULL,
   "resultDigest" TEXT,
   "initiatedByUserId" TEXT NOT NULL,
-  "reason" TEXT,
+  "reasonDigest" TEXT,
   "completedAt" TIMESTAMP(3),
   "publishedAt" TIMESTAMP(3),
   "voidedAt" TIMESTAMP(3),
@@ -282,17 +308,19 @@ CREATE TABLE "GiveawayAward" (
   "status" "GiveawayAwardStatus" NOT NULL DEFAULT 'pending_verification',
   "isCurrent" BOOLEAN NOT NULL DEFAULT true,
   "rank" INTEGER,
+  "directAllocationKey" TEXT,
   "opaqueClaimReference" TEXT NOT NULL,
   "claimTokenHash" TEXT,
   "claimDeadlineAt" TIMESTAMP(3),
-  "reason" TEXT,
+  "reasonDigest" TEXT,
   "predecessorAwardId" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
   CONSTRAINT "GiveawayAward_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "GiveawayAward_provenance_paired" CHECK (("drawId" IS NULL) = ("snapshotEntryId" IS NULL)),
-  CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0))
+  CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0)),
+  CONSTRAINT "GiveawayAward_directAllocation_provenance" CHECK (("drawId" IS NULL) = ("directAllocationKey" IS NOT NULL))
 );
 
 CREATE TABLE "GiveawayClaimVerification" (
@@ -377,6 +405,10 @@ CREATE UNIQUE INDEX "GiveawayEligibilityGroup_giveawayId_position_key"
   ON "GiveawayEligibilityGroup"("giveawayId", "position");
 CREATE UNIQUE INDEX "GiveawayCampaignCode_tokenHash_key"
   ON "GiveawayCampaignCode"("tokenHash");
+CREATE UNIQUE INDEX "GiveawayCampaignCodeClaim_campaignCodeId_riderId_key"
+  ON "GiveawayCampaignCodeClaim"("campaignCodeId", "riderId");
+CREATE UNIQUE INDEX "GiveawayCampaignCodeClaim_campaignCodeId_idempotencyKey_key"
+  ON "GiveawayCampaignCodeClaim"("campaignCodeId", "idempotencyKey");
 CREATE UNIQUE INDEX "GiveawayEntry_giveawayId_riderId_key"
   ON "GiveawayEntry"("giveawayId", "riderId");
 CREATE UNIQUE INDEX "GiveawayEntry_opaquePublicReference_key"
@@ -401,6 +433,8 @@ CREATE UNIQUE INDEX "GiveawayAward_opaqueClaimReference_key"
   ON "GiveawayAward"("opaqueClaimReference");
 CREATE UNIQUE INDEX "GiveawayAward_claimTokenHash_key"
   ON "GiveawayAward"("claimTokenHash");
+CREATE UNIQUE INDEX "GiveawayAward_directAllocationKey_key"
+  ON "GiveawayAward"("directAllocationKey");
 CREATE UNIQUE INDEX "GiveawayDeliveryDetail_awardId_key"
   ON "GiveawayDeliveryDetail"("awardId");
 CREATE UNIQUE INDEX "GiveawayOperator_giveawayId_userId_key"
@@ -427,7 +461,10 @@ CREATE INDEX "GiveawayMechanicsVersion_reviewedByUserId_idx" ON "GiveawayMechani
 CREATE INDEX "GiveawayEligibilityCondition_groupId_idx" ON "GiveawayEligibilityCondition"("groupId");
 CREATE INDEX "GiveawayEligibilityCondition_perkId_idx" ON "GiveawayEligibilityCondition"("perkId");
 CREATE INDEX "GiveawayCampaignCode_giveawayId_expiresAt_idx" ON "GiveawayCampaignCode"("giveawayId", "expiresAt");
+CREATE INDEX "GiveawayCampaignCode_createdByUserId_idx" ON "GiveawayCampaignCode"("createdByUserId");
 CREATE INDEX "GiveawayCampaignCode_revokedByUserId_idx" ON "GiveawayCampaignCode"("revokedByUserId");
+CREATE INDEX "GiveawayCampaignCodeClaim_riderId_idx" ON "GiveawayCampaignCodeClaim"("riderId");
+CREATE INDEX "GiveawayCampaignCodeClaim_entryId_idx" ON "GiveawayCampaignCodeClaim"("entryId");
 CREATE INDEX "GiveawayEntry_giveawayId_status_idx" ON "GiveawayEntry"("giveawayId", "status");
 CREATE INDEX "GiveawayEntry_riderId_idx" ON "GiveawayEntry"("riderId");
 CREATE INDEX "GiveawayEntryEvent_entryId_idx" ON "GiveawayEntryEvent"("entryId");
@@ -499,6 +536,8 @@ ALTER TABLE "GiveawayEligibilityCondition"
 ALTER TABLE "GiveawayCampaignCode"
   ADD CONSTRAINT "GiveawayCampaignCode_giveawayId_fkey"
   FOREIGN KEY ("giveawayId") REFERENCES "EventGiveaway"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayCampaignCode_createdByUserId_fkey"
+  FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayCampaignCode_revokedByUserId_fkey"
   FOREIGN KEY ("revokedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -506,7 +545,17 @@ ALTER TABLE "GiveawayEntry"
   ADD CONSTRAINT "GiveawayEntry_giveawayId_fkey"
   FOREIGN KEY ("giveawayId") REFERENCES "EventGiveaway"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayEntry_riderId_fkey"
-  FOREIGN KEY ("riderId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  FOREIGN KEY ("riderId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayEntry_acknowledgedMechanicsVersionId_fkey"
+  FOREIGN KEY ("acknowledgedMechanicsVersionId") REFERENCES "GiveawayMechanicsVersion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "GiveawayCampaignCodeClaim"
+  ADD CONSTRAINT "GiveawayCampaignCodeClaim_campaignCodeId_fkey"
+  FOREIGN KEY ("campaignCodeId") REFERENCES "GiveawayCampaignCode"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayCampaignCodeClaim_riderId_fkey"
+  FOREIGN KEY ("riderId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayCampaignCodeClaim_entryId_fkey"
+  FOREIGN KEY ("entryId") REFERENCES "GiveawayEntry"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "GiveawayEntryEvent"
   ADD CONSTRAINT "GiveawayEntryEvent_giveawayId_fkey"
@@ -613,6 +662,30 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER "GiveawayAuditEvent_append_only"
 BEFORE UPDATE OR DELETE ON "GiveawayAuditEvent"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_audit_event_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_entry_event_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'GiveawayEntryEvent is append-only';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEntryEvent_append_only"
+BEFORE UPDATE OR DELETE ON "GiveawayEntryEvent"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_entry_event_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_campaign_code_claim_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'GiveawayCampaignCodeClaim is append-only';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayCampaignCodeClaim_append_only"
+BEFORE UPDATE OR DELETE ON "GiveawayCampaignCodeClaim"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_campaign_code_claim_mutation"();
 
 CREATE FUNCTION "prevent_giveaway_snapshot_mutation"()
 RETURNS TRIGGER AS $$
@@ -994,6 +1067,87 @@ CREATE TRIGGER "GiveawayEntryEvent_parentage_guard"
 BEFORE INSERT OR UPDATE OF "giveawayId", "entryId" ON "GiveawayEntryEvent"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_entry_event_parentage"();
 
+CREATE FUNCTION "validate_giveaway_entry_provenance"()
+RETURNS TRIGGER AS $$
+DECLARE
+  mechanics_giveaway_id TEXT;
+BEGIN
+  IF NEW."acknowledgedMechanicsVersionId" IS NOT NULL THEN
+    SELECT "giveawayId"
+      INTO mechanics_giveaway_id
+    FROM "GiveawayMechanicsVersion"
+    WHERE "id" = NEW."acknowledgedMechanicsVersionId";
+
+    IF NOT FOUND OR mechanics_giveaway_id <> NEW."giveawayId" THEN
+      RAISE EXCEPTION 'GiveawayEntry acknowledgement must belong to the same giveaway';
+    END IF;
+  END IF;
+
+  IF jsonb_typeof(NEW."qualifiedEligibilityGroupIds") <> 'array' THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must be a JSON array';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupIds") AS group_value(value)
+    WHERE jsonb_typeof(group_value.value) <> 'string'
+  ) THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must contain only ids';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value)
+    LEFT JOIN "GiveawayEligibilityGroup" AS eligibility_group
+      ON eligibility_group."id" = qualified_group_id.value
+    WHERE eligibility_group."id" IS NULL
+      OR eligibility_group."giveawayId" <> NEW."giveawayId"
+  ) THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEntry_provenance_guard"
+BEFORE INSERT OR UPDATE OF "giveawayId", "qualifiedEligibilityGroupIds", "acknowledgedMechanicsVersionId"
+ON "GiveawayEntry"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_entry_provenance"();
+
+CREATE FUNCTION "validate_giveaway_campaign_code_claim_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  code_giveaway_id TEXT;
+  entry_giveaway_id TEXT;
+  entry_rider_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO code_giveaway_id
+  FROM "GiveawayCampaignCode"
+  WHERE "id" = NEW."campaignCodeId";
+
+  SELECT "giveawayId", "riderId"
+    INTO entry_giveaway_id, entry_rider_id
+  FROM "GiveawayEntry"
+  WHERE "id" = NEW."entryId";
+
+  IF code_giveaway_id IS NULL
+    OR entry_giveaway_id IS NULL
+    OR code_giveaway_id <> entry_giveaway_id
+    OR entry_rider_id <> NEW."riderId" THEN
+    RAISE EXCEPTION 'GiveawayCampaignCodeClaim code, entry, and rider must share the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayCampaignCodeClaim_parentage_guard"
+BEFORE INSERT OR UPDATE OF "campaignCodeId", "riderId", "entryId"
+ON "GiveawayCampaignCodeClaim"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_campaign_code_claim_parentage"();
+
 CREATE FUNCTION "validate_giveaway_snapshot_parentage"()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -1116,6 +1270,10 @@ CREATE TRIGGER "GiveawayEntry_scope_immutable"
 BEFORE UPDATE OF "giveawayId" ON "GiveawayEntry"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
 
+CREATE TRIGGER "GiveawayCampaignCodeClaim_scope_immutable"
+BEFORE UPDATE OF "campaignCodeId", "riderId", "entryId" ON "GiveawayCampaignCodeClaim"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('campaignCodeId', 'riderId', 'entryId');
+
 CREATE TRIGGER "GiveawaySnapshot_scope_immutable"
 BEFORE UPDATE OF "giveawayId", "mechanicsVersionId" ON "GiveawaySnapshot"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'mechanicsVersionId');
@@ -1137,9 +1295,9 @@ BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
 
 CREATE TRIGGER "GiveawayAward_scope_immutable"
-BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "predecessorAwardId"
+BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "predecessorAwardId"
 ON "GiveawayAward"
-FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'predecessorAwardId');
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'predecessorAwardId');
 
 CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
 RETURNS TRIGGER AS $$
