@@ -628,7 +628,7 @@ BEGIN
   SELECT "giveawayId", "awardMode"
     INTO pool_giveaway_id, pool_award_mode
   FROM "GiveawayPrizePool"
-  WHERE "id" = NEW."prizePoolId";
+  WHERE "id" = NEW."prizePoolId" FOR UPDATE;
 
   IF NOT FOUND OR pool_giveaway_id <> NEW."giveawayId" THEN
     RAISE EXCEPTION 'GiveawayAward prize pool must belong to the same giveaway';
@@ -717,11 +717,26 @@ CREATE FUNCTION "validate_giveaway_prize_pool_inventory"()
 RETURNS TRIGGER AS $$
 DECLARE
   pool_item_count INTEGER;
+  pool_award_count INTEGER;
 BEGIN
   SELECT COUNT(*)
     INTO pool_item_count
   FROM "GiveawayPrizeItem"
   WHERE "prizePoolId" = NEW."id";
+
+  SELECT COUNT(*)
+    INTO pool_award_count
+  FROM "GiveawayAward"
+  WHERE "prizePoolId" = NEW."id";
+
+  IF TG_OP = 'UPDATE'
+    AND pool_award_count > 0
+    AND (
+      NEW."awardMode" IS DISTINCT FROM OLD."awardMode"
+      OR NEW."inventoryLimit" IS DISTINCT FROM OLD."inventoryLimit"
+    ) THEN
+    RAISE EXCEPTION 'GiveawayPrizePool award mode and inventory cannot change after awards exist';
+  END IF;
 
   IF NEW."awardMode" = 'guaranteed' THEN
     IF pool_item_count > 0 THEN
@@ -1029,6 +1044,11 @@ FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('prizePoolId'
 CREATE TRIGGER "GiveawayDraw_scope_immutable"
 BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
+
+CREATE TRIGGER "GiveawayAward_scope_immutable"
+BEFORE UPDATE OF "giveawayId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"
+ON "GiveawayAward"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'predecessorAwardId');
 
 CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
 RETURNS TRIGGER AS $$

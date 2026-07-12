@@ -131,6 +131,25 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('WHERE "id" = NEW."prizePoolId" FOR UPDATE');
   });
 
+  test("freezes prize-pool award mode and inventory after any award history", () => {
+    const awardInventoryFunction = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_award_inventory"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayAward_inventory_guard"'),
+    );
+    const poolInventoryFunction = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_prize_pool_inventory"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayPrizePool_inventory_guard"'),
+    );
+
+    expect(awardInventoryFunction).toContain('FOR UPDATE');
+    expect(poolInventoryFunction).toContain('pool_award_count');
+    expect(poolInventoryFunction).toContain('FROM "GiveawayAward"');
+    expect(poolInventoryFunction).toContain('NEW."awardMode" IS DISTINCT FROM OLD."awardMode"');
+    expect(poolInventoryFunction).toContain(
+      'NEW."inventoryLimit" IS DISTINCT FROM OLD."inventoryLimit"',
+    );
+  });
+
   test("guards every required cross-campaign parentage link in the migration", () => {
     const guards = [
       ["validate_giveaway_draw_parentage", "GiveawayDraw_parentage_guard"],
@@ -178,6 +197,7 @@ describe("giveaway Prisma schema contract", () => {
       "GiveawayPrizePool_scope_immutable",
       "GiveawayPrizeItem_scope_immutable",
       "GiveawayDraw_scope_immutable",
+      "GiveawayAward_scope_immutable",
     ];
 
     for (const triggerName of immutableScopeTriggers) {
@@ -186,5 +206,8 @@ describe("giveaway Prisma schema contract", () => {
 
     expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_perk_event_parentage"()');
     expect(giveawayMigrationSql).toContain('CREATE TRIGGER "Perk_giveaway_event_parentage_guard"');
+    expect(giveawayMigrationSql).toContain(
+      'BEFORE UPDATE OF "giveawayId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"',
+    );
   });
 });
