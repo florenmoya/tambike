@@ -181,6 +181,8 @@ CREATE TABLE "GiveawaySnapshotEntry" (
   "entryId" TEXT NOT NULL,
   "opaquePublicReference" TEXT NOT NULL,
   "frozenWeight" INTEGER NOT NULL,
+  "qualifiedSourceFingerprint" TEXT NOT NULL,
+  "qualifiedEligibilityGroupIds" JSONB NOT NULL,
   "rankSourceDigest" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -603,21 +605,47 @@ ALTER TABLE "GiveawayAuditEvent"
 CREATE FUNCTION "prevent_giveaway_audit_event_mutation"()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'UPDATE' THEN
-    RAISE EXCEPTION 'GiveawayAuditEvent is append-only';
-  END IF;
-
-  IF current_setting('tambike.allow_giveaway_audit_purge', true) IS DISTINCT FROM 'on' THEN
-    RAISE EXCEPTION 'GiveawayAuditEvent deletes require the seed-only transaction-local purge setting';
-  END IF;
-
-  RETURN OLD;
+  RAISE EXCEPTION 'GiveawayAuditEvent is append-only';
+  RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayAuditEvent_append_only"
 BEFORE UPDATE OR DELETE ON "GiveawayAuditEvent"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_audit_event_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_snapshot_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'GiveawaySnapshot is immutable';
+  END IF;
+
+  IF OLD."seedRevealedAt" IS NOT NULL
+    OR NEW."seedRevealedAt" IS NULL
+    OR (to_jsonb(NEW) - 'seedRevealedAt' - 'updatedAt') IS DISTINCT FROM (to_jsonb(OLD) - 'seedRevealedAt' - 'updatedAt') THEN
+    RAISE EXCEPTION 'GiveawaySnapshot is immutable except for its initial seed revelation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawaySnapshot_immutable"
+BEFORE UPDATE OR DELETE ON "GiveawaySnapshot"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_snapshot_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_snapshot_entry_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'GiveawaySnapshotEntry is immutable';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawaySnapshotEntry_immutable"
+BEFORE UPDATE OR DELETE ON "GiveawaySnapshotEntry"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_snapshot_entry_mutation"();
 
 -- PostgreSQL CHECK constraints cannot inspect a prize item's parent pool. Keep
 -- the optional item for unlimited guaranteed awards only, and make finite
@@ -738,8 +766,9 @@ BEGIN
     AND (
       NEW."awardMode" IS DISTINCT FROM OLD."awardMode"
       OR NEW."inventoryLimit" IS DISTINCT FROM OLD."inventoryLimit"
+      OR NEW."maxWinsPerRider" IS DISTINCT FROM OLD."maxWinsPerRider"
     ) THEN
-    RAISE EXCEPTION 'GiveawayPrizePool award mode and inventory cannot change after awards exist';
+    RAISE EXCEPTION 'GiveawayPrizePool award mode, inventory, and winner limit cannot change after awards exist';
   END IF;
 
   IF NEW."awardMode" = 'guaranteed' THEN
@@ -763,8 +792,32 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayPrizePool_inventory_guard"
-BEFORE INSERT OR UPDATE OF "awardMode", "inventoryLimit" ON "GiveawayPrizePool"
+BEFORE INSERT OR UPDATE OF "awardMode", "inventoryLimit", "maxWinsPerRider" ON "GiveawayPrizePool"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_pool_inventory"();
+
+CREATE FUNCTION "validate_event_giveaway_winner_limits"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."maxWinsPerRider" IS NOT DISTINCT FROM OLD."maxWinsPerRider"
+    AND NEW."maxWinsTotal" IS NOT DISTINCT FROM OLD."maxWinsTotal" THEN
+    RETURN NEW;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM "GiveawayAward"
+    WHERE "giveawayId" = OLD."id"
+  ) THEN
+    RAISE EXCEPTION 'EventGiveaway winner limits cannot change after awards exist';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "EventGiveaway_winner_limits_guard"
+BEFORE UPDATE OF "maxWinsPerRider", "maxWinsTotal" ON "EventGiveaway"
+FOR EACH ROW EXECUTE FUNCTION "validate_event_giveaway_winner_limits"();
 
 -- The aggregate stores simple ids rather than duplicating campaign ids on all
 -- children, so join-aware write guards preserve parentage without redundant

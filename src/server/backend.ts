@@ -310,16 +310,16 @@ type GiveawayCampaignCodeRecord = {
   claimedRiderIds: Set<string>;
 };
 
-type GiveawaySnapshotEntryRecord = {
+type GiveawaySnapshotEntryRecord = Readonly<{
   id: string;
   entryId: string;
   riderId: string;
   opaquePublicReference: string;
   frozenWeight: number;
   qualifiedSourceFingerprint: string;
-  qualifiedGroupIds: string[];
+  qualifiedGroupIds: readonly string[];
   rankSourceDigest: string;
-};
+}>;
 
 type GiveawaySnapshotRecord = {
   id: string;
@@ -335,7 +335,7 @@ type GiveawaySnapshotRecord = {
   lockedByUserId: string;
   lockedAt: string;
   seedRevealedAt?: string;
-  entries: GiveawaySnapshotEntryRecord[];
+  entries: readonly GiveawaySnapshotEntryRecord[];
 };
 
 type GiveawayDrawRecord = {
@@ -869,6 +869,21 @@ export class TambikeBackend {
     ) {
       throw new BackendError("GIVEAWAY_ENTRY_MODE_LOCKED", "GIVEAWAY_ENTRY_MODE_LOCKED");
     }
+    const hasAwardHistory = giveaway.awards.length > 0;
+    const hasConfigurationPatch =
+      Object.hasOwn(patch, "eligibilityGroups") && Object.hasOwn(patch, "prizePools");
+    const nextWinnerLimits = Object.hasOwn(patch, "winnerLimits")
+      ? (patch.winnerLimits as CreateGiveawayInput["winnerLimits"])
+      : undefined;
+    if (
+      hasAwardHistory &&
+      (hasConfigurationPatch ||
+        (nextWinnerLimits !== undefined &&
+          (giveaway.maxWinsPerRider !== nextWinnerLimits.perRider ||
+            giveaway.maxWinsTotal !== nextWinnerLimits.total)))
+    ) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
     const currentMechanics = this.currentGiveawayMechanics(giveaway);
     let nextMechanics = currentMechanics.mechanics;
     let nextTerms = currentMechanics.terms;
@@ -938,10 +953,7 @@ export class TambikeBackend {
         changed = true;
       }
     }
-    if (Object.hasOwn(patch, "eligibilityGroups") && Object.hasOwn(patch, "prizePools")) {
-      if (giveaway.awards.length > 0) {
-        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
-      }
+    if (hasConfigurationPatch) {
       this.replaceGiveawayConfiguration(
         giveaway,
         patch.eligibilityGroups as CreateGiveawayInput["eligibilityGroups"],
@@ -1666,25 +1678,30 @@ export class TambikeBackend {
       .filter((entry) => entry.status === "eligible")
       .sort((left, right) => left.opaquePublicReference.localeCompare(right.opaquePublicReference));
     const configDigest = this.calculateGiveawayConfigDigest(giveaway, mechanics.id);
-    const snapshotEntries = entries.map<GiveawaySnapshotEntryRecord>((entry) => ({
-      id: `giveaway-snapshot-entry-${randomUUID()}`,
-      entryId: entry.id,
-      riderId: entry.riderId,
-      opaquePublicReference: entry.opaquePublicReference,
-      frozenWeight: entry.currentWeight,
-      qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
-      qualifiedGroupIds: [...entry.qualifiedGroupIds],
-      rankSourceDigest: createHash("sha256")
-        .update(
-          canonicalizeJson({
-            entryId: entry.id,
-            opaquePublicReference: entry.opaquePublicReference,
-            qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
-            weight: entry.currentWeight,
-          }),
-        )
-        .digest("hex"),
-    }));
+    const snapshotEntries: readonly GiveawaySnapshotEntryRecord[] = Object.freeze(
+      entries.map((entry) =>
+        Object.freeze({
+          id: `giveaway-snapshot-entry-${randomUUID()}`,
+          entryId: entry.id,
+          riderId: entry.riderId,
+          opaquePublicReference: entry.opaquePublicReference,
+          frozenWeight: entry.currentWeight,
+          qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+          qualifiedGroupIds: Object.freeze([...entry.qualifiedGroupIds]),
+          rankSourceDigest: createHash("sha256")
+            .update(
+              canonicalizeJson({
+                entryId: entry.id,
+                opaquePublicReference: entry.opaquePublicReference,
+                qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+                qualifiedGroupIds: entry.qualifiedGroupIds,
+                weight: entry.currentWeight,
+              }),
+            )
+            .digest("hex"),
+        }),
+      ),
+    );
     const snapshotDigest = createHash("sha256")
       .update(
         canonicalizeJson({
@@ -2191,7 +2208,11 @@ export class TambikeBackend {
       record.expiresAt === undefined
         ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
         : record.expiresAt;
-    if (typeof expiresAt !== "string" || Number.isNaN(new Date(expiresAt).getTime())) {
+    if (typeof expiresAt !== "string") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const expiresAtMs = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return { maxUses: record.maxUses as number, expiresAt };
@@ -2635,6 +2656,10 @@ export class TambikeBackend {
           type: "source_revalidated",
           sourceKey: `lock-revalidation:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
           weightDelta: -entry.currentWeight,
+          sourceSnapshot: {
+            qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+            sourceFingerprint: qualification.sourceFingerprint,
+          },
           idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
         });
       }
@@ -2654,13 +2679,19 @@ export class TambikeBackend {
       entry.qualifiedSourceFingerprint = qualification.sourceFingerprint;
       entry.qualifiedGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
       entry.updatedAt = now;
+      this.voidIneligibleDirectEntryAwards(giveaway, entry, undefined, "lock_pool_revalidation");
       if (changed) {
         this.recordGiveawayEntryEvent(giveaway, entry, {
           type: "source_revalidated",
           sourceKey: `lock-revalidation:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
           weightDelta,
+          sourceSnapshot: {
+            qualifiedGroupIds: entry.qualifiedGroupIds,
+            sourceFingerprint: entry.qualifiedSourceFingerprint,
+          },
           idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
         });
+        this.allocateEntryTimeAwards(giveaway, entry);
       }
     }
   }
@@ -2728,6 +2759,7 @@ export class TambikeBackend {
     entry: GiveawayEntryRecord,
     actorUserId: string | undefined,
     reason: string,
+    shouldVoid: (award: GiveawayAwardRecord) => boolean = () => true,
   ) {
     for (const award of giveaway.awards.filter(
       (candidate) =>
@@ -2736,6 +2768,7 @@ export class TambikeBackend {
         candidate.isCurrent &&
         ["pending_verification", "claimable", "verified"].includes(candidate.status),
     )) {
+      if (!shouldVoid(award)) continue;
       award.isCurrent = false;
       award.status = "voided";
       award.reasonDigest = this.hashGiveawayReason(reason);
@@ -2748,9 +2781,22 @@ export class TambikeBackend {
       this.auditGiveaway(giveaway, actorUserId, "GIVEAWAY_AWARD_VOIDED", "award", award.id, {
         awardId: award.id,
         entryId: entry.id,
+        prizePoolId: award.prizePoolId,
         reasonDigest: award.reasonDigest,
       });
     }
+  }
+
+  private voidIneligibleDirectEntryAwards(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+    actorUserId: string | undefined,
+    reason: string,
+  ) {
+    this.voidDirectEntryAwards(giveaway, entry, actorUserId, reason, (award) => {
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+      return !pool || !this.isEntryEligibleForPool(entry, pool);
+    });
   }
 
   private createGiveawayAward(
@@ -3196,29 +3242,36 @@ export class TambikeBackend {
       return;
     }
 
-    if (
-      existing.status === "eligible" &&
-      (existing.currentWeight !== nextWeight ||
+    if (existing.status === "eligible") {
+      const nextQualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
+      const changed =
+        existing.currentWeight !== nextWeight ||
         existing.qualifiedSourceFingerprint !== sourceFingerprint ||
-        !this.haveSameGiveawayGroupIds(
-          existing.qualifiedGroupIds,
-          qualifiedGroups.map(({ group }) => group.id),
-        ))
-    ) {
+        !this.haveSameGiveawayGroupIds(existing.qualifiedGroupIds, nextQualifiedGroupIds);
       const weightDelta = nextWeight - existing.currentWeight;
-      existing.currentWeight = nextWeight;
-      existing.qualifiedSourceFingerprint = sourceFingerprint;
-      existing.qualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
-      existing.updatedAt = new Date().toISOString();
-      this.recordAutomaticEntryEvent(
+      if (changed) {
+        existing.currentWeight = nextWeight;
+        existing.qualifiedSourceFingerprint = sourceFingerprint;
+        existing.qualifiedGroupIds = nextQualifiedGroupIds;
+        existing.updatedAt = new Date().toISOString();
+      }
+      this.voidIneligibleDirectEntryAwards(
         giveaway,
         existing,
-        "source_revalidated",
-        weightDelta,
-        qualifiedGroups,
-        sourceFingerprint,
+        undefined,
+        "automatic_pool_revalidation",
       );
-      this.allocateEntryTimeAwards(giveaway, existing);
+      if (changed) {
+        this.recordAutomaticEntryEvent(
+          giveaway,
+          existing,
+          "source_revalidated",
+          weightDelta,
+          qualifiedGroups,
+          sourceFingerprint,
+        );
+        this.allocateEntryTimeAwards(giveaway, existing);
+      }
     }
   }
 

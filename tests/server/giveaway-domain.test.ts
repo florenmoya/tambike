@@ -421,6 +421,77 @@ describe("in-memory event giveaway lifecycle", () => {
     ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_MODE_LOCKED" });
   });
 
+  test("freezes campaign and pool winner limits after a direct award exists", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { eventId, organizer, admin, rider } = await createPublishedOrganizerEvent(backend);
+    const eligibilityGroups: CreateGiveawayInput["eligibilityGroups"] = [
+      {
+        id: "active-rider",
+        label: "Going riders with an active pass",
+        weight: 1,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+    ];
+    const prizePools: CreateGiveawayInput["prizePools"] = [
+      {
+        id: "limited-first-come",
+        title: "Limited first-come prize",
+        awardMode: "first_come",
+        fulfilmentMode: "onsite",
+        eligibilityGroupIds: ["active-rider"],
+        perRiderLimit: 1,
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Frozen winner limit prize" }],
+      },
+    ];
+    const giveaway = await backend.createGiveaway(
+      organizer.sessionToken,
+      eventId,
+      giveawayInput(eventId, {
+        eligibilityGroups,
+        prizePools,
+        winnerLimits: { perRider: 1, total: 1 },
+      }),
+    );
+    await backend.submitGiveawayForReview(organizer.sessionToken, giveaway.id);
+    await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, { decision: "approved" });
+    await backend.openGiveaway(organizer.sessionToken, giveaway.id);
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await backend.pauseGiveaway(organizer.sessionToken, giveaway.id);
+
+    await expect(
+      backend.updateGiveaway(organizer.sessionToken, {
+        id: giveaway.id,
+        title: "Winner-limit change must not partially update",
+        winnerLimits: { perRider: 2, total: 2 },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    await expect(backend.listOrganizerGiveaways(organizer.sessionToken, eventId)).resolves.toEqual([
+      expect.objectContaining({ id: giveaway.id, title: "Ride day giveaway" }),
+    ]);
+    await expect(
+      backend.updateGiveaway(organizer.sessionToken, {
+        id: giveaway.id,
+        eligibilityGroups,
+        prizePools: [
+          {
+            id: "limited-first-come",
+            title: "Limited first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            eligibilityGroupIds: ["active-rider"],
+            perRiderLimit: 2,
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Frozen winner limit prize" }],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+  });
+
   test("revalidates an equal-weight entry when its qualified source fingerprint changes", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
     const { giveaway, eventId } = await createApprovedOpenGiveaway(backend);
@@ -769,14 +840,12 @@ describe("in-memory event giveaway lifecycle", () => {
       backend.claimGiveawayCampaignCode(extra.sessionToken, giveaway.id, createdCode.code),
     ).rejects.toMatchObject({ code: "GIVEAWAY_CODE_UNAVAILABLE" });
 
-    const expiredCode = await backend.createGiveawayCampaignCode(
-      organizer.sessionToken,
-      giveaway.id,
-      { maxUses: 1, expiresAt: new Date(Date.now() - 1_000).toISOString() },
-    );
     await expect(
-      backend.claimGiveawayCampaignCode(extra.sessionToken, giveaway.id, expiredCode.code),
-    ).rejects.toMatchObject({ code: "GIVEAWAY_CODE_UNAVAILABLE" });
+      backend.createGiveawayCampaignCode(organizer.sessionToken, giveaway.id, {
+        maxUses: 1,
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(JSON.stringify(await backend.getPublicGiveaway(giveaway.id))).not.toContain(createdCode.code);
   });
 
@@ -880,6 +949,10 @@ describe("in-memory event giveaway lifecycle", () => {
 
     await withDrawEncryptionKey(async () => {
       const first = await backend.lockGiveaway(organizer.sessionToken, giveaway.id);
+      await backend.registerForEvent(rider.sessionToken, eventId, {
+        status: "interested",
+        attendanceType: "direct",
+      });
       const second = await backend.lockGiveaway(organizer.sessionToken, giveaway.id);
       expect(first.snapshot).toMatchObject({ candidateCount: 1, algorithmVersion: "hmac-sha256-v1" });
       expect(second.snapshot).toEqual(first.snapshot);
@@ -1282,6 +1355,93 @@ describe("in-memory event giveaway lifecycle", () => {
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+  });
+
+  test("voids and reallocates a direct pool award when a rider keeps global eligibility but loses the pool group", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        eligibilityGroups: [
+          {
+            id: "rsvp-pass",
+            label: "Going rider with an active pass",
+            weight: 1,
+            conditions: [{ source: "active_rsvp_pass" }],
+          },
+          {
+            id: "checked-in",
+            label: "Confirmed attendee",
+            weight: 1,
+            conditions: [{ source: "confirmed_check_in" }],
+          },
+        ],
+        prizePools: [
+          {
+            id: "rsvp-only-first-come",
+            title: "RSVP-only first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            eligibilityGroupIds: ["rsvp-pass"],
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Released RSVP prize" }],
+          },
+          {
+            id: "check-in-only-first-come",
+            title: "Check-in-only first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            eligibilityGroupIds: ["checked-in"],
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Confirmed attendee prize" }],
+          },
+        ],
+        winnerLimits: { perRider: 1, total: 2 },
+      }),
+    );
+    const nextRider = await createExtraRider(backend, "pool-specific-release");
+    const registration = await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    if (!registration.pass) throw new Error("TEST_PASS_MISSING");
+    await backend.scanPass(
+      context.admin.sessionToken,
+      context.eventId,
+      registration.pass.qrToken,
+      "staff_camera",
+    );
+    await expect(
+      backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({
+      status: "selected",
+      entryCount: 2,
+      award: { prizePoolTitle: "RSVP-only first-come prize" },
+    });
+
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "interested",
+      attendanceType: "direct",
+    });
+    await expect(
+      backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({
+      giveawayId: context.giveaway.id,
+      status: "selected",
+      entryCount: 1,
+      award: { prizePoolTitle: "Check-in-only first-come prize" },
+    });
+    expect(await backend.auditCount("GIVEAWAY_AWARD_VOIDED")).toBe(1);
+
+    await backend.registerForEvent(nextRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await expect(
+      backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({
+      status: "selected",
+      award: { prizePoolTitle: "RSVP-only first-come prize" },
+    });
   });
 
   test("releases direct first-come inventory when a manual entry is revoked before lock", async () => {

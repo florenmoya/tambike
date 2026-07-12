@@ -43,3 +43,20 @@ The undeployed `20260713000000_flexible_event_giveaways` migration was amended w
 - `git diff --check` — passed.
 
 No persistent database was seeded, reset, or migrated. Browser smoke testing is deferred to the later actions/routes/UI task because this task intentionally adds only in-memory backend behavior and tests.
+
+## Post-review integrity follow-up
+
+- Revalidation now evaluates every current direct award against the entry's current pool eligibility. A lost pool group voids only the affected award, releases a reserved finite item, records `GIVEAWAY_AWARD_VOIDED`, preserves the revalidation source evidence, and then allocates newly eligible entry-time awards.
+- Snapshot entries now persist the frozen source fingerprint and qualified eligibility-group IDs. The in-memory snapshot entries and their group arrays are frozen; both the entry evidence and snapshot digest include those facts.
+- The undeployed migration blocks all snapshot-entry updates/deletes and permits a snapshot update only for the one-way `seedRevealedAt` null-to-value transition (with `updatedAt` excluded from the comparison). Snapshot deletion is rejected.
+- Campaign and prize-pool winner limits are immutable after any award history, in both the in-memory update path and the migration guards.
+- Giveaway audit rows are unconditionally append-only. The seed no longer has a purge bypass and refuses to run if an event giveaway or giveaway audit record exists; a fresh giveaway-free database remains seedable.
+- Campaign-code creation now rejects missing, malformed, past, and equal-to-now expiries before issuing a token.
+
+### Integrity regression evidence
+
+- RED: `npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-schema-contract.test.ts` — 35/41 passed; the six failures covered mutable winner limits, past code creation, retained pool-specific award, absent frozen snapshot fields/guards, and the audit purge bypass.
+- GREEN: `npm run db:generate && npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-schema-contract.test.ts` — 42/42 passed.
+- GREEN: `npm run test:server` — 7 files, 113/113 tests passed.
+- GREEN: `npx prisma validate`, `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` all passed.
+- `npx prisma migrate status` was invoked but cannot run in this isolated worktree because neither `DATABASE_URL` nor `DIRECT_URL` is configured. No persistent database was connected, seeded, reset, or migrated.

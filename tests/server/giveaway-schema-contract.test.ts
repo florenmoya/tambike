@@ -13,6 +13,7 @@ const giveawayMigrationSql = readFileSync(
   "utf8",
 );
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
+const prismaSeed = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
 
 const requiredEnums = {
   GiveawayKind: ["raffle", "giveaway"],
@@ -145,6 +146,64 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
   });
 
+  test("persists the frozen source fingerprint and qualified groups on every snapshot entry", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const snapshotEntry = models.get("GiveawaySnapshotEntry");
+
+    expect(snapshotEntry?.fields.find((field) => field.name === "qualifiedSourceFingerprint")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(snapshotEntry?.fields.find((field) => field.name === "qualifiedEligibilityGroupIds")).toMatchObject({
+      kind: "scalar",
+      type: "Json",
+    });
+    expect(prismaSchema).toMatch(/qualifiedSourceFingerprint\s+String\s*\n/);
+    expect(prismaSchema).toMatch(/qualifiedEligibilityGroupIds\s+Json\s*\n/);
+    expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
+    expect(giveawayMigrationSql).toContain('"qualifiedEligibilityGroupIds" JSONB NOT NULL');
+  });
+
+  test("keeps snapshots immutable except for a single seed revelation and blocks snapshot-entry mutation", () => {
+    const snapshotGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "prevent_giveaway_snapshot_mutation"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawaySnapshot_immutable"'),
+    );
+    const snapshotEntryGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "prevent_giveaway_snapshot_entry_mutation"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawaySnapshotEntry_immutable"'),
+    );
+
+    expect(snapshotGuard).toContain("IF TG_OP = 'DELETE' THEN");
+    expect(snapshotGuard).toContain('OLD."seedRevealedAt" IS NOT NULL');
+    expect(snapshotGuard).toContain('NEW."seedRevealedAt" IS NULL');
+    expect(snapshotGuard).toContain(
+      "(to_jsonb(NEW) - 'seedRevealedAt' - 'updatedAt') IS DISTINCT FROM (to_jsonb(OLD) - 'seedRevealedAt' - 'updatedAt')",
+    );
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawaySnapshot_immutable"');
+    expect(giveawayMigrationSql).toContain('BEFORE UPDATE OR DELETE ON "GiveawaySnapshot"');
+    expect(snapshotEntryGuard).toContain("RAISE EXCEPTION 'GiveawaySnapshotEntry is immutable'");
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawaySnapshotEntry_immutable"');
+    expect(giveawayMigrationSql).toContain('BEFORE UPDATE OR DELETE ON "GiveawaySnapshotEntry"');
+  });
+
+  test("has no audit-purge bypass and fails seed reset closed when giveaway history exists", () => {
+    const auditGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "prevent_giveaway_audit_event_mutation"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayAuditEvent_append_only"'),
+    );
+
+    expect(auditGuard).toContain("RAISE EXCEPTION 'GiveawayAuditEvent is append-only'");
+    expect(auditGuard).not.toContain("current_setting");
+    expect(giveawayMigrationSql).not.toContain("tambike.allow_giveaway_audit_purge");
+    expect(prismaSeed).toContain("REFUSING_TO_SEED_WITH_GIVEAWAY_HISTORY");
+    expect(prismaSeed).toContain("prisma.eventGiveaway.count()");
+    expect(prismaSeed).toContain("prisma.giveawayAuditEvent.count()");
+    expect(prismaSeed).not.toContain("giveawayAuditEvent.deleteMany");
+    expect(prismaSeed).not.toContain("eventGiveaway.deleteMany");
+    expect(prismaSeed).not.toContain("tambike.allow_giveaway_audit_purge");
+  });
+
   test("supports direct entry awards without inventing draw or snapshot provenance", () => {
     const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
     const award = models.get("GiveawayAward");
@@ -218,6 +277,28 @@ describe("giveaway Prisma schema contract", () => {
     expect(poolInventoryFunction).toContain('NEW."awardMode" IS DISTINCT FROM OLD."awardMode"');
     expect(poolInventoryFunction).toContain(
       'NEW."inventoryLimit" IS DISTINCT FROM OLD."inventoryLimit"',
+    );
+    expect(poolInventoryFunction).toContain(
+      'NEW."maxWinsPerRider" IS DISTINCT FROM OLD."maxWinsPerRider"',
+    );
+    expect(giveawayMigrationSql).toContain(
+      'BEFORE INSERT OR UPDATE OF "awardMode", "inventoryLimit", "maxWinsPerRider" ON "GiveawayPrizePool"',
+    );
+  });
+
+  test("freezes campaign winner limits after any award history", () => {
+    const campaignWinnerLimitFunction = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_event_giveaway_winner_limits"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "EventGiveaway_winner_limits_guard"'),
+    );
+
+    expect(campaignWinnerLimitFunction).toContain('FROM "GiveawayAward"');
+    expect(campaignWinnerLimitFunction).toContain('"giveawayId" = OLD."id"');
+    expect(campaignWinnerLimitFunction).toContain('NEW."maxWinsPerRider" IS NOT DISTINCT FROM OLD."maxWinsPerRider"');
+    expect(campaignWinnerLimitFunction).toContain('NEW."maxWinsTotal" IS NOT DISTINCT FROM OLD."maxWinsTotal"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "EventGiveaway_winner_limits_guard"');
+    expect(giveawayMigrationSql).toContain(
+      'BEFORE UPDATE OF "maxWinsPerRider", "maxWinsTotal" ON "EventGiveaway"',
     );
   });
 

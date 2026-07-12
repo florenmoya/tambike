@@ -779,6 +779,8 @@ model GiveawaySnapshotEntry {
   entryId               String
   opaquePublicReference String
   frozenWeight          Int
+  qualifiedSourceFingerprint String
+  qualifiedEligibilityGroupIds Json
   rankSourceDigest      String
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

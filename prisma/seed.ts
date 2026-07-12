@@ -35,42 +35,19 @@ const demoScannerPass = {
 };
 
 async function main() {
+  const [giveawayCount, giveawayAuditCount] = await Promise.all([
+    prisma.eventGiveaway.count(),
+    prisma.giveawayAuditEvent.count(),
+  ]);
+  if (giveawayCount > 0 || giveawayAuditCount > 0) {
+    throw new Error("REFUSING_TO_SEED_WITH_GIVEAWAY_HISTORY");
+  }
+
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
   const internalOwnerPasswordHash = await bcrypt.hash(randomUUID(), 10);
 
   await prisma.$transaction(async (transaction) => {
-    // This transaction-local setting is the only supported audit-purge bypass,
-    // and is used solely to reset the disposable seed dataset.
-    await transaction.$executeRaw`
-      SELECT set_config('tambike.allow_giveaway_audit_purge', 'on', true)
-    `;
-
-    await transaction.giveawayDeliveryDetail.deleteMany();
-    await transaction.giveawayFulfillment.deleteMany();
-    await transaction.giveawayClaimVerification.deleteMany();
-    // Redraw awards preserve a self-referential predecessor in production.
-    // Clear it only inside this disposable reset transaction before deleting all awards.
-    await transaction.giveawayAward.updateMany({
-      data: { predecessorAwardId: null },
-    });
-    await transaction.giveawayAward.deleteMany();
-    await transaction.giveawayDraw.deleteMany();
-    await transaction.giveawaySnapshotEntry.deleteMany();
-    await transaction.giveawaySnapshot.deleteMany();
-    await transaction.giveawayEntryEvent.deleteMany();
-    await transaction.giveawayEntry.deleteMany();
-    await transaction.giveawayPrizePoolEligibilityGroup.deleteMany();
-    await transaction.giveawayPrizeItem.deleteMany();
-    await transaction.giveawayPrizePool.deleteMany();
-    await transaction.giveawayEligibilityCondition.deleteMany();
-    await transaction.giveawayEligibilityGroup.deleteMany();
-    await transaction.giveawayCampaignCode.deleteMany();
-    await transaction.giveawayOperator.deleteMany();
-    await transaction.giveawayMechanicsVersion.deleteMany();
-    await transaction.giveawayAuditEvent.deleteMany();
-    await transaction.eventGiveaway.deleteMany();
-
     await transaction.auditLog.deleteMany();
     await transaction.notification.deleteMany();
     await transaction.flagReport.deleteMany();
