@@ -271,14 +271,15 @@ CREATE TABLE "GiveawayDraw" (
 CREATE TABLE "GiveawayAward" (
   "id" TEXT NOT NULL,
   "giveawayId" TEXT NOT NULL,
-  "drawId" TEXT NOT NULL,
+  "entryId" TEXT NOT NULL,
+  "drawId" TEXT,
   "prizePoolId" TEXT NOT NULL,
   "prizeItemId" TEXT,
-  "snapshotEntryId" TEXT NOT NULL,
+  "snapshotEntryId" TEXT,
   "winnerUserId" TEXT NOT NULL,
   "status" "GiveawayAwardStatus" NOT NULL DEFAULT 'pending_verification',
   "isCurrent" BOOLEAN NOT NULL DEFAULT true,
-  "rank" INTEGER NOT NULL,
+  "rank" INTEGER,
   "opaqueClaimReference" TEXT NOT NULL,
   "claimTokenHash" TEXT,
   "claimDeadlineAt" TIMESTAMP(3),
@@ -288,7 +289,8 @@ CREATE TABLE "GiveawayAward" (
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
   CONSTRAINT "GiveawayAward_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "GiveawayAward_rank_positive" CHECK ("rank" > 0)
+  CONSTRAINT "GiveawayAward_provenance_paired" CHECK (("drawId" IS NULL) = ("snapshotEntryId" IS NULL)),
+  CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0))
 );
 
 CREATE TABLE "GiveawayClaimVerification" (
@@ -408,10 +410,6 @@ CREATE UNIQUE INDEX "GiveawayAward_currentPrizeItem_key"
   ON "GiveawayAward" ("prizeItemId")
   WHERE "isCurrent" AND "prizeItemId" IS NOT NULL;
 
-CREATE UNIQUE INDEX "GiveawayAward_currentPoolSnapshotEntry_key"
-  ON "GiveawayAward" ("giveawayId", "prizePoolId", "snapshotEntryId")
-  WHERE "isCurrent";
-
 CREATE INDEX "EventGiveaway_eventId_status_idx" ON "EventGiveaway"("eventId", "status");
 CREATE INDEX "EventGiveaway_complianceStatus_createdAt_idx" ON "EventGiveaway"("complianceStatus", "createdAt");
 CREATE INDEX "EventGiveaway_status_entryOpensAt_idx" ON "EventGiveaway"("status", "entryOpensAt");
@@ -443,6 +441,7 @@ CREATE INDEX "GiveawayDraw_giveawayId_status_idx" ON "GiveawayDraw"("giveawayId"
 CREATE INDEX "GiveawayDraw_snapshotId_idx" ON "GiveawayDraw"("snapshotId");
 CREATE INDEX "GiveawayDraw_initiatedByUserId_idx" ON "GiveawayDraw"("initiatedByUserId");
 CREATE INDEX "GiveawayAward_giveawayId_status_idx" ON "GiveawayAward"("giveawayId", "status");
+CREATE INDEX "GiveawayAward_entryId_idx" ON "GiveawayAward"("entryId");
 CREATE INDEX "GiveawayAward_drawId_idx" ON "GiveawayAward"("drawId");
 CREATE INDEX "GiveawayAward_prizePoolId_idx" ON "GiveawayAward"("prizePoolId");
 CREATE INDEX "GiveawayAward_prizeItemId_idx" ON "GiveawayAward"("prizeItemId");
@@ -554,6 +553,8 @@ ALTER TABLE "GiveawayDraw"
 ALTER TABLE "GiveawayAward"
   ADD CONSTRAINT "GiveawayAward_giveawayId_fkey"
   FOREIGN KEY ("giveawayId") REFERENCES "EventGiveaway"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayAward_entryId_fkey"
+  FOREIGN KEY ("entryId") REFERENCES "GiveawayEntry"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayAward_drawId_fkey"
   FOREIGN KEY ("drawId") REFERENCES "GiveawayDraw"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayAward_prizePoolId_fkey"
@@ -793,20 +794,50 @@ FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_draw_parentage"();
 CREATE FUNCTION "validate_giveaway_award_parentage"()
 RETURNS TRIGGER AS $$
 DECLARE
+  entry_giveaway_id TEXT;
+  entry_rider_id TEXT;
   draw_giveaway_id TEXT;
+  draw_snapshot_id TEXT;
   pool_giveaway_id TEXT;
   snapshot_entry_giveaway_id TEXT;
+  snapshot_entry_snapshot_id TEXT;
+  snapshot_entry_entry_id TEXT;
   snapshot_entry_rider_id TEXT;
   predecessor_giveaway_id TEXT;
   predecessor_pool_id TEXT;
 BEGIN
-  SELECT "giveawayId"
-    INTO draw_giveaway_id
-  FROM "GiveawayDraw"
-  WHERE "id" = NEW."drawId";
+  SELECT "giveawayId", "riderId"
+    INTO entry_giveaway_id, entry_rider_id
+  FROM "GiveawayEntry"
+  WHERE "id" = NEW."entryId";
 
-  IF NOT FOUND OR draw_giveaway_id <> NEW."giveawayId" THEN
-    RAISE EXCEPTION 'GiveawayAward draw must belong to the same giveaway';
+  IF NOT FOUND
+    OR entry_giveaway_id <> NEW."giveawayId"
+    OR entry_rider_id <> NEW."winnerUserId" THEN
+    RAISE EXCEPTION 'GiveawayAward entry must belong to the same giveaway rider';
+  END IF;
+
+  IF (NEW."drawId" IS NULL) <> (NEW."snapshotEntryId" IS NULL) THEN
+    RAISE EXCEPTION 'GiveawayAward draw and snapshot entry provenance must be paired';
+  END IF;
+
+  IF NEW."drawId" IS NULL THEN
+    IF NEW."rank" IS NOT NULL THEN
+      RAISE EXCEPTION 'Entry-time GiveawayAward rows cannot have a draw rank';
+    END IF;
+  ELSE
+    IF NEW."rank" IS NULL OR NEW."rank" <= 0 THEN
+      RAISE EXCEPTION 'Draw-backed GiveawayAward rows require a positive rank';
+    END IF;
+
+    SELECT "giveawayId", "snapshotId"
+      INTO draw_giveaway_id, draw_snapshot_id
+    FROM "GiveawayDraw"
+    WHERE "id" = NEW."drawId";
+
+    IF NOT FOUND OR draw_giveaway_id <> NEW."giveawayId" THEN
+      RAISE EXCEPTION 'GiveawayAward draw must belong to the same giveaway';
+    END IF;
   END IF;
 
   SELECT "giveawayId"
@@ -818,17 +849,21 @@ BEGIN
     RAISE EXCEPTION 'GiveawayAward prize pool must belong to the same giveaway';
   END IF;
 
-  SELECT snapshot."giveawayId", entry."riderId"
-    INTO snapshot_entry_giveaway_id, snapshot_entry_rider_id
-  FROM "GiveawaySnapshotEntry" AS snapshot_entry
-  JOIN "GiveawaySnapshot" AS snapshot ON snapshot."id" = snapshot_entry."snapshotId"
-  JOIN "GiveawayEntry" AS entry ON entry."id" = snapshot_entry."entryId"
-  WHERE snapshot_entry."id" = NEW."snapshotEntryId";
+  IF NEW."snapshotEntryId" IS NOT NULL THEN
+    SELECT snapshot."giveawayId", snapshot_entry."snapshotId", snapshot_entry."entryId", entry."riderId"
+      INTO snapshot_entry_giveaway_id, snapshot_entry_snapshot_id, snapshot_entry_entry_id, snapshot_entry_rider_id
+    FROM "GiveawaySnapshotEntry" AS snapshot_entry
+    JOIN "GiveawaySnapshot" AS snapshot ON snapshot."id" = snapshot_entry."snapshotId"
+    JOIN "GiveawayEntry" AS entry ON entry."id" = snapshot_entry."entryId"
+    WHERE snapshot_entry."id" = NEW."snapshotEntryId";
 
-  IF NOT FOUND
-    OR snapshot_entry_giveaway_id <> NEW."giveawayId"
-    OR snapshot_entry_rider_id <> NEW."winnerUserId" THEN
-    RAISE EXCEPTION 'GiveawayAward snapshot entry and winner must belong to the same giveaway rider';
+    IF NOT FOUND
+      OR snapshot_entry_giveaway_id <> NEW."giveawayId"
+      OR draw_snapshot_id <> snapshot_entry_snapshot_id
+      OR snapshot_entry_entry_id <> NEW."entryId"
+      OR snapshot_entry_rider_id <> NEW."winnerUserId" THEN
+      RAISE EXCEPTION 'GiveawayAward draw and snapshot entry must refer to the same frozen snapshot';
+    END IF;
   END IF;
 
   IF NEW."predecessorAwardId" IS NOT NULL THEN
@@ -849,7 +884,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayAward_parentage_guard"
-BEFORE INSERT OR UPDATE OF "giveawayId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"
+BEFORE INSERT OR UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "rank", "predecessorAwardId"
 ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_parentage"();
 
@@ -1049,9 +1084,9 @@ BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
 
 CREATE TRIGGER "GiveawayAward_scope_immutable"
-BEFORE UPDATE OF "giveawayId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"
+BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "predecessorAwardId"
 ON "GiveawayAward"
-FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'predecessorAwardId');
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'predecessorAwardId');
 
 CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
 RETURNS TRIGGER AS $$

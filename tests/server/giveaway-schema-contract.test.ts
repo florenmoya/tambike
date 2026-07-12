@@ -145,6 +145,54 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
   });
 
+  test("supports direct entry awards without inventing draw or snapshot provenance", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const award = models.get("GiveawayAward");
+
+    expect(award?.fields.find((field) => field.name === "entryId")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(prismaSchema).toMatch(/entryId\s+String\s*\n/);
+    expect(prismaSchema).toMatch(/drawId\s+String\?\s*\n/);
+    expect(prismaSchema).toMatch(/snapshotEntryId\s+String\?\s*\n/);
+    expect(prismaSchema).toMatch(/rank\s+Int\?\s*\n/);
+    expect(giveawayMigrationSql).toContain('"entryId" TEXT NOT NULL');
+    expect(giveawayMigrationSql).toContain('"drawId" TEXT,');
+    expect(giveawayMigrationSql).toContain('"snapshotEntryId" TEXT,');
+    expect(giveawayMigrationSql).toContain('"rank" INTEGER,');
+    expect(giveawayMigrationSql).toContain(
+      'CONSTRAINT "GiveawayAward_provenance_paired" CHECK (("drawId" IS NULL) = ("snapshotEntryId" IS NULL))',
+    );
+    expect(giveawayMigrationSql).toContain(
+      'CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0))',
+    );
+    expect(giveawayMigrationSql).toContain('GiveawayAward entry must belong to the same giveaway rider');
+    expect(giveawayMigrationSql).toContain('NEW."entryId"');
+    expect(giveawayMigrationSql).toContain('"entryId", "drawId", "prizePoolId"');
+    expect(giveawayMigrationSql).toContain('"GiveawayAward_entryId_fkey"');
+    expect(giveawayMigrationSql).toContain('CREATE INDEX "GiveawayAward_entryId_idx"');
+  });
+
+  test("does not cap a prize pool to one current award per snapshot entry", () => {
+    expect(giveawayMigrationSql).not.toContain('GiveawayAward_currentPoolSnapshotEntry_key');
+  });
+
+  test("binds draw-backed award provenance to the draw's exact frozen snapshot", () => {
+    expect(giveawayMigrationSql).toContain('draw_snapshot_id TEXT');
+    expect(giveawayMigrationSql).toContain('snapshot_entry_snapshot_id TEXT');
+    expect(giveawayMigrationSql).toContain(
+      'SELECT "giveawayId", "snapshotId"\n      INTO draw_giveaway_id, draw_snapshot_id\n    FROM "GiveawayDraw"',
+    );
+    expect(giveawayMigrationSql).toContain(
+      'SELECT snapshot."giveawayId", snapshot_entry."snapshotId", snapshot_entry."entryId", entry."riderId"',
+    );
+    expect(giveawayMigrationSql).toContain('draw_snapshot_id <> snapshot_entry_snapshot_id');
+    expect(giveawayMigrationSql).toContain(
+      'GiveawayAward draw and snapshot entry must refer to the same frozen snapshot',
+    );
+  });
+
   test("keeps finite prize item rows bounded by their pool inventory in the migration", () => {
     expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_prize_item_inventory"()');
     expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayPrizeItem_inventory_guard"');
@@ -230,7 +278,10 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_perk_event_parentage"()');
     expect(giveawayMigrationSql).toContain('CREATE TRIGGER "Perk_giveaway_event_parentage_guard"');
     expect(giveawayMigrationSql).toContain(
-      'BEFORE UPDATE OF "giveawayId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"',
+      'BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "predecessorAwardId"',
+    );
+    expect(giveawayMigrationSql).toContain(
+      'FUNCTION "prevent_giveaway_scope_reparenting"(\'giveawayId\', \'entryId\', \'drawId\', \'prizePoolId\', \'prizeItemId\', \'snapshotEntryId\', \'winnerUserId\', \'rank\', \'predecessorAwardId\')',
     );
   });
 });

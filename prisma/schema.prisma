@@ -715,6 +715,7 @@ model GiveawayEntry {
   rider           User                  @relation("GiveawayEntryRider", fields: [riderId], references: [id], onDelete: Restrict)
   events          GiveawayEntryEvent[]
   snapshotEntries GiveawaySnapshotEntry[]
+  awards          GiveawayAward[]
 
   @@unique([giveawayId, riderId])
   @@index([giveawayId, status])
@@ -883,14 +884,15 @@ model GiveawayDraw {
 model GiveawayAward {
   id                    String              @id @default(cuid())
   giveawayId            String
-  drawId                String
+  entryId               String
+  drawId                String?
   prizePoolId           String
   prizeItemId           String?
-  snapshotEntryId       String
+  snapshotEntryId       String?
   winnerUserId          String
   status                GiveawayAwardStatus @default(pending_verification)
   isCurrent             Boolean             @default(true)
-  rank                  Int
+  rank                  Int?
   opaqueClaimReference  String              @unique
   claimTokenHash        String?             @unique
   claimDeadlineAt       DateTime?
@@ -900,10 +902,11 @@ model GiveawayAward {
   updatedAt             DateTime            @updatedAt
 
   giveaway        EventGiveaway             @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
-  draw            GiveawayDraw              @relation(fields: [drawId], references: [id], onDelete: Restrict)
+  entry           GiveawayEntry              @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  draw            GiveawayDraw?             @relation(fields: [drawId], references: [id], onDelete: Restrict)
   prizePool       GiveawayPrizePool         @relation(fields: [prizePoolId], references: [id], onDelete: Restrict)
   prizeItem       GiveawayPrizeItem?        @relation(fields: [prizeItemId], references: [id], onDelete: Restrict)
-  snapshotEntry   GiveawaySnapshotEntry     @relation(fields: [snapshotEntryId], references: [id], onDelete: Restrict)
+  snapshotEntry   GiveawaySnapshotEntry?    @relation(fields: [snapshotEntryId], references: [id], onDelete: Restrict)
   winner          User                      @relation("GiveawayAwardWinner", fields: [winnerUserId], references: [id], onDelete: Restrict)
   predecessor     GiveawayAward?            @relation("GiveawayAwardPredecessor", fields: [predecessorAwardId], references: [id], onDelete: Restrict)
   redrawSuccessors GiveawayAward[]          @relation("GiveawayAwardPredecessor")
@@ -912,6 +915,7 @@ model GiveawayAward {
   deliveryDetail  GiveawayDeliveryDetail?
 
   @@index([giveawayId, status])
+  @@index([entryId])
   @@index([drawId])
   @@index([prizePoolId])
   @@index([prizeItemId])

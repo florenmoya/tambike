@@ -51,6 +51,15 @@ import type {
   UserProfile,
 } from "@/features/tambike-demo/types";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
+import {
+  buildPublicDrawVerification,
+  createDrawSeedCommitment,
+  decryptDrawSeed,
+  encryptDrawSeed,
+  generateDrawSeed,
+  rankFrozenWeightedEntries,
+  type EncryptedDrawSeed,
+} from "./giveaways/draw-engine";
 
 export class BackendError extends Error {
   constructor(
@@ -67,7 +76,16 @@ export class BackendError extends Error {
       | "QR_EXPIRED"
       | "GIVEAWAY_COMPLIANCE_REQUIRED"
       | "INVALID_GIVEAWAY_STATE"
-      | "GIVEAWAY_ENTRY_MODE_LOCKED",
+      | "GIVEAWAY_ENTRY_MODE_LOCKED"
+      | "GIVEAWAY_ENTRY_NOT_OPEN"
+      | "GIVEAWAY_ENTRY_MODE_INVALID"
+      | "GIVEAWAY_ENTRY_NOT_ELIGIBLE"
+      | "GIVEAWAY_ALREADY_ENTERED"
+      | "GIVEAWAY_CODE_INVALID"
+      | "GIVEAWAY_CODE_UNAVAILABLE"
+      | "GIVEAWAY_PERK_UNAVAILABLE"
+      | "GIVEAWAY_DRAW_CONFIGURATION_ERROR"
+      | "GIVEAWAY_AWARD_INVALID",
     message = code,
   ) {
     super(message);
@@ -109,7 +127,19 @@ export type AuditAction =
   | "GIVEAWAY_LOCKED"
   | "GIVEAWAY_CANCELLED"
   | "GIVEAWAY_SUSPENDED"
-  | "GIVEAWAY_ENTRY_RECONCILED";
+  | "GIVEAWAY_ENTRY_RECONCILED"
+  | "GIVEAWAY_ENTRY_OPTED_IN"
+  | "GIVEAWAY_CAMPAIGN_CODE_CREATED"
+  | "GIVEAWAY_CAMPAIGN_CODE_CLAIMED"
+  | "GIVEAWAY_MANUAL_ENTRY_GRANTED"
+  | "GIVEAWAY_MANUAL_ENTRY_REVOKED"
+  | "GIVEAWAY_PERK_REDEEMED"
+  | "GIVEAWAY_DRAW_COMPLETED"
+  | "GIVEAWAY_DRAW_PUBLISHED"
+  | "GIVEAWAY_AWARD_DECLINED"
+  | "GIVEAWAY_AWARD_REDRAWN"
+  | "GIVEAWAY_MANUAL_AWARD_SELECTED"
+  | "GIVEAWAY_AWARD_VOIDED";
 
 type BackendUser = UserProfile & {
   passwordHash: string;
@@ -222,6 +252,15 @@ type GiveawayEntryRecord = {
   status: "eligible" | "locked" | "disqualified" | "withdrawn";
   currentWeight: number;
   qualifiedSourceFingerprint: string;
+  qualifiedGroupIds: string[];
+  entryPath: "automatic" | "opt_in" | "campaign_code" | "manual";
+  mechanicsAcknowledgement?: {
+    version: number;
+    checksum: string;
+    acknowledgedAt: string;
+  };
+  campaignCodeId?: string;
+  manualGrantActive?: boolean;
   opaquePublicReference: string;
   createdAt: string;
   updatedAt: string;
@@ -259,14 +298,89 @@ type GiveawayAuditEventRecord = {
   createdAt: string;
 };
 
-type GiveawaySnapshotMarker = {
+type GiveawayCampaignCodeRecord = {
   id: string;
-  candidateCount: number;
-  lockedAt: string;
+  tokenHash: string;
+  maxUses: number;
+  useCount: number;
+  expiresAt: string;
+  createdByUserId: string;
+  createdAt: string;
+  revokedAt?: string;
+  claimedRiderIds: Set<string>;
 };
 
-type FutureGiveawayRecord = {
+type GiveawaySnapshotEntryRecord = {
   id: string;
+  entryId: string;
+  riderId: string;
+  opaquePublicReference: string;
+  frozenWeight: number;
+  qualifiedSourceFingerprint: string;
+  qualifiedGroupIds: string[];
+  rankSourceDigest: string;
+};
+
+type GiveawaySnapshotRecord = {
+  id: string;
+  mechanicsVersionId: string;
+  mechanicsVersion: number;
+  configDigest: string;
+  snapshotDigest: string;
+  candidateCount: number;
+  seedCommitment: string;
+  encryptedSeed: EncryptedDrawSeed;
+  encryptionKeyVersion: string;
+  algorithmVersion: "hmac-sha256-v1";
+  lockedByUserId: string;
+  lockedAt: string;
+  seedRevealedAt?: string;
+  entries: GiveawaySnapshotEntryRecord[];
+};
+
+type GiveawayDrawRecord = {
+  id: string;
+  snapshotId: string;
+  sequence: number;
+  type: "initial" | "redraw";
+  status: "completed" | "published";
+  idempotencyKey: string;
+  algorithmVersion: "hmac-sha256-v1" | "manual-selection-v1";
+  inputDigest: string;
+  resultDigest: string;
+  initiatedByUserId: string;
+  reasonDigest?: string;
+  completedAt: string;
+  publishedAt?: string;
+  awardIds: string[];
+};
+
+type GiveawayAwardRecord = {
+  id: string;
+  entryId: string;
+  drawId?: string;
+  prizePoolId: string;
+  prizeItemId?: string;
+  snapshotEntryId?: string;
+  winnerUserId: string;
+  status:
+    | "pending_verification"
+    | "claimable"
+    | "verified"
+    | "fulfilled"
+    | "declined"
+    | "disqualified"
+    | "expired"
+    | "voided"
+    | "superseded";
+  isCurrent: boolean;
+  rank?: number;
+  opaqueClaimReference: string;
+  claimDeadlineAt?: string;
+  reasonDigest?: string;
+  predecessorAwardId?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type GiveawayAggregate = {
@@ -300,14 +414,14 @@ type GiveawayAggregate = {
   updatedAt: string;
   mechanicsVersions: GiveawayMechanicsVersionRecord[];
   eligibilityGroups: GiveawayEligibilityGroupRecord[];
-  campaignCodes: FutureGiveawayRecord[];
+  campaignCodes: GiveawayCampaignCodeRecord[];
   entriesByRider: Map<string, GiveawayEntryRecord>;
   entryEvents: GiveawayEntryEventRecord[];
   prizePools: GiveawayPrizePoolRecord[];
-  snapshot?: GiveawaySnapshotMarker;
-  draws: FutureGiveawayRecord[];
-  awards: FutureGiveawayRecord[];
-  operators: FutureGiveawayRecord[];
+  snapshot?: GiveawaySnapshotRecord;
+  draws: GiveawayDrawRecord[];
+  awards: GiveawayAwardRecord[];
+  operators: Array<{ id: string }>;
   auditEvents: GiveawayAuditEventRecord[];
 };
 
@@ -320,11 +434,11 @@ type GiveawayStore = {
   entryEventsById: Map<string, GiveawayEntryEventRecord>;
   prizePoolsById: Map<string, GiveawayPrizePoolRecord>;
   prizeItemsById: Map<string, GiveawayPrizeItemRecord>;
-  campaignCodesById: Map<string, FutureGiveawayRecord>;
-  snapshotsById: Map<string, GiveawaySnapshotMarker>;
-  drawsById: Map<string, FutureGiveawayRecord>;
-  awardsById: Map<string, FutureGiveawayRecord>;
-  operatorsById: Map<string, FutureGiveawayRecord>;
+  campaignCodesById: Map<string, GiveawayCampaignCodeRecord>;
+  snapshotsById: Map<string, GiveawaySnapshotRecord>;
+  drawsById: Map<string, GiveawayDrawRecord>;
+  awardsById: Map<string, GiveawayAwardRecord>;
+  operatorsById: Map<string, { id: string }>;
   auditEventsById: Map<string, GiveawayAuditEventRecord>;
 };
 
@@ -354,6 +468,10 @@ type BackendSeed = {
   passes: Array<Pass & { userId: string }>;
   giveaways: GiveawayAggregate[];
   perkRedemptions: PerkRedemptionRecord[];
+};
+
+export type TambikeTestSeedOptions = {
+  perkQuantities?: Record<string, number>;
 };
 
 const demoScannerPass = {
@@ -439,7 +557,7 @@ function defaultRulesForEvent(type: EventType) {
   return [...baseRules, "Respect venue staff"];
 }
 
-async function createSeed(): Promise<BackendSeed> {
+async function createSeed(options: TambikeTestSeedOptions = {}): Promise<BackendSeed> {
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
   const users: BackendUser[] = [
@@ -459,9 +577,22 @@ async function createSeed(): Promise<BackendSeed> {
     },
   ];
 
+  const events = demoEvents.map(cloneEvent);
+  for (const event of events) {
+    for (const perk of event.perks) {
+      const quantity = options.perkQuantities?.[perk.id];
+      if (quantity !== undefined) {
+        if (!Number.isInteger(quantity) || quantity <= 0) {
+          throw new Error("INVALID_TEST_PERK_QUANTITY");
+        }
+        perk.quantity = quantity;
+      }
+    }
+  }
+
   return {
     users,
-    events: demoEvents.map(cloneEvent),
+    events,
     rsvps: [
       {
         eventId: demoScannerPass.eventId,
@@ -544,8 +675,8 @@ export class TambikeBackend {
     }
   }
 
-  static async create() {
-    return new TambikeBackend(await createSeed());
+  static async create(options?: TambikeTestSeedOptions) {
+    return new TambikeBackend(await createSeed(options));
   }
 
   getSnapshot(sessionToken?: string) {
@@ -808,6 +939,9 @@ export class TambikeBackend {
       }
     }
     if (Object.hasOwn(patch, "eligibilityGroups") && Object.hasOwn(patch, "prizePools")) {
+      if (giveaway.awards.length > 0) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
       this.replaceGiveawayConfiguration(
         giveaway,
         patch.eligibilityGroups as CreateGiveawayInput["eligibilityGroups"],
@@ -889,18 +1023,524 @@ export class TambikeBackend {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
     const giveaway = this.requireGiveaway(giveawayId);
-    const entry = giveaway.entriesByRider.get(rider.id);
-    if (!entry || entry.status === "withdrawn") {
-      return { giveawayId: giveaway.id, status: "not_eligible", entryCount: 0 };
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async optInToGiveaway(sessionToken: string, giveawayId: string): Promise<RiderGiveawayState> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayEntryMode(giveaway, "opt_in");
+    const mechanics = this.currentGiveawayMechanics(giveaway);
+    const entry = this.createGiveawayEntryFromPath(giveaway, rider.id, {
+      path: "opt_in",
+      eventType: "opted_in",
+      actorUserId: rider.id,
+      mechanicsAcknowledgement: {
+        version: mechanics.version,
+        checksum: mechanics.checksum,
+        acknowledgedAt: new Date().toISOString(),
+      },
+    });
+    this.auditGiveaway(giveaway, rider.id, "GIVEAWAY_ENTRY_OPTED_IN", "entry", entry.id, {
+      entryId: entry.id,
+      mechanicsVersion: mechanics.version,
+      mechanicsChecksum: mechanics.checksum,
+    });
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async createGiveawayCampaignCode(
+    sessionToken: string,
+    giveawayId: string,
+    input: unknown,
+  ) {
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    if (!["draft", "scheduled", "open", "paused"].includes(giveaway.state)) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    if (entry.status === "disqualified") {
-      return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
-    }
-    return {
-      giveawayId: giveaway.id,
-      status: "entered",
-      entryCount: entry.currentWeight,
+    const parsed = this.parseGiveawayCampaignCodeInput(input);
+    const code = `gwy_${randomBytes(24).toString("base64url")}`;
+    const now = new Date().toISOString();
+    const record: GiveawayCampaignCodeRecord = {
+      id: `giveaway-code-${randomUUID()}`,
+      tokenHash: this.hashGiveawayCampaignCode(code),
+      maxUses: parsed.maxUses,
+      useCount: 0,
+      expiresAt: parsed.expiresAt,
+      createdByUserId: organizer.id,
+      createdAt: now,
+      claimedRiderIds: new Set(),
     };
+    giveaway.campaignCodes.push(record);
+    this.giveaways.campaignCodesById.set(record.id, record);
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_CAMPAIGN_CODE_CREATED", "campaign_code", record.id, {
+      maxUses: record.maxUses,
+      expiresAt: record.expiresAt,
+      tokenHash: record.tokenHash,
+    });
+    return { id: record.id, code, maxUses: record.maxUses, expiresAt: record.expiresAt };
+  }
+
+  async claimGiveawayCampaignCode(
+    sessionToken: string,
+    giveawayId: string,
+    rawCode: unknown,
+  ): Promise<RiderGiveawayState> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayEntryMode(giveaway, "claim_code");
+    if (typeof rawCode !== "string" || !rawCode.trim()) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const code = giveaway.campaignCodes.find(
+      (candidate) => candidate.tokenHash === this.hashGiveawayCampaignCode(rawCode.trim()),
+    );
+    if (!code) throw new BackendError("GIVEAWAY_CODE_INVALID", "GIVEAWAY_CODE_INVALID");
+    if (
+      code.revokedAt ||
+      code.useCount >= code.maxUses ||
+      code.claimedRiderIds.has(rider.id) ||
+      new Date(code.expiresAt).getTime() < Date.now()
+    ) {
+      throw new BackendError("GIVEAWAY_CODE_UNAVAILABLE", "GIVEAWAY_CODE_UNAVAILABLE");
+    }
+    const entry = this.createGiveawayEntryFromPath(giveaway, rider.id, {
+      path: "campaign_code",
+      eventType: "campaign_code_claimed",
+      actorUserId: rider.id,
+      campaignCodeId: code.id,
+    });
+    code.useCount += 1;
+    code.claimedRiderIds.add(rider.id);
+    this.auditGiveaway(giveaway, rider.id, "GIVEAWAY_CAMPAIGN_CODE_CLAIMED", "entry", entry.id, {
+      entryId: entry.id,
+      campaignCodeId: code.id,
+      useCount: code.useCount,
+    });
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async grantManualGiveawayEntry(
+    sessionToken: string,
+    input: unknown,
+  ): Promise<RiderGiveawayState> {
+    const parsed = this.parseManualGiveawayEntryInput(input);
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(parsed.giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    this.requireGiveawayEntryMode(giveaway, "manual_only");
+    const rider = this.users.get(parsed.riderId);
+    if (!rider || rider.role !== "rider") throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const entry = this.createGiveawayEntryFromPath(giveaway, rider.id, {
+      path: "manual",
+      eventType: "manual_grant",
+      actorUserId: organizer.id,
+      manualGrantActive: true,
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+    });
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_MANUAL_ENTRY_GRANTED", "entry", entry.id, {
+      entryId: entry.id,
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+    });
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async revokeManualGiveawayEntry(
+    sessionToken: string,
+    giveawayId: string,
+    riderId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    this.requireGiveawayEntryMode(giveaway, "manual_only");
+    const normalizedReason = this.requireGiveawayReason(reason);
+    const entry = giveaway.entriesByRider.get(riderId);
+    if (!entry || entry.entryPath !== "manual" || entry.status !== "eligible") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    const now = new Date().toISOString();
+    this.voidDirectEntryAwards(giveaway, entry, organizer.id, "manual_revoke");
+    entry.manualGrantActive = false;
+    entry.status = "withdrawn";
+    entry.updatedAt = now;
+    this.recordGiveawayEntryEvent(giveaway, entry, {
+      type: "manual_revoke",
+      sourceKey: `manual-revoke:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
+      actorUserId: organizer.id,
+      idempotencyKey: `manual-revoke:${giveaway.id}:${entry.id}:${randomUUID()}`,
+      weightDelta: -entry.currentWeight,
+      sourceSnapshot: { reasonDigest: this.hashGiveawayReason(normalizedReason) },
+    });
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_MANUAL_ENTRY_REVOKED", "entry", entry.id, {
+      entryId: entry.id,
+      reasonDigest: this.hashGiveawayReason(normalizedReason),
+    });
+    return this.toRiderGiveawayState(giveaway, riderId);
+  }
+
+  async redeemGiveawayPerk(
+    sessionToken: string,
+    perkId: string,
+  ): Promise<{ perkId: string; status: "redeemed" }> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const event = Array.from(this.events.values()).find((candidate) =>
+      candidate.perks.some((perk) => perk.id === perkId),
+    );
+    if (!event) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const perk = event.perks.find((candidate) => candidate.id === perkId);
+    if (!perk) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const activePass = this.findPassForEventRider(event.id, rider.id);
+    if (!activePass || activePass.status === "cancelled") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    const existing = Array.from(this.perkRedemptions.values()).find(
+      (redemption) => redemption.perkId === perkId && redemption.userId === rider.id && redemption.status === "redeemed",
+    );
+    if (!existing) {
+      const redeemedCount = Array.from(this.perkRedemptions.values()).filter(
+        (redemption) => redemption.perkId === perkId && redemption.status === "redeemed",
+      ).length;
+      if (perk.quantity !== undefined && redeemedCount >= perk.quantity) {
+        throw new BackendError("GIVEAWAY_PERK_UNAVAILABLE", "GIVEAWAY_PERK_UNAVAILABLE");
+      }
+      const redemption: PerkRedemptionRecord = {
+        id: `perk-redemption-${randomUUID()}`,
+        perkId,
+        userId: rider.id,
+        status: "redeemed",
+        redeemedBy: rider.id,
+        redeemedAt: new Date().toISOString(),
+      };
+      this.perkRedemptions.set(redemption.id, redemption);
+      this.audit("GIVEAWAY_PERK_REDEEMED", rider.id, perkId);
+      this.reconcileAutomaticEligibilityForEvent(event.id, rider.id);
+    }
+    return { perkId, status: "redeemed" };
+  }
+
+  async runGiveawayDraw(
+    sessionToken: string,
+    input: unknown,
+  ) {
+    const parsed = this.parseGiveawayDrawInput(input);
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(parsed.giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
+    const snapshot = giveaway.snapshot;
+    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    if (
+      giveaway.draws.some(
+        (draw) => draw.type === "initial" && draw.algorithmVersion === "hmac-sha256-v1",
+      )
+    ) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
+    const now = new Date().toISOString();
+    const draw: GiveawayDrawRecord = {
+      id: `giveaway-draw-${randomUUID()}`,
+      snapshotId: snapshot.id,
+      sequence: giveaway.draws.length + 1,
+      type: "initial",
+      status: "completed",
+      idempotencyKey: parsed.idempotencyKey,
+      algorithmVersion: "hmac-sha256-v1",
+      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "hmac-sha256-v1"),
+      resultDigest: "",
+      initiatedByUserId: organizer.id,
+      reasonDigest: parsed.reason ? this.hashGiveawayReason(parsed.reason) : undefined,
+      completedAt: now,
+      awardIds: [],
+    };
+    const rankedUnits = rankFrozenWeightedEntries({
+      giveawayId: giveaway.id,
+      seed,
+      entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
+    });
+    const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
+    for (const pool of giveaway.prizePools
+      .filter((candidate) => candidate.awardMode === "random_draw")
+      .sort((left, right) => left.position - right.position)) {
+      const selectedUnitKeys = new Set<string>();
+      for (const item of pool.items
+        .filter((candidate) => candidate.status === "available")
+        .sort((left, right) => left.position - right.position)) {
+        const candidate = rankedUnits.find((unit) => {
+          const unitKey = `${unit.entryId}:${unit.unitOrdinal}`;
+          if (selectedUnitKeys.has(unitKey)) return false;
+          const snapshotEntry = snapshotEntryById.get(unit.entryId);
+          return Boolean(
+            snapshotEntry &&
+              this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) &&
+              this.canCreateGiveawayAward(giveaway, pool, snapshotEntry.riderId),
+          );
+        });
+        if (!candidate) continue;
+        selectedUnitKeys.add(`${candidate.entryId}:${candidate.unitOrdinal}`);
+        const snapshotEntry = snapshotEntryById.get(candidate.entryId);
+        if (!snapshotEntry) continue;
+        const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
+        if (!entry) continue;
+        const rank = rankedUnits.indexOf(candidate) + 1;
+        const award = this.createGiveawayAward(giveaway, {
+          entry,
+          prizePool: pool,
+          prizeItem: item,
+          draw,
+          snapshotEntry,
+          rank,
+        });
+        draw.awardIds.push(award.id);
+      }
+    }
+    draw.resultDigest = this.calculateGiveawayDrawResultDigest(giveaway, draw);
+    giveaway.draws.push(draw);
+    this.giveaways.drawsById.set(draw.id, draw);
+    if (giveaway.state === "locked") this.transitionGiveaway(giveaway, "drawing");
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_DRAW_COMPLETED", "draw", draw.id, {
+      drawId: draw.id,
+      sequence: draw.sequence,
+      resultDigest: draw.resultDigest,
+      awardCount: draw.awardIds.length,
+    });
+    return this.toGiveawayDrawResult(giveaway, draw);
+  }
+
+  async publishGiveawayDraw(sessionToken: string, giveawayId: string, drawId: string) {
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    const draw = giveaway.draws.find((candidate) => candidate.id === drawId);
+    if (!draw) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    if (giveaway.state === "suspended") {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const snapshot = giveaway.snapshot;
+    if (!snapshot || draw.snapshotId !== snapshot.id) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
+    if (draw.status === "published") {
+      return this.buildGiveawayDrawVerification(giveaway, draw, seed, true);
+    }
+    if (giveaway.state !== "drawing") {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    if (!snapshot.seedRevealedAt) snapshot.seedRevealedAt = new Date().toISOString();
+    for (const campaignDraw of giveaway.draws) {
+      if (campaignDraw.snapshotId === snapshot.id && campaignDraw.status === "completed") {
+        campaignDraw.status = "published";
+        campaignDraw.publishedAt = snapshot.seedRevealedAt;
+      }
+    }
+    this.transitionGiveaway(giveaway, "claims_open");
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_DRAW_PUBLISHED", "draw", draw.id, {
+      drawId: draw.id,
+      resultDigest: draw.resultDigest,
+    });
+    return this.buildGiveawayDrawVerification(giveaway, draw, seed, true);
+  }
+
+  async declineGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const award = this.giveaways.awardsById.get(awardId);
+    if (!award || award.winnerUserId !== rider.id || !award.isCurrent) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    if (!["pending_verification", "claimable", "verified"].includes(award.status)) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const normalizedReason = this.requireGiveawayReason(reason);
+    const giveaway = this.requireGiveawayByAward(award);
+    award.status = "declined";
+    award.reasonDigest = this.hashGiveawayReason(normalizedReason);
+    award.updatedAt = new Date().toISOString();
+    this.auditGiveaway(giveaway, rider.id, "GIVEAWAY_AWARD_DECLINED", "award", award.id, {
+      awardId: award.id,
+      reasonDigest: award.reasonDigest,
+    });
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async redrawGiveawayAward(sessionToken: string, input: unknown) {
+    const parsed = this.parseGiveawayRedrawInput(input);
+    const organizer = this.requireUser(sessionToken);
+    const award = this.giveaways.awardsById.get(parsed.awardId);
+    if (!award) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const giveaway = this.requireGiveawayByAward(award);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    if (giveaway.state === "suspended" || !["drawing", "claims_open"].includes(giveaway.state)) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
+    if (
+      !award.isCurrent ||
+      !["declined", "disqualified", "expired", "voided"].includes(award.status) ||
+      !award.drawId ||
+      !award.snapshotEntryId ||
+      !award.prizeItemId
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const originalDraw = this.giveaways.drawsById.get(award.drawId);
+    const snapshot = giveaway.snapshot;
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+    const prizeItem = pool?.items.find((candidate) => candidate.id === award.prizeItemId);
+    if (
+      !originalDraw ||
+      originalDraw.algorithmVersion !== "hmac-sha256-v1" ||
+      !snapshot ||
+      originalDraw.snapshotId !== snapshot.id ||
+      !pool ||
+      pool.awardMode !== "random_draw" ||
+      !prizeItem
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
+    const rankedUnits = rankFrozenWeightedEntries({
+      giveawayId: giveaway.id,
+      seed,
+      entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
+    });
+    const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
+    const selectedSnapshotEntries = new Set(
+      giveaway.awards
+        .filter((candidate) => candidate.prizePoolId === pool.id && candidate.snapshotEntryId)
+        .map((candidate) => candidate.snapshotEntryId),
+    );
+    const nextUnit = rankedUnits.find((unit) => {
+      const snapshotEntry = snapshotEntryById.get(unit.entryId);
+      return Boolean(
+        snapshotEntry &&
+          !selectedSnapshotEntries.has(snapshotEntry.id) &&
+          this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) &&
+          this.canCreateGiveawayAward(giveaway, pool, snapshotEntry.riderId, award.id),
+      );
+    });
+    if (!nextUnit) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    const nextSnapshotEntry = snapshotEntryById.get(nextUnit.entryId);
+    if (!nextSnapshotEntry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    const nextEntry = this.giveaways.entriesById.get(nextSnapshotEntry.entryId);
+    if (!nextEntry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    const now = new Date().toISOString();
+    const draw: GiveawayDrawRecord = {
+      id: `giveaway-draw-${randomUUID()}`,
+      snapshotId: snapshot.id,
+      sequence: giveaway.draws.length + 1,
+      type: "redraw",
+      status: snapshot.seedRevealedAt ? "published" : "completed",
+      idempotencyKey: parsed.idempotencyKey,
+      algorithmVersion: "hmac-sha256-v1",
+      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "hmac-sha256-v1"),
+      resultDigest: "",
+      initiatedByUserId: organizer.id,
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      completedAt: now,
+      publishedAt: snapshot.seedRevealedAt,
+      awardIds: [],
+    };
+    award.isCurrent = false;
+    award.status = "superseded";
+    award.updatedAt = now;
+    const replacement = this.createGiveawayAward(giveaway, {
+      entry: nextEntry,
+      prizePool: pool,
+      prizeItem,
+      draw,
+      snapshotEntry: nextSnapshotEntry,
+      rank: rankedUnits.indexOf(nextUnit) + 1,
+      predecessorAwardId: award.id,
+    });
+    draw.awardIds.push(replacement.id);
+    draw.resultDigest = this.calculateGiveawayDrawResultDigest(giveaway, draw);
+    giveaway.draws.push(draw);
+    this.giveaways.drawsById.set(draw.id, draw);
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_AWARD_REDRAWN", "award", replacement.id, {
+      awardId: replacement.id,
+      predecessorAwardId: award.id,
+      drawId: draw.id,
+      reasonDigest: draw.reasonDigest,
+    });
+    return this.toGiveawayDrawResult(giveaway, draw);
+  }
+
+  async selectManualGiveawayAward(sessionToken: string, input: unknown) {
+    const parsed = this.parseManualGiveawayAwardInput(input);
+    const organizer = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(parsed.giveawayId);
+    this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
+    const snapshot = giveaway.snapshot;
+    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === parsed.prizePoolId);
+    const prizeItem = pool?.items
+      .filter((candidate) => candidate.status === "available")
+      .sort((left, right) => left.position - right.position)[0];
+    const snapshotEntry = snapshot.entries.find((candidate) => candidate.riderId === parsed.riderId);
+    if (
+      !pool ||
+      pool.awardMode !== "manual_selection" ||
+      !prizeItem ||
+      !snapshotEntry ||
+      !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+      !this.canCreateGiveawayAward(giveaway, pool, parsed.riderId)
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
+    if (!entry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    const now = new Date().toISOString();
+    const draw: GiveawayDrawRecord = {
+      id: `giveaway-draw-${randomUUID()}`,
+      snapshotId: snapshot.id,
+      sequence: giveaway.draws.length + 1,
+      type: "initial",
+      status: "completed",
+      idempotencyKey: parsed.idempotencyKey,
+      algorithmVersion: "manual-selection-v1",
+      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "manual-selection-v1"),
+      resultDigest: "",
+      initiatedByUserId: organizer.id,
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      completedAt: now,
+      awardIds: [],
+    };
+    const award = this.createGiveawayAward(giveaway, {
+      entry,
+      prizePool: pool,
+      prizeItem,
+      draw,
+      snapshotEntry,
+      rank: 1,
+    });
+    draw.awardIds.push(award.id);
+    draw.resultDigest = this.calculateGiveawayDrawResultDigest(giveaway, draw);
+    giveaway.draws.push(draw);
+    this.giveaways.drawsById.set(draw.id, draw);
+    if (giveaway.state === "locked") this.transitionGiveaway(giveaway, "drawing");
+    this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_MANUAL_AWARD_SELECTED", "award", award.id, {
+      awardId: award.id,
+      drawId: draw.id,
+      reasonDigest: draw.reasonDigest,
+    });
+    return this.toGiveawayDrawResult(giveaway, draw);
   }
 
   async submitGiveawayForReview(sessionToken: string, giveawayId: string) {
@@ -1001,30 +1641,97 @@ export class TambikeBackend {
     const user = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    if (giveaway.snapshot) {
+      return this.toGiveawayLockResult(giveaway);
+    }
     if (giveaway.state !== "open" || giveaway.complianceStatus !== "approved") {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    this.transitionGiveaway(giveaway, "locked");
-    for (const entry of giveaway.entriesByRider.values()) {
-      if (entry.status === "eligible") {
-        entry.status = "locked";
-        entry.updatedAt = new Date().toISOString();
+    const { seed, encryptedSeed, commitment } = this.createEncryptedGiveawayDrawSeed();
+    const eventRiderIds = new Set([
+      ...this.riderIdsWithEventActivity(giveaway.eventId),
+      ...giveaway.entriesByRider.keys(),
+    ]);
+    for (const riderId of eventRiderIds) {
+      if (giveaway.entryMode === "automatic") {
+        this.reconcileAutomaticEntry(giveaway, riderId);
+      } else {
+        this.reconcileEntryForLock(giveaway, riderId);
       }
     }
-    const snapshot: GiveawaySnapshotMarker = Object.freeze({
-      id: `giveaway-snapshot-marker-${randomUUID()}`,
-      candidateCount: Array.from(giveaway.entriesByRider.values()).filter(
-        (entry) => entry.status === "locked",
-      ).length,
-      lockedAt: new Date().toISOString(),
-    });
+
+    const mechanics = this.currentGiveawayMechanics(giveaway);
+    const lockedAt = new Date().toISOString();
+    const entries = Array.from(giveaway.entriesByRider.values())
+      .filter((entry) => entry.status === "eligible")
+      .sort((left, right) => left.opaquePublicReference.localeCompare(right.opaquePublicReference));
+    const configDigest = this.calculateGiveawayConfigDigest(giveaway, mechanics.id);
+    const snapshotEntries = entries.map<GiveawaySnapshotEntryRecord>((entry) => ({
+      id: `giveaway-snapshot-entry-${randomUUID()}`,
+      entryId: entry.id,
+      riderId: entry.riderId,
+      opaquePublicReference: entry.opaquePublicReference,
+      frozenWeight: entry.currentWeight,
+      qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+      qualifiedGroupIds: [...entry.qualifiedGroupIds],
+      rankSourceDigest: createHash("sha256")
+        .update(
+          canonicalizeJson({
+            entryId: entry.id,
+            opaquePublicReference: entry.opaquePublicReference,
+            qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+            weight: entry.currentWeight,
+          }),
+        )
+        .digest("hex"),
+    }));
+    const snapshotDigest = createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          mechanicsVersionId: mechanics.id,
+          configDigest,
+          entries: snapshotEntries.map((entry) => ({
+            entryId: entry.entryId,
+            opaquePublicReference: entry.opaquePublicReference,
+            frozenWeight: entry.frozenWeight,
+            qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+            qualifiedGroupIds: entry.qualifiedGroupIds,
+            rankSourceDigest: entry.rankSourceDigest,
+          })),
+        }),
+      )
+      .digest("hex");
+    const snapshot: GiveawaySnapshotRecord = {
+      id: `giveaway-snapshot-${randomUUID()}`,
+      mechanicsVersionId: mechanics.id,
+      mechanicsVersion: mechanics.version,
+      configDigest,
+      snapshotDigest,
+      candidateCount: snapshotEntries.length,
+      seedCommitment: commitment,
+      encryptedSeed,
+      encryptionKeyVersion: "env-v1",
+      algorithmVersion: "hmac-sha256-v1",
+      lockedByUserId: user.id,
+      lockedAt,
+      entries: snapshotEntries,
+    };
+    for (const entry of entries) {
+      entry.status = "locked";
+      entry.updatedAt = lockedAt;
+    }
+    this.transitionGiveaway(giveaway, "locked");
     giveaway.snapshot = snapshot;
     this.giveaways.snapshotsById.set(snapshot.id, snapshot);
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_LOCKED", "giveaway", giveaway.id, {
       candidateCount: snapshot.candidateCount,
-      snapshotMarkerId: snapshot.id,
+      snapshotId: snapshot.id,
+      snapshotDigest,
+      commitment,
+      seedByteLength: seed.byteLength,
     });
-    return this.toGiveawayCampaignView(giveaway);
+    return this.toGiveawayLockResult(giveaway);
   }
 
   async cancelGiveaway(sessionToken: string, giveawayId: string, reason: unknown) {
@@ -1032,6 +1739,9 @@ export class TambikeBackend {
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
     const normalizedReason = this.requireGiveawayReason(reason);
+    if (giveaway.awards.length > 0) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
     this.transitionGiveaway(giveaway, "cancelled");
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_CANCELLED", "giveaway", giveaway.id, {
       state: giveaway.state,
@@ -1451,6 +2161,649 @@ export class TambikeBackend {
     return reason.trim();
   }
 
+  private requireGiveawayRider(sessionToken: string) {
+    const rider = this.requireUser(sessionToken);
+    if (rider.role !== "rider") throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    return rider;
+  }
+
+  private requireGiveawayEntryMode(
+    giveaway: GiveawayAggregate,
+    entryMode: GiveawayEntryMode,
+  ) {
+    if (giveaway.state !== "open") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_OPEN", "GIVEAWAY_ENTRY_NOT_OPEN");
+    }
+    if (giveaway.entryMode !== entryMode) {
+      throw new BackendError("GIVEAWAY_ENTRY_MODE_INVALID", "GIVEAWAY_ENTRY_MODE_INVALID");
+    }
+  }
+
+  private parseGiveawayCampaignCodeInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (!Number.isInteger(record.maxUses) || (record.maxUses as number) <= 0) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const expiresAt =
+      record.expiresAt === undefined
+        ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        : record.expiresAt;
+    if (typeof expiresAt !== "string" || Number.isNaN(new Date(expiresAt).getTime())) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return { maxUses: record.maxUses as number, expiresAt };
+  }
+
+  private parseManualGiveawayEntryInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      typeof record.giveawayId !== "string" ||
+      !record.giveawayId.trim() ||
+      typeof record.riderId !== "string" ||
+      !record.riderId.trim()
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const reason = this.requireGiveawayReason(record.reason);
+    return {
+      giveawayId: record.giveawayId,
+      riderId: record.riderId,
+      reason,
+    };
+  }
+
+  private parseGiveawayDrawInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      typeof record.giveawayId !== "string" ||
+      !record.giveawayId.trim() ||
+      typeof record.idempotencyKey !== "string" ||
+      !record.idempotencyKey.trim()
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (record.reason !== undefined && (typeof record.reason !== "string" || !record.reason.trim())) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return {
+      giveawayId: record.giveawayId,
+      idempotencyKey: record.idempotencyKey,
+      reason: record.reason as string | undefined,
+    };
+  }
+
+  private parseGiveawayRedrawInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      typeof record.awardId !== "string" ||
+      !record.awardId.trim() ||
+      typeof record.idempotencyKey !== "string" ||
+      !record.idempotencyKey.trim()
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return {
+      awardId: record.awardId,
+      idempotencyKey: record.idempotencyKey,
+      reason: this.requireGiveawayReason(record.reason),
+    };
+  }
+
+  private parseManualGiveawayAwardInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    for (const field of ["giveawayId", "prizePoolId", "riderId", "idempotencyKey"] as const) {
+      if (typeof record[field] !== "string" || !record[field].trim()) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+    }
+    return {
+      giveawayId: record.giveawayId as string,
+      prizePoolId: record.prizePoolId as string,
+      riderId: record.riderId as string,
+      idempotencyKey: record.idempotencyKey as string,
+      reason: this.requireGiveawayReason(record.reason),
+    };
+  }
+
+  private hashGiveawayCampaignCode(code: string) {
+    return createHash("sha256").update(code).digest("hex");
+  }
+
+  private createEncryptedGiveawayDrawSeed() {
+    const encryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+    try {
+      const seed = generateDrawSeed();
+      return {
+        seed,
+        encryptedSeed: encryptDrawSeed(seed, encryptionKey),
+        commitment: createDrawSeedCommitment(seed),
+      };
+    } catch {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+  }
+
+  private decryptGiveawayDrawSeed(snapshot: GiveawaySnapshotRecord) {
+    const encryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+    try {
+      return decryptDrawSeed(snapshot.encryptedSeed, encryptionKey);
+    } catch {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+  }
+
+  private toGiveawayLockResult(giveaway: GiveawayAggregate) {
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return {
+      ...this.toGiveawayCampaignView(giveaway),
+      snapshot: {
+        id: snapshot.id,
+        candidateCount: snapshot.candidateCount,
+        snapshotDigest: snapshot.snapshotDigest,
+        commitment: snapshot.seedCommitment,
+        algorithmVersion: snapshot.algorithmVersion,
+      },
+    };
+  }
+
+  private toRiderGiveawayState(giveaway: GiveawayAggregate, riderId: string): RiderGiveawayState {
+    const entry = giveaway.entriesByRider.get(riderId);
+    if (!entry || entry.status === "withdrawn") {
+      return { giveawayId: giveaway.id, status: "not_eligible", entryCount: 0 };
+    }
+    if (entry.status === "disqualified") {
+      return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
+    }
+    const award = giveaway.awards
+      .filter(
+        (candidate) =>
+          candidate.winnerUserId === riderId &&
+          candidate.isCurrent &&
+          ["pending_verification", "claimable", "verified", "fulfilled"].includes(candidate.status),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (!award) {
+      return { giveawayId: giveaway.id, status: "entered", entryCount: entry.currentWeight };
+    }
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+    if (!pool) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return {
+      giveawayId: giveaway.id,
+      status: award.status === "fulfilled" ? "fulfilled" : "selected",
+      entryCount: entry.currentWeight,
+      award: {
+        awardId: award.id,
+        prizePoolTitle: pool.title,
+        status: award.status === "fulfilled" ? "fulfilled" : "selected",
+        claimDeadlineAt: award.claimDeadlineAt,
+        fulfilmentMode: pool.fulfilmentMode,
+      },
+    };
+  }
+
+  private calculateGiveawayConfigDigest(giveaway: GiveawayAggregate, mechanicsVersionId: string) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          mechanicsVersionId,
+          entryMode: giveaway.entryMode,
+          maxEntriesPerRider: giveaway.maxEntriesPerRider,
+          maxWinsPerRider: giveaway.maxWinsPerRider,
+          maxWinsTotal: giveaway.maxWinsTotal,
+          eligibilityGroups: giveaway.eligibilityGroups.map((group) => ({
+            id: group.id,
+            position: group.position,
+            entryWeight: group.entryWeight,
+            enabled: group.enabled,
+            conditions: group.conditions.map((condition) => condition.condition),
+          })),
+          prizePools: giveaway.prizePools.map((pool) => ({
+            id: pool.id,
+            position: pool.position,
+            awardMode: pool.awardMode,
+            inventoryKind: pool.inventoryKind,
+            inventoryLimit: pool.inventoryLimit ?? null,
+            perRiderLimit: pool.perRiderLimit ?? 1,
+            eligibilityGroupIds: pool.eligibilityGroupIds,
+            itemIds: pool.items.map((item) => item.id),
+          })),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private calculateDrawInputDigest(
+    giveaway: GiveawayAggregate,
+    snapshot: GiveawaySnapshotRecord,
+    algorithmVersion: GiveawayDrawRecord["algorithmVersion"],
+  ) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          snapshotDigest: snapshot.snapshotDigest,
+          algorithmVersion,
+          prizePools: giveaway.prizePools.map((pool) => ({
+            id: pool.id,
+            awardMode: pool.awardMode,
+            itemIds: pool.items.map((item) => item.id),
+          })),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private calculateGiveawayDrawResultDigest(giveaway: GiveawayAggregate, draw: GiveawayDrawRecord) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          drawId: draw.id,
+          snapshotId: draw.snapshotId,
+          algorithmVersion: draw.algorithmVersion,
+          awards: draw.awardIds.map((awardId) => {
+            const award = this.giveaways.awardsById.get(awardId);
+            if (!award) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+            return {
+              prizePoolId: award.prizePoolId,
+              prizeItemId: award.prizeItemId ?? null,
+              snapshotEntryId: award.snapshotEntryId ?? null,
+              rank: award.rank ?? null,
+              predecessorAwardId: award.predecessorAwardId ?? null,
+            };
+          }),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private buildGiveawayDrawVerification(
+    giveaway: GiveawayAggregate,
+    draw: GiveawayDrawRecord,
+    seed: Uint8Array,
+    published: boolean,
+  ) {
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return buildPublicDrawVerification({
+      giveawayId: giveaway.id,
+      published,
+      seed: published ? seed : undefined,
+      commitment: snapshot.seedCommitment,
+      snapshotDigest: snapshot.snapshotDigest,
+      snapshotCount: snapshot.candidateCount,
+      algorithmVersion: draw.algorithmVersion,
+      drawDigest: draw.resultDigest,
+    });
+  }
+
+  private toGiveawayDrawResult(giveaway: GiveawayAggregate, draw: GiveawayDrawRecord) {
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const published = Boolean(snapshot.seedRevealedAt);
+    const seed = published ? this.decryptGiveawayDrawSeed(snapshot) : undefined;
+    return {
+      drawId: draw.id,
+      verification: this.buildGiveawayDrawVerification(giveaway, draw, seed ?? new Uint8Array(), published),
+    };
+  }
+
+  private requireGiveawayByAward(award: GiveawayAwardRecord) {
+    const giveaway = Array.from(this.giveaways.campaignsById.values()).find((candidate) =>
+      candidate.awards.some((candidateAward) => candidateAward.id === award.id),
+    );
+    if (!giveaway) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return giveaway;
+  }
+
+  private createGiveawayEntryFromPath(
+    giveaway: GiveawayAggregate,
+    riderId: string,
+    input: {
+      path: Exclude<GiveawayEntryRecord["entryPath"], "automatic">;
+      eventType: Extract<GiveawayEntryEventRecord["type"], "opted_in" | "campaign_code_claimed" | "manual_grant">;
+      actorUserId: string;
+      mechanicsAcknowledgement?: GiveawayEntryRecord["mechanicsAcknowledgement"];
+      campaignCodeId?: string;
+      manualGrantActive?: boolean;
+      reasonDigest?: string;
+    },
+  ) {
+    const existing = giveaway.entriesByRider.get(riderId);
+    if (existing && existing.status !== "withdrawn") {
+      throw new BackendError("GIVEAWAY_ALREADY_ENTERED", "GIVEAWAY_ALREADY_ENTERED");
+    }
+    const qualification = this.evaluateGiveawayEntryQualification(giveaway, riderId, {
+      campaignCode: input.path === "campaign_code",
+      manual: input.path === "manual",
+    });
+    if (qualification.weight <= 0) {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    const now = new Date().toISOString();
+    const entry =
+      existing ??
+      ({
+        id: `giveaway-entry-${randomUUID()}`,
+        riderId,
+        status: "eligible",
+        currentWeight: qualification.weight,
+        qualifiedSourceFingerprint: qualification.sourceFingerprint,
+        qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+        entryPath: input.path,
+        opaquePublicReference: `entry_${randomBytes(16).toString("base64url")}`,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies GiveawayEntryRecord);
+    entry.status = "eligible";
+    entry.currentWeight = qualification.weight;
+    entry.qualifiedSourceFingerprint = qualification.sourceFingerprint;
+    entry.qualifiedGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
+    entry.entryPath = input.path;
+    entry.mechanicsAcknowledgement = input.mechanicsAcknowledgement;
+    entry.campaignCodeId = input.campaignCodeId;
+    entry.manualGrantActive = input.manualGrantActive;
+    entry.updatedAt = now;
+    giveaway.entriesByRider.set(riderId, entry);
+    this.giveaways.entriesById.set(entry.id, entry);
+    this.recordGiveawayEntryEvent(giveaway, entry, {
+      type: input.eventType,
+      sourceKey: `${input.path}:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
+      actorUserId: input.actorUserId,
+      idempotencyKey: `${input.path}:${giveaway.id}:${entry.id}:${randomUUID()}`,
+      weightDelta: qualification.weight,
+      sourceSnapshot: {
+        qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+        sourceFingerprint: qualification.sourceFingerprint,
+        ...(input.mechanicsAcknowledgement
+          ? {
+              mechanicsVersion: input.mechanicsAcknowledgement.version,
+              mechanicsChecksum: input.mechanicsAcknowledgement.checksum,
+            }
+          : {}),
+        ...(input.campaignCodeId ? { campaignCodeId: input.campaignCodeId } : {}),
+        ...(input.reasonDigest ? { reasonDigest: input.reasonDigest } : {}),
+      },
+    });
+    this.allocateEntryTimeAwards(giveaway, entry);
+    return entry;
+  }
+
+  private evaluateGiveawayEntryQualification(
+    giveaway: GiveawayAggregate,
+    riderId: string,
+    context: { campaignCode?: boolean; manual?: boolean } = {},
+  ) {
+    const qualifiedGroups = giveaway.eligibilityGroups.flatMap<QualifiedAutomaticGiveawayGroup>(
+      (group) => {
+        if (!group.enabled) return [];
+        const evaluations = group.conditions.map((condition) =>
+          this.evaluateGiveawayCondition(giveaway.eventId, riderId, condition.condition, context),
+        );
+        if (!evaluations.every((evaluation) => evaluation.satisfied)) return [];
+        return [{ group, sourceFacts: evaluations.map((evaluation) => evaluation.sourceFact) }];
+      },
+    );
+    const calculatedWeight = qualifiedGroups.reduce(
+      (total, qualifiedGroup) => total + qualifiedGroup.group.entryWeight,
+      0,
+    );
+    return {
+      qualifiedGroups,
+      weight: Math.min(calculatedWeight, giveaway.maxEntriesPerRider),
+      sourceFingerprint: this.calculateQualifiedSourceFingerprint(qualifiedGroups),
+    };
+  }
+
+  private recordGiveawayEntryEvent(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+    input: {
+      type: GiveawayEntryEventRecord["type"];
+      sourceKey: string;
+      sourceSnapshot?: Record<string, unknown>;
+      weightDelta: number;
+      actorUserId?: string;
+      idempotencyKey: string;
+    },
+  ) {
+    const record: GiveawayEntryEventRecord = Object.freeze({
+      id: `giveaway-entry-event-${randomUUID()}`,
+      entryId: entry.id,
+      type: input.type,
+      sourceKey: input.sourceKey,
+      sourceSnapshot: input.sourceSnapshot ? Object.freeze({ ...input.sourceSnapshot }) : undefined,
+      weightDelta: input.weightDelta,
+      actorUserId: input.actorUserId,
+      idempotencyKey: input.idempotencyKey,
+      createdAt: new Date().toISOString(),
+    });
+    giveaway.entryEvents.push(record);
+    this.giveaways.entryEventsById.set(record.id, record);
+  }
+
+  private reconcileEntryForLock(giveaway: GiveawayAggregate, riderId: string) {
+    const entry = giveaway.entriesByRider.get(riderId);
+    if (!entry) return;
+    if (entry.entryPath === "manual" && !entry.manualGrantActive) return;
+    const qualification = this.evaluateGiveawayEntryQualification(giveaway, riderId, {
+      campaignCode: entry.entryPath === "campaign_code",
+      manual: entry.entryPath === "manual" && entry.manualGrantActive,
+    });
+    const now = new Date().toISOString();
+    if (qualification.weight <= 0) {
+      if (entry.status === "eligible") {
+        this.voidDirectEntryAwards(giveaway, entry, undefined, "lock_revalidation");
+        entry.status = "withdrawn";
+        entry.updatedAt = now;
+        this.recordGiveawayEntryEvent(giveaway, entry, {
+          type: "source_revalidated",
+          sourceKey: `lock-revalidation:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
+          weightDelta: -entry.currentWeight,
+          idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
+        });
+      }
+      return;
+    }
+    if (entry.status === "withdrawn" && entry.entryPath !== "manual") entry.status = "eligible";
+    if (entry.status === "eligible") {
+      const weightDelta = qualification.weight - entry.currentWeight;
+      const changed =
+        weightDelta !== 0 ||
+        entry.qualifiedSourceFingerprint !== qualification.sourceFingerprint ||
+        !this.haveSameGiveawayGroupIds(
+          entry.qualifiedGroupIds,
+          qualification.qualifiedGroups.map(({ group }) => group.id),
+        );
+      entry.currentWeight = qualification.weight;
+      entry.qualifiedSourceFingerprint = qualification.sourceFingerprint;
+      entry.qualifiedGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
+      entry.updatedAt = now;
+      if (changed) {
+        this.recordGiveawayEntryEvent(giveaway, entry, {
+          type: "source_revalidated",
+          sourceKey: `lock-revalidation:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
+          weightDelta,
+          idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
+        });
+      }
+    }
+  }
+
+  private haveSameGiveawayGroupIds(left: readonly string[], right: readonly string[]) {
+    return left.length === right.length && left.every((id, index) => id === right[index]);
+  }
+
+  private isEntryEligibleForPool(entry: GiveawayEntryRecord, pool: GiveawayPrizePoolRecord) {
+    return (
+      pool.eligibilityGroupIds.length === 0 ||
+      pool.eligibilityGroupIds.some((groupId) => entry.qualifiedGroupIds.includes(groupId))
+    );
+  }
+
+  private isSnapshotEntryEligibleForPool(
+    entry: GiveawaySnapshotEntryRecord,
+    pool: GiveawayPrizePoolRecord,
+  ) {
+    return (
+      pool.eligibilityGroupIds.length === 0 ||
+      pool.eligibilityGroupIds.some((groupId) => entry.qualifiedGroupIds.includes(groupId))
+    );
+  }
+
+  private canCreateGiveawayAward(
+    giveaway: GiveawayAggregate,
+    pool: GiveawayPrizePoolRecord,
+    riderId: string,
+    ignoredAwardId?: string,
+  ) {
+    const currentAwards = giveaway.awards.filter(
+      (award) => award.isCurrent && award.id !== ignoredAwardId,
+    );
+    if (currentAwards.length >= giveaway.maxWinsTotal) return false;
+    if (currentAwards.filter((award) => award.winnerUserId === riderId).length >= giveaway.maxWinsPerRider) {
+      return false;
+    }
+    const poolLimit = pool.perRiderLimit ?? 1;
+    return (
+      currentAwards.filter(
+        (award) => award.winnerUserId === riderId && award.prizePoolId === pool.id,
+      ).length < poolLimit
+    );
+  }
+
+  private allocateEntryTimeAwards(giveaway: GiveawayAggregate, entry: GiveawayEntryRecord) {
+    for (const pool of [...giveaway.prizePools].sort((left, right) => left.position - right.position)) {
+      if (!["guaranteed", "first_come"].includes(pool.awardMode)) continue;
+      if (!this.isEntryEligibleForPool(entry, pool)) continue;
+      if (!this.canCreateGiveawayAward(giveaway, pool, entry.riderId)) continue;
+      if (pool.awardMode === "guaranteed") {
+        this.createGiveawayAward(giveaway, { entry, prizePool: pool });
+        continue;
+      }
+      const prizeItem = pool.items
+        .filter((item) => item.status === "available")
+        .sort((left, right) => left.position - right.position)[0];
+      if (prizeItem) this.createGiveawayAward(giveaway, { entry, prizePool: pool, prizeItem });
+    }
+  }
+
+  private voidDirectEntryAwards(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+    actorUserId: string | undefined,
+    reason: string,
+  ) {
+    for (const award of giveaway.awards.filter(
+      (candidate) =>
+        candidate.entryId === entry.id &&
+        !candidate.drawId &&
+        candidate.isCurrent &&
+        ["pending_verification", "claimable", "verified"].includes(candidate.status),
+    )) {
+      award.isCurrent = false;
+      award.status = "voided";
+      award.reasonDigest = this.hashGiveawayReason(reason);
+      award.updatedAt = new Date().toISOString();
+      if (award.prizeItemId) {
+        const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+        const item = pool?.items.find((candidate) => candidate.id === award.prizeItemId);
+        if (item?.status === "reserved") item.status = "available";
+      }
+      this.auditGiveaway(giveaway, actorUserId, "GIVEAWAY_AWARD_VOIDED", "award", award.id, {
+        awardId: award.id,
+        entryId: entry.id,
+        reasonDigest: award.reasonDigest,
+      });
+    }
+  }
+
+  private createGiveawayAward(
+    giveaway: GiveawayAggregate,
+    input: {
+      entry: GiveawayEntryRecord;
+      prizePool: GiveawayPrizePoolRecord;
+      prizeItem?: GiveawayPrizeItemRecord;
+      draw?: GiveawayDrawRecord;
+      snapshotEntry?: GiveawaySnapshotEntryRecord;
+      rank?: number;
+      predecessorAwardId?: string;
+    },
+  ) {
+    if (input.prizePool.awardMode === "guaranteed" && input.prizeItem) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (input.prizePool.awardMode !== "guaranteed" && !input.prizeItem) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (Boolean(input.draw) !== Boolean(input.snapshotEntry) || Boolean(input.draw) !== Boolean(input.rank)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (input.prizeItem) {
+      const conflictingCurrentAward = giveaway.awards.find(
+        (award) => award.isCurrent && award.prizeItemId === input.prizeItem?.id,
+      );
+      if (conflictingCurrentAward) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      input.prizeItem.status = "reserved";
+    }
+    const now = new Date().toISOString();
+    const award: GiveawayAwardRecord = {
+      id: `giveaway-award-${randomUUID()}`,
+      entryId: input.entry.id,
+      drawId: input.draw?.id,
+      prizePoolId: input.prizePool.id,
+      prizeItemId: input.prizeItem?.id,
+      snapshotEntryId: input.snapshotEntry?.id,
+      winnerUserId: input.entry.riderId,
+      status: input.prizePool.presenceVerificationRequired ? "pending_verification" : "claimable",
+      isCurrent: true,
+      rank: input.rank,
+      opaqueClaimReference: `claim_${randomBytes(16).toString("base64url")}`,
+      claimDeadlineAt: giveaway.claimDeadlineAt,
+      predecessorAwardId: input.predecessorAwardId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    giveaway.awards.push(award);
+    this.giveaways.awardsById.set(award.id, award);
+    return award;
+  }
+
   private hydrateGiveawayAggregate(giveaway: GiveawayAggregate) {
     this.giveaways.campaignsById.set(giveaway.id, giveaway);
     const eventGiveawayIds = this.giveaways.giveawayIdsByEventId.get(giveaway.eventId) ?? new Set<string>();
@@ -1775,26 +3128,13 @@ export class TambikeBackend {
   }
 
   private reconcileAutomaticEntry(giveaway: GiveawayAggregate, riderId: string) {
-    const qualifiedGroups = giveaway.eligibilityGroups.flatMap<QualifiedAutomaticGiveawayGroup>(
-      (group) => {
-        if (!group.enabled) return [];
-        const evaluations = group.conditions.map((condition) =>
-          this.evaluateGiveawayCondition(giveaway.eventId, riderId, condition.condition),
-        );
-        if (!evaluations.every((evaluation) => evaluation.satisfied)) return [];
-        return [{ group, sourceFacts: evaluations.map((evaluation) => evaluation.sourceFact) }];
-      },
-    );
-    const calculatedWeight = qualifiedGroups.reduce(
-      (total, qualifiedGroup) => total + qualifiedGroup.group.entryWeight,
-      0,
-    );
-    const nextWeight = Math.min(calculatedWeight, giveaway.maxEntriesPerRider);
-    const sourceFingerprint = this.calculateQualifiedSourceFingerprint(qualifiedGroups);
+    const qualification = this.evaluateGiveawayEntryQualification(giveaway, riderId);
+    const { qualifiedGroups, weight: nextWeight, sourceFingerprint } = qualification;
     const existing = giveaway.entriesByRider.get(riderId);
 
     if (nextWeight <= 0) {
       if (existing?.status === "eligible") {
+        this.voidDirectEntryAwards(giveaway, existing, undefined, "automatic_withdrawal");
         existing.status = "withdrawn";
         existing.qualifiedSourceFingerprint = sourceFingerprint;
         existing.updatedAt = new Date().toISOString();
@@ -1818,6 +3158,8 @@ export class TambikeBackend {
         status: "eligible",
         currentWeight: nextWeight,
         qualifiedSourceFingerprint: sourceFingerprint,
+        qualifiedGroupIds: qualifiedGroups.map(({ group }) => group.id),
+        entryPath: "automatic",
         opaquePublicReference: `entry_${randomBytes(16).toString("base64url")}`,
         createdAt: now,
         updatedAt: now,
@@ -1832,6 +3174,7 @@ export class TambikeBackend {
         qualifiedGroups,
         sourceFingerprint,
       );
+      this.allocateEntryTimeAwards(giveaway, entry);
       return;
     }
 
@@ -1839,6 +3182,7 @@ export class TambikeBackend {
       existing.status = "eligible";
       existing.currentWeight = nextWeight;
       existing.qualifiedSourceFingerprint = sourceFingerprint;
+      existing.qualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
       existing.updatedAt = new Date().toISOString();
       this.recordAutomaticEntryEvent(
         giveaway,
@@ -1848,17 +3192,23 @@ export class TambikeBackend {
         qualifiedGroups,
         sourceFingerprint,
       );
+      this.allocateEntryTimeAwards(giveaway, existing);
       return;
     }
 
     if (
       existing.status === "eligible" &&
       (existing.currentWeight !== nextWeight ||
-        existing.qualifiedSourceFingerprint !== sourceFingerprint)
+        existing.qualifiedSourceFingerprint !== sourceFingerprint ||
+        !this.haveSameGiveawayGroupIds(
+          existing.qualifiedGroupIds,
+          qualifiedGroups.map(({ group }) => group.id),
+        ))
     ) {
       const weightDelta = nextWeight - existing.currentWeight;
       existing.currentWeight = nextWeight;
       existing.qualifiedSourceFingerprint = sourceFingerprint;
+      existing.qualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
       existing.updatedAt = new Date().toISOString();
       this.recordAutomaticEntryEvent(
         giveaway,
@@ -1868,6 +3218,7 @@ export class TambikeBackend {
         qualifiedGroups,
         sourceFingerprint,
       );
+      this.allocateEntryTimeAwards(giveaway, existing);
     }
   }
 
@@ -1932,6 +3283,7 @@ export class TambikeBackend {
     eventId: string,
     riderId: string,
     condition: GiveawayEligibilityConditionInput,
+    context: { campaignCode?: boolean; manual?: boolean } = {},
   ): GiveawayConditionEvaluation {
     switch (condition.source) {
       case "active_rsvp_pass": {
@@ -2010,9 +3362,13 @@ export class TambikeBackend {
         };
       }
       case "campaign_code":
+        return {
+          satisfied: Boolean(context.campaignCode),
+          sourceFact: { source: condition.source, satisfiedBy: context.campaignCode ? "claim" : null },
+        };
       case "manual":
         return {
-          satisfied: false,
+          satisfied: Boolean(context.manual),
           sourceFact: { source: condition.source },
         };
     }

@@ -1,7 +1,7 @@
 import "server-only";
 
-import { TambikeBackend } from "./backend";
+import { TambikeBackend, type TambikeTestSeedOptions } from "./backend";
 
-export function createTambikeTestBackend() {
-  return TambikeBackend.create();
+export function createTambikeTestBackend(options?: TambikeTestSeedOptions) {
+  return TambikeBackend.create(options);
 }
