@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import Link from "next/link";
-import jsQR from "jsqr";
 import {
   AlertTriangleIcon,
   CameraIcon,
@@ -24,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { decodeQrImageData } from "@/features/check-in/qr-image-decoder";
 import type {
   Event,
   ScanMethod,
@@ -125,9 +125,7 @@ export function QrScannerPanel({
     canvas.height = height;
     context.drawImage(source, 0, 0, width, height);
     const imageData = context.getImageData(0, 0, width, height);
-    return jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: "attemptBoth",
-    })?.data.trim() ?? null;
+    return decodeQrImageData(imageData.data, imageData.width, imageData.height);
   }, []);
 
   React.useEffect(() => {
@@ -140,7 +138,7 @@ export function QrScannerPanel({
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !pendingRef.current) {
         const token = decodeFromCanvas(video, video.videoWidth, video.videoHeight);
         if (token) {
-          void submitToken(token, "qr");
+          void submitToken(token, "staff_camera");
           return;
         }
       }
@@ -210,7 +208,7 @@ export function QrScannerPanel({
           return;
         }
 
-        await submitToken(token, "qr");
+        await submitToken(token, "staff_upload");
       } catch {
         pendingRef.current = false;
         setPending(false);
@@ -298,7 +296,7 @@ export function QrScannerPanel({
               className="grid gap-2"
               onSubmit={(formEvent) => {
                 formEvent.preventDefault();
-                void submitToken(manualToken, "manual");
+                void submitToken(manualToken, "staff_manual");
               }}
             >
               <Label htmlFor="manual-token">Manual token</Label>

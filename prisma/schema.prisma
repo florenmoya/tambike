@@ -69,6 +69,32 @@ enum PassStatus {
 enum CheckInMethod {
   qr
   manual
+  staff_camera
+  staff_upload
+  staff_manual
+  rider_qr
+}
+
+enum CheckInStatus {
+  pending
+  confirmed
+}
+
+enum SelfCheckInMode {
+  staff_only
+  self_review
+  self_instant
+}
+
+enum SelfCheckInState {
+  closed
+  open
+  paused
+}
+
+enum OrganizerQrMode {
+  rotating
+  fixed
 }
 
 enum ApprovalType {
@@ -208,6 +234,8 @@ model Event {
   rsvps           RSVP[]
   passes          Pass[]
   checkIns        CheckIn[]
+  checkInSettings EventCheckInSettings?
+  selfCheckInQrSessions EventSelfCheckInQrSession[]
   perks           Perk[]
   leads           Lead[]
   flags           FlagReport[]
@@ -262,18 +290,49 @@ model Pass {
 }
 
 model CheckIn {
-  id        String        @id @default(cuid())
-  eventId   String
-  passId    String
-  userId    String
-  scannedBy String
-  timestamp DateTime      @default(now())
-  method    CheckInMethod
+  id                    String        @id @default(cuid())
+  eventId               String
+  passId                String
+  userId                String
+  scannedBy             String?
+  timestamp             DateTime      @default(now())
+  confirmedAt           DateTime?
+  status                CheckInStatus @default(confirmed)
+  method                CheckInMethod
+  confirmationMethod    CheckInMethod?
+  selfCheckInSessionId  String?
 
-  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  pass    Pass  @relation(fields: [passId], references: [id], onDelete: Cascade)
-  user    User  @relation("CheckedInUser", fields: [userId], references: [id], onDelete: Cascade)
-  scanner User  @relation("ScannerUser", fields: [scannedBy], references: [id], onDelete: Cascade)
+  event              Event                       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  pass               Pass                        @relation(fields: [passId], references: [id], onDelete: Cascade)
+  user               User                        @relation("CheckedInUser", fields: [userId], references: [id], onDelete: Cascade)
+  scanner            User?                       @relation("ScannerUser", fields: [scannedBy], references: [id], onDelete: Cascade)
+  selfCheckInSession EventSelfCheckInQrSession? @relation(fields: [selfCheckInSessionId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, passId])
+}
+
+model EventCheckInSettings {
+  eventId                  String             @id
+  mode                     SelfCheckInMode    @default(staff_only)
+  state                    SelfCheckInState   @default(closed)
+  qrMode                   OrganizerQrMode    @default(rotating)
+  fixedQrAcknowledgedAt    DateTime?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model EventSelfCheckInQrSession {
+  id        String   @id @default(cuid())
+  eventId   String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  event    Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  checkIns CheckIn[]
 }
 
 model Perk {

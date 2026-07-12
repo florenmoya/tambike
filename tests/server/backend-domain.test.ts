@@ -154,41 +154,69 @@ describe("Tambike backend domain rules", () => {
     ).rejects.toThrow("INVALID_INPUT");
   });
 
-  test("validates scanner ownership, duplicate scans, wrong event tokens, and audit logging", async () => {
+  test("enforces scanner event ownership while allowing admin overrides and blocking duplicates", async () => {
     const backend = await createTambikeTestBackend();
     const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");
     const organizerSession = await backend.loginWithPassword(
       "marco.organizer@example.com",
       "password123",
     );
+    const adminSession = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
     const registration = await backend.registerForEvent(
       riderSession.sessionToken,
       "tambike-cafe-classico",
       { status: "going", attendanceType: "direct" },
     );
 
-    const checkIn = await backend.scanPass(
-      organizerSession.sessionToken,
-      "tambike-cafe-classico",
-      registration.pass!.qrToken,
-      "qr",
-    );
-
-    expect(checkIn.status).toBe("checked_in");
-    await expect(
-      backend.scanPass(
-        organizerSession.sessionToken,
-        "motoir-national-round-4",
-        registration.pass!.qrToken,
-        "qr",
-      ),
-    ).rejects.toThrow("WRONG_EVENT");
     await expect(
       backend.scanPass(
         organizerSession.sessionToken,
         "tambike-cafe-classico",
         registration.pass!.qrToken,
-        "qr",
+        "staff_camera",
+      ),
+    ).rejects.toThrow("FORBIDDEN");
+
+    await expect(
+      backend.scanPass(
+        riderSession.sessionToken,
+        "tambike-cafe-classico",
+        registration.pass!.qrToken,
+        "staff_camera",
+      ),
+    ).rejects.toThrow("FORBIDDEN");
+
+    await expect(
+      backend.scanPass(
+        adminSession.sessionToken,
+        "tambike-cafe-classico",
+        registration.pass!.qrToken,
+        "rider_qr",
+      ),
+    ).rejects.toThrow("INVALID_INPUT");
+
+    const checkIn = await backend.scanPass(
+      adminSession.sessionToken,
+      "tambike-cafe-classico",
+      registration.pass!.qrToken,
+      "staff_camera",
+    );
+
+    expect(checkIn.status).toBe("checked_in");
+    await expect(
+      backend.scanPass(
+        adminSession.sessionToken,
+        "motoir-national-round-4",
+        registration.pass!.qrToken,
+        "staff_camera",
+      ),
+    ).rejects.toThrow("WRONG_EVENT");
+    await expect(
+      backend.scanPass(
+        adminSession.sessionToken,
+        "tambike-cafe-classico",
+        registration.pass!.qrToken,
+        "staff_camera",
       ),
     ).rejects.toThrow("ALREADY_CHECKED_IN");
     expect(await backend.auditCount("CHECK_IN_CREATED")).toBe(1);

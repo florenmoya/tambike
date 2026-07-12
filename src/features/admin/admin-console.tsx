@@ -45,7 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { adminApproval, organizers, reportMetrics, venues } from "@/features/tambike-demo/data";
+import { adminApproval, organizers, venues } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type { Event, UserProfile, VerificationStatus } from "@/features/tambike-demo/types";
 
@@ -108,6 +108,7 @@ type ReportRow = {
   status: Event["status"];
   going: number;
   checkIns: number;
+  pendingCheckIns: number;
   noShow: string;
 };
 
@@ -776,6 +777,25 @@ function getActionErrorMessage(error: unknown) {
 }
 
 function ReportsSection({ rows }: { rows: ReportRow[] }) {
+  const confirmedCheckIns = rows.reduce((total, row) => total + row.checkIns, 0);
+  const pendingCheckIns = rows.reduce((total, row) => total + row.pendingCheckIns, 0);
+  const going = rows.reduce((total, row) => total + row.going, 0);
+  const noShowRate = going > 0 ? `${Math.round(((going - confirmedCheckIns) / going) * 100)}%` : "0%";
+  const metrics = [
+    {
+      label: "Confirmed check-ins",
+      value: String(confirmedCheckIns),
+      detail: "Attendance recorded by staff or rider self-check-in",
+    },
+    {
+      label: "Pending staff review",
+      value: String(pendingCheckIns),
+      detail: "Not counted as attendance until staff confirms",
+    },
+    { label: "Going", value: String(going), detail: "QR passes generated" },
+    { label: "No-show rate", value: noShowRate, detail: "Going vs confirmed arrivals" },
+  ];
+
   return (
     <TablePanel
       title="Operational reports"
@@ -790,7 +810,7 @@ function ReportsSection({ rows }: { rows: ReportRow[] }) {
       }
     >
       <div className="mb-4 grid gap-3 md:grid-cols-3">
-        {reportMetrics.slice(0, 6).map((metric) => (
+        {metrics.map((metric) => (
           <div key={metric.label} className="rounded-lg border bg-muted/30 p-3">
             <div className="text-sm text-muted-foreground">{metric.label}</div>
             <div className="mt-1 text-xl font-semibold tabular-nums">{metric.value}</div>
@@ -823,13 +843,18 @@ function AdminReportDetail({ event, eventId }: { event: Event | null; eventId: s
   }
 
   const organizer = organizers.find((item) => item.id === event.organizerId);
-  const checkIns = Math.floor(event.going * 0.82);
+  const checkIns = event.confirmedCheckIns ?? 0;
   const noShow = event.going > 0 ? `${Math.max(0, Math.round(((event.going - checkIns) / event.going) * 100))}%` : "0%";
   const metrics = [
     ["Going", String(event.going), "QR passes generated"],
     ["Interested", String(event.interested), "Saved or shared"],
-    ["Check-ins", String(checkIns), "Scanned or manually marked"],
+    ["Check-ins", String(checkIns), "Confirmed arrivals only"],
     ["No-show", noShow, "Going vs actual check-ins"],
+  ];
+  const reportNotes = [
+    ["Pending staff review", String(event.pendingCheckIns ?? 0), "Excluded from attendance until confirmed"],
+    ["Perk redemptions", "Manual", "Attendance never automatically redeems a limited perk"],
+    ["Check-in policy", "Event entry", "One entry-point policy for this release"],
   ];
 
   return (
@@ -859,11 +884,11 @@ function AdminReportDetail({ event, eventId }: { event: Event | null; eventId: s
           <CardDescription>Admin-facing summary for post-event review and export.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
-          {reportMetrics.slice(0, 3).map((metric) => (
-            <div key={metric.label} className="rounded-lg border bg-muted/30 p-3">
-              <div className="text-sm text-muted-foreground">{metric.label}</div>
-              <div className="mt-1 text-xl font-semibold">{metric.value}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{metric.detail}</div>
+          {reportNotes.map(([label, value, detail]) => (
+            <div key={label} className="rounded-lg border bg-muted/30 p-3">
+              <div className="text-sm text-muted-foreground">{label}</div>
+              <div className="mt-1 text-xl font-semibold">{value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
             </div>
           ))}
         </CardContent>
@@ -1545,7 +1570,7 @@ function getValidationRows(): ValidationRow[] {
 
 function getReportRows(events: Event[]): ReportRow[] {
   return events.filter((event) => isReportableEventStatus(event.status)).map((event) => {
-    const checkIns = Math.floor(event.going * 0.82);
+    const checkIns = event.confirmedCheckIns ?? 0;
     const noShow = event.going > 0 ? `${Math.max(0, Math.round(((event.going - checkIns) / event.going) * 100))}%` : "0%";
     return {
       id: event.id,
@@ -1554,6 +1579,7 @@ function getReportRows(events: Event[]): ReportRow[] {
       status: event.status,
       going: event.going,
       checkIns,
+      pendingCheckIns: event.pendingCheckIns ?? 0,
       noShow,
     };
   });

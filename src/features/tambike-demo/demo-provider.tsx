@@ -11,7 +11,9 @@ import {
 import {
   approvePublishAction,
   approveVenueWithConditionsAction,
+  configureCheckInAction,
   createEventDraftAction,
+  issueSelfCheckInQrAction,
   loginWithPasswordAction,
   logoutAction,
   registerForEventAction,
@@ -21,15 +23,18 @@ import {
 } from "@/server/actions";
 import type {
   AttendanceType,
+  CheckInConfiguration,
   CreateEventInput,
   DemoState,
   Event,
+  EventCheckInSettings,
   Pass,
   ProfileInput,
   Role,
   ScanMethod,
   ScanPassResult,
   ScannerOutcome,
+  SelfCheckInQr,
   SignupInput,
   UserProfile,
 } from "./types";
@@ -47,6 +52,8 @@ interface DemoContextValue {
   requireLogin: (notice: string) => boolean;
   events: Event[];
   passes: Pass[];
+  checkInSettings: EventCheckInSettings[];
+  applyServerState: (state: DemoState) => void;
   createEventDraft: (input: CreateEventInput) => Promise<Event | null>;
   attendanceType: AttendanceType;
   passCreated: boolean;
@@ -58,6 +65,11 @@ interface DemoContextValue {
   scannerOutcome: ScannerOutcome;
   setScannerOutcome: (outcome: ScannerOutcome) => void;
   scanPass: (eventId: string, qrToken: string, method: ScanMethod) => Promise<ScanPassResult>;
+  configureCheckIn: (
+    eventId: string,
+    input: CheckInConfiguration,
+  ) => Promise<EventCheckInSettings>;
+  issueSelfCheckInQr: (eventId: string) => Promise<SelfCheckInQr>;
   checkedInCount: number;
   venueConditions: string;
   setVenueConditions: (conditions: string) => void;
@@ -81,10 +93,12 @@ export function DemoProvider({
   const [authNotice, setAuthNotice] = useState("");
   const [events, setEvents] = useState<Event[]>(initialState.events);
   const [passes, setPasses] = useState<Pass[]>(initialState.passes);
+  const [checkInSettings, setCheckInSettings] = useState<EventCheckInSettings[]>(
+    initialState.checkInSettings ?? [],
+  );
   const [attendanceType, setAttendanceType] = useState<AttendanceType>("direct");
   const [passCreated, setPassCreated] = useState(initialState.passCreated);
   const [scannerOutcome, setScannerOutcomeState] = useState<ScannerOutcome>("idle");
-  const [checkedInCount, setCheckedInCount] = useState(68);
   const [venueConditions, setVenueConditions] = useState(
     "Max 120 riders. Parking marshals required. Quiet exit after 10 PM.",
   );
@@ -100,8 +114,14 @@ export function DemoProvider({
     setCurrentUser(nextState.currentUser);
     setEvents(nextState.events);
     setPasses(nextState.passes);
+    setCheckInSettings(nextState.checkInSettings ?? []);
     setPassCreated(nextState.passCreated);
   }, []);
+
+  const checkedInCount = useMemo(
+    () => events.reduce((total, event) => total + (event.confirmedCheckIns ?? 0), 0),
+    [events],
+  );
 
   const loginWithPassword = useCallback(
     async (email: string, password: string) => {
@@ -190,9 +210,6 @@ export function DemoProvider({
 
   const setScannerOutcome = useCallback((outcome: ScannerOutcome) => {
     setScannerOutcomeState(outcome);
-    if (outcome === "valid") {
-      setCheckedInCount((count) => Math.max(count, 69));
-    }
   }, []);
 
   const scanPass = useCallback(
@@ -200,9 +217,6 @@ export function DemoProvider({
       const result = await scanPassAction(eventId, qrToken, method);
       applyState(result.state);
       setScannerOutcomeState(result.outcome);
-      if (result.ok) {
-        setCheckedInCount((count) => count + 1);
-      }
 
       return result;
     },
@@ -224,6 +238,20 @@ export function DemoProvider({
     setAdminDecision("published");
   }, [applyState]);
 
+  const configureCheckIn = useCallback(
+    async (eventId: string, input: CheckInConfiguration) => {
+      const result = await configureCheckInAction(eventId, input);
+      applyState(result.state);
+      return result.settings;
+    },
+    [applyState],
+  );
+
+  const issueSelfCheckInQr = useCallback(
+    async (eventId: string) => issueSelfCheckInQrAction(eventId),
+    [],
+  );
+
   const value = useMemo(
     () => ({
       role,
@@ -238,6 +266,8 @@ export function DemoProvider({
       requireLogin,
       events,
       passes,
+      checkInSettings,
+      applyServerState: applyState,
       createEventDraft,
       attendanceType,
       passCreated,
@@ -245,6 +275,8 @@ export function DemoProvider({
       scannerOutcome,
       setScannerOutcome,
       scanPass,
+      configureCheckIn,
+      issueSelfCheckInQr,
       checkedInCount,
       venueConditions,
       setVenueConditions,
@@ -255,14 +287,18 @@ export function DemoProvider({
     }),
     [
       adminDecision,
+      applyState,
       approvePublish,
       approveVenueWithConditions,
       attendanceType,
       authNotice,
       checkedInCount,
+      checkInSettings,
+      configureCheckIn,
       createEventDraft,
       currentUser,
       events,
+      issueSelfCheckInQr,
       loginWithPassword,
       logout,
       passCreated,

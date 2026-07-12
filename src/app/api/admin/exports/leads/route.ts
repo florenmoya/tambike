@@ -4,7 +4,7 @@ import { sessionCookieName } from "@/server/session-cookie";
 
 function errorResponse(error: unknown) {
   if (error instanceof BackendError) {
-    const statusByCode: Record<BackendError["code"], number> = {
+    const statusByCode: Partial<Record<BackendError["code"], number>> = {
       UNAUTHENTICATED: 401,
       FORBIDDEN: 403,
       NOT_FOUND: 404,
@@ -14,7 +14,7 @@ function errorResponse(error: unknown) {
       CANCELLED_PASS: 409,
     };
 
-    return Response.json({ error: error.code }, { status: statusByCode[error.code] });
+    return Response.json({ error: error.code }, { status: statusByCode[error.code] ?? 400 });
   }
 
   return Response.json({ error: "EXPORT_FAILED" }, { status: 500 });

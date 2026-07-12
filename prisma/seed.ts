@@ -45,6 +45,8 @@ async function main() {
   await prisma.lead.deleteMany();
   await prisma.perkRedemption.deleteMany();
   await prisma.checkIn.deleteMany();
+  await prisma.eventSelfCheckInQrSession.deleteMany();
+  await prisma.eventCheckInSettings.deleteMany();
   await prisma.pass.deleteMany();
   await prisma.rSVP.deleteMany();
   await prisma.eventApproval.deleteMany();
@@ -188,6 +190,15 @@ async function main() {
       },
     });
   }
+
+  await prisma.eventCheckInSettings.createMany({
+    data: demoEvents.map((event) => ({
+      eventId: event.id,
+      mode: "staff_only",
+      state: "closed",
+      qrMode: "rotating",
+    })),
+  });
 
   await prisma.rSVP.create({
     data: {

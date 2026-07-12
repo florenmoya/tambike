@@ -58,7 +58,6 @@ import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
 import {
   getOrganizer,
   getVenue,
-  reportMetrics,
   venueApproval,
 } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
@@ -165,7 +164,6 @@ export function VenueConsole({ section, eventId, requestId }: {
 }) {
   const {
     approveVenueWithConditions,
-    checkedInCount,
     currentUser,
     events,
     scanPass,
@@ -198,7 +196,11 @@ export function VenueConsole({ section, eventId, requestId }: {
   const activeEventId = activeEvent?.id ?? null;
   const eventRows = getVenueEventRows(venueEvents);
   const reportRows = getReportRows(venueEvents);
-  const cards = getSectionCards(venueEvents, requestRows, checkedInCount);
+  const cards = getSectionCards(
+    venueEvents,
+    requestRows,
+    venueEvents.reduce((total, event) => total + (event.confirmedCheckIns ?? 0), 0),
+  );
   const chartData = getChartData(venueEvents);
   const metrics = getSidebarMetrics(venueEvents, requestRows);
   const copy = sectionCopy[section];
@@ -262,7 +264,7 @@ export function VenueConsole({ section, eventId, requestId }: {
             {section === "event" && selectedEvent ? <EventDetailSection event={selectedEvent} /> : null}
             {section === "checkin" && selectedEvent ? (
               <CheckInSection
-                checkedInCount={checkedInCount}
+                checkedInCount={selectedEvent.confirmedCheckIns ?? 0}
                 event={selectedEvent}
                 scanPass={scanPass}
               />
@@ -689,8 +691,13 @@ function ReportDetailSection({ event }: { event: Event }) {
   const metrics = [
     ["Going", String(event.going), "QR passes generated"],
     ["Interested", String(event.interested), "Saved or shared"],
-    ["Check-ins", String(checkIns), "Venue scans and manual marks"],
+    ["Confirmed check-ins", String(checkIns), "Attendance recorded by staff or rider self-check-in"],
     ["No-show", noShow, "Going vs actual check-ins"],
+  ];
+  const reportNotes = [
+    ["Pending staff review", String(event.pendingCheckIns ?? 0), "Excluded from attendance until staff confirms"],
+    ["Perk redemptions", "Manual", "Attendance never automatically redeems a limited perk"],
+    ["Check-in policy", "Event entry", "One entry-point policy for this release"],
   ];
 
   return (
@@ -720,11 +727,11 @@ function ReportDetailSection({ event }: { event: Event }) {
           <CardDescription>Venue-side outcomes for operations review.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
-          {reportMetrics.slice(0, 3).map((metric) => (
-            <div key={metric.label} className="rounded-lg border bg-muted/30 p-3">
-              <div className="text-sm text-muted-foreground">{metric.label}</div>
-              <div className="mt-1 text-xl font-semibold">{metric.value}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{metric.detail}</div>
+          {reportNotes.map(([label, value, detail]) => (
+            <div key={label} className="rounded-lg border bg-muted/30 p-3">
+              <div className="text-sm text-muted-foreground">{label}</div>
+              <div className="mt-1 text-xl font-semibold">{value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
             </div>
           ))}
         </CardContent>
@@ -1046,7 +1053,7 @@ function getSectionCards(events: Event[], requests: RequestRow[], checkedInCount
     {
       label: "Today check-ins",
       value: String(checkedInCount),
-      detail: "QR scans and manual arrival marks",
+      detail: "Confirmed arrivals only",
       trend: "Live",
       icon: <ScanLineIcon data-icon="inline-start" />,
     },
@@ -1080,7 +1087,7 @@ function getChartData(events: Event[]): AdminChartPoint[] {
 }
 
 function getCheckIns(event: Event) {
-  return Math.floor(event.going * 0.82);
+  return event.confirmedCheckIns ?? 0;
 }
 
 function getNoShow(event: Event, checkIns: number) {

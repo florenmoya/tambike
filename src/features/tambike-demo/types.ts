@@ -43,7 +43,40 @@ export type ScannerOutcome =
   | "cancelled"
   | "inactive";
 
-export type ScanMethod = "qr" | "manual";
+export type ScanMethod =
+  | "qr"
+  | "manual"
+  | "staff_camera"
+  | "staff_upload"
+  | "staff_manual"
+  | "rider_qr";
+
+export type CheckInMode = "staff_only" | "self_review" | "self_instant";
+
+export type CheckInState = "closed" | "open" | "paused";
+
+export type OrganizerQrMode = "rotating" | "fixed";
+
+export type CheckInStatus = "pending" | "confirmed";
+
+export interface CheckInConfiguration {
+  mode: CheckInMode;
+  state: CheckInState;
+  qrMode: OrganizerQrMode;
+  /** Required only when an organizer intentionally enables a lower-assurance fixed QR. */
+  fixedQrAcknowledged?: boolean;
+}
+
+export interface EventCheckInSettings extends CheckInConfiguration {
+  eventId: string;
+  fixedQrAcknowledged: boolean;
+}
+
+export interface SelfCheckInQr {
+  token: string;
+  expiresAt?: string;
+  qrMode: OrganizerQrMode;
+}
 
 export type ScanPassCode =
   | "CHECKED_IN"
@@ -148,6 +181,9 @@ export interface Event {
   };
   rules: string[];
   perks: Perk[];
+  /** Confirmed arrivals only; pending self-review requests are intentionally excluded. */
+  confirmedCheckIns?: number;
+  pendingCheckIns?: number;
   sourceUrl?: string;
   sourceNote?: string;
 }
@@ -176,12 +212,49 @@ export interface Pass {
   generatedAt: string;
 }
 
+export interface SelfCheckInContext {
+  event: Event;
+  mode: CheckInMode;
+  state: CheckInState;
+  qrMode: OrganizerQrMode;
+  available: boolean;
+}
+
+export interface SelfCheckInResult {
+  status: CheckInStatus;
+  pass: Pass;
+}
+
+export type SelfCheckInCode =
+  | "CHECKED_IN"
+  | "PENDING_CONFIRMATION"
+  | "SELF_CHECK_IN_DISABLED"
+  | "CHECK_IN_NOT_OPEN"
+  | "QR_EXPIRED"
+  | "ALREADY_CHECKED_IN"
+  | "CANCELLED_PASS"
+  | "NOT_FOUND"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "ERROR";
+
 export interface DemoState {
   currentUser: UserProfile | null;
   users: UserProfile[];
   events: Event[];
   passes: Pass[];
+  checkInSettings: EventCheckInSettings[];
   passCreated: boolean;
+}
+
+export interface SelfCheckInActionResult {
+  ok: boolean;
+  code: SelfCheckInCode;
+  title: string;
+  body: string;
+  status?: CheckInStatus;
+  pass?: Pass;
+  state: DemoState;
 }
 
 export interface ScanPassResult {
@@ -197,9 +270,12 @@ export interface ScanPassResult {
 export interface CheckIn {
   eventId: string;
   passId: string;
-  scannedBy: string;
+  scannedBy?: string;
   timestamp: string;
-  method: "qr" | "manual";
+  confirmedAt?: string;
+  status: CheckInStatus;
+  method: ScanMethod;
+  confirmationMethod?: ScanMethod;
 }
 
 export interface ReportMetric {

@@ -43,7 +43,6 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import {
   adminApproval,
-  defaultPass,
   getEvent,
   getOrganizer,
   getVenue,
@@ -61,6 +60,7 @@ import type {
   AttendanceType,
   Event,
   EventType,
+  Pass,
   ReportMetric,
   Role,
   ScannerOutcome,
@@ -107,6 +107,7 @@ interface TambikeScreenProps {
   view: TambikeView;
   id?: string;
   eventQuery?: EventQueryInput;
+  nextHref?: string;
 }
 
 const roleLabels: Record<Role, string> = {
@@ -135,9 +136,6 @@ const featuredDragActivationPx = 16;
 const featuredDragCommitPx = 90;
 type FeaturedWheelDirection = "previous" | "next";
 
-const passIdForEvent = (eventId: string) => `pass-${eventId}`;
-const eventIdFromPassId = (passId?: string) =>
-  passId?.startsWith("pass-") ? passId.slice("pass-".length) : defaultPass.eventId;
 const findEvent = (events: Event[], eventId?: string) =>
   events.find((event) => event.id === eventId) ?? getEvent(eventId);
 const reportableEventStatuses = new Set<Event["status"]>(["PUBLISHED", "ONGOING", "COMPLETED"]);
@@ -502,7 +500,7 @@ const protectedViews: Partial<
   },
 };
 
-export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
+export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenProps) {
   if (view === "discovery") {
     return (
       <AppShell>
@@ -526,7 +524,7 @@ export function TambikeScreen({ view, id, eventQuery }: TambikeScreenProps) {
       {view === "event-test-ride" && <TestRideLeadScreen eventId={id} />}
       {view === "passes" && <PassesScreen />}
       {view === "pass-detail" && <PassDetail passId={id} />}
-      {view === "login" && <LoginScreen />}
+      {view === "login" && <LoginScreen nextHref={nextHref} />}
       {view === "signup" && <SignupScreen />}
       {view === "profile" && <ProfileScreen />}
       {view === "organizer-apply" && <OrganizerApplyScreen />}
@@ -1603,41 +1601,61 @@ function TestRideLeadScreen({ eventId }: { eventId?: string }) {
 }
 
 function PassesScreen() {
-  const { currentUser, events } = useDemo();
-  const event = findEvent(events, defaultPass.eventId);
+  const { currentUser, events, passes } = useDemo();
 
   if (!currentUser) {
     return <AuthRequired title="Log in to view passes" body="Tambike Passes are created after a rider registers for an event." />;
+  }
+
+  if (passes.length === 0) {
+    return (
+      <LightView>
+        <HeroPanel eyebrow="My Passes" title="No Tambike Passes yet" body="Register as going for an upcoming event to create your rider pass." />
+      </LightView>
+    );
   }
 
   return (
     <LightView>
       <HeroPanel eyebrow="My Passes" title="Upcoming Tambike Passes" body="Keep QR passes, perks, Waze links, and event-day reminders in one place." />
       <div className="pass-list">
-        <PassCard event={event} />
+        {passes.map((pass) => (
+          <PassCard key={pass.id} event={findEvent(events, pass.eventId)} pass={pass} />
+        ))}
       </div>
     </LightView>
   );
 }
 
 function PassDetail({ passId }: { passId?: string }) {
-  const { attendanceType, currentUser, events, passCreated, passes } = useDemo();
-  const event = findEvent(events, eventIdFromPassId(passId));
-  const venue = getVenue(event.venueId);
-  const passIdValue = passId ?? passIdForEvent(event.id);
-  const pass = passes.find((candidate) => candidate.id === passIdValue);
-  const qrToken = pass?.qrToken ?? defaultPass.qrToken;
+  const { attendanceType, currentUser, events, passes } = useDemo();
   const [shareFeedback, setShareFeedback] = useState("");
 
   if (!currentUser) {
     return <AuthRequired title="Log in to view this pass" body="Tambike passes are tied to the logged-in rider profile." />;
   }
 
+  const pass = passId ? passes.find((candidate) => candidate.id === passId) : passes[0];
+  if (!pass) {
+    return (
+      <LightView>
+        <HeroPanel eyebrow="Tambike Pass" title="Pass not found" body="This pass is not available for the current rider account." />
+      </LightView>
+    );
+  }
+
+  const event = findEvent(events, pass.eventId);
+  const venue = getVenue(event.venueId);
+  const passIdValue = pass.id;
+
   return (
     <LightView>
       <section className="pass-detail">
         <div className="mobile-pass">
-          <PassStrip title="Tambike Pass" body={passCreated ? "Ready for check-in" : "Ready after registration"} />
+          <PassStrip
+            title="Tambike Pass"
+            body={pass.status === "checked_in" ? "Attendance confirmed" : "Ready for check-in"}
+          />
           <h1>Tambike Pass</h1>
           <p>
             {event.title}
@@ -1647,7 +1665,7 @@ function PassDetail({ passId }: { passId?: string }) {
             Venue: {venue.name}
           </p>
           <div className="qr-frame" aria-label="QR code for Tambike Pass">
-            <QRCodeSVG value={qrToken} size={188} level="M" />
+            <QRCodeSVG value={pass.qrToken} size={188} level="M" />
           </div>
           <div className="chip-list">
             <span>Attendance: {attendanceType === "ride-out" ? "Join ride-out" : "Go direct"}</span>
@@ -1691,9 +1709,9 @@ function PassDetail({ passId }: { passId?: string }) {
   );
 }
 
-function PassCard({ event }: { event: Event }) {
+function PassCard({ event, pass }: { event: Event; pass: Pass }) {
   return (
-    <Link className="pass-card" href={`/passes/${passIdForEvent(event.id)}`}>
+    <Link className="pass-card" href={`/passes/${pass.id}`}>
       <Image src={event.poster} alt={`${event.title} poster`} width={92} height={128} />
       <div>
         <span>{event.date}</span>
@@ -2388,7 +2406,7 @@ function CreateEventScreen() {
   );
 }
 
-function LoginScreen() {
+function LoginScreen({ nextHref }: { nextHref?: string }) {
   const { loginWithPassword } = useDemo();
   const router = useRouter();
   const [error, setError] = useState("");
@@ -2441,7 +2459,7 @@ function LoginScreen() {
                 String(formData.get("password") ?? ""),
               );
               if (user) {
-                router.push(destinationFor(user.role));
+                router.push(nextHref ?? destinationFor(user.role));
               }
             } catch (actionError) {
               setError(actionErrorMessage(actionError));

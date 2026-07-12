@@ -13,12 +13,21 @@ import {
 import type {
   AccountRole,
   AttendanceType,
+  CheckInConfiguration,
+  CheckInMode,
+  CheckInState,
+  CheckInStatus,
   CreateEventInput,
   Event,
   EventType,
+  OrganizerQrMode,
   Pass,
   ProfileInput,
   RSVP,
+  ScanMethod,
+  SelfCheckInContext,
+  SelfCheckInQr,
+  SelfCheckInResult,
   SignupInput,
   UserProfile,
 } from "@/features/tambike-demo/types";
@@ -32,7 +41,10 @@ export class BackendError extends Error {
       | "INVALID_INPUT"
       | "WRONG_EVENT"
       | "ALREADY_CHECKED_IN"
-      | "CANCELLED_PASS",
+      | "CANCELLED_PASS"
+      | "SELF_CHECK_IN_DISABLED"
+      | "CHECK_IN_NOT_OPEN"
+      | "QR_EXPIRED",
     message = code,
   ) {
     super(message);
@@ -58,6 +70,9 @@ export type AuditAction =
   | "RSVP_UPDATED"
   | "PASS_CREATED"
   | "CHECK_IN_CREATED"
+  | "CHECK_IN_CONFIRMED"
+  | "CHECK_IN_SETTINGS_UPDATED"
+  | "SELF_CHECK_IN_REQUESTED"
   | "VENUE_APPROVED"
   | "ADMIN_PUBLISHED"
   | "ATTENDEE_EXPORT_CREATED"
@@ -78,9 +93,26 @@ type CheckInRecord = {
   eventId: string;
   passId: string;
   userId: string;
-  scannedBy: string;
+  scannedBy?: string;
   timestamp: string;
-  method: "qr" | "manual";
+  confirmedAt?: string;
+  status: CheckInStatus;
+  method: ScanMethod;
+  confirmationMethod?: ScanMethod;
+};
+
+type CheckInSettings = {
+  eventId: string;
+  mode: CheckInMode;
+  state: CheckInState;
+  qrMode: OrganizerQrMode;
+  fixedQrAcknowledged: boolean;
+};
+
+type SelfCheckInSession = {
+  eventId: string;
+  expiresAt: number;
+  revokedAt?: number;
 };
 
 type AuditRecord = {
@@ -142,8 +174,34 @@ function validateSignupPassword(password: string) {
   }
 }
 
-function passIdForEvent(eventId: string) {
-  return `pass-${eventId}`;
+function validateCheckInConfiguration(input: CheckInConfiguration) {
+  if (
+    !["staff_only", "self_review", "self_instant"].includes(input.mode) ||
+    !["closed", "open", "paused"].includes(input.state) ||
+    !["rotating", "fixed"].includes(input.qrMode) ||
+    (input.qrMode === "fixed" && input.fixedQrAcknowledged !== true)
+  ) {
+    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+}
+
+function normalizeStaffScanMethod(method: ScanMethod): "staff_camera" | "staff_upload" | "staff_manual" {
+  switch (method) {
+    case "staff_camera":
+    case "staff_upload":
+    case "staff_manual":
+      return method;
+    case "qr":
+      return "staff_camera";
+    case "manual":
+      return "staff_manual";
+    default:
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+}
+
+function passIdForEvent(eventId: string, userId: string) {
+  return `pass-${eventId}-${userId}`;
 }
 
 function defaultRulesForEvent(type: EventType) {
@@ -207,6 +265,8 @@ export class TambikeBackend {
   private readonly rsvps = new Map<string, RSVP & { userId: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
+  private readonly checkInSettings = new Map<string, CheckInSettings>();
+  private readonly selfCheckInSessions = new Map<string, SelfCheckInSession>();
   private readonly audits: AuditRecord[] = [];
 
   private constructor(seed: BackendSeed) {
@@ -245,11 +305,14 @@ export class TambikeBackend {
           }))
       : [];
 
+    const events = this.listEvents();
+
     return {
       currentUser: currentUser ? cloneUser(currentUser) : null,
       users: this.listPublicUsers(),
-      events: this.listEvents(),
+      events,
       passes: currentPasses,
+      checkInSettings: events.map((event) => ({ ...this.getCheckInSettings(event.id) })),
       passCreated: currentPasses.length > 0,
     };
   }
@@ -366,6 +429,13 @@ export class TambikeBackend {
     };
 
     this.events.set(event.id, event);
+    this.checkInSettings.set(event.id, {
+      eventId: event.id,
+      mode: "staff_only",
+      state: "closed",
+      qrMode: "rotating",
+      fixedQrAcknowledged: false,
+    });
     this.audit("EVENT_DRAFT_CREATED", user.id, event.id);
     return cloneEvent(event);
   }
@@ -396,7 +466,7 @@ export class TambikeBackend {
 
     event.going += 1;
     const pass: Pass & { userId: string } = {
-      id: passIdForEvent(event.id),
+      id: passIdForEvent(event.id, user.id),
       eventId: event.id,
       userId: user.id,
       qrToken: makePassToken(),
@@ -410,18 +480,154 @@ export class TambikeBackend {
     return { rsvp, pass: { ...pass } };
   }
 
+  async configureCheckIn(
+    sessionToken: string,
+    eventId: string,
+    input: CheckInConfiguration,
+  ) {
+    const user = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireCheckInConfigurator(user, event);
+    validateCheckInConfiguration(input);
+    const previousSettings = this.getCheckInSettings(event.id);
+
+    const settings: CheckInSettings = {
+      eventId: event.id,
+      mode: input.mode,
+      state: input.state,
+      qrMode: input.qrMode,
+      fixedQrAcknowledged: input.qrMode === "fixed",
+    };
+    this.checkInSettings.set(event.id, settings);
+
+    if (
+      input.mode === "staff_only" ||
+      input.state !== "open" ||
+      previousSettings.qrMode !== input.qrMode
+    ) {
+      const now = Date.now();
+      for (const session of this.selfCheckInSessions.values()) {
+        if (session.eventId === event.id && !session.revokedAt) {
+          session.revokedAt = now;
+        }
+      }
+    }
+
+    this.audit("CHECK_IN_SETTINGS_UPDATED", user.id, event.id);
+    return { ...settings };
+  }
+
+  async issueSelfCheckInQr(sessionToken: string, eventId: string): Promise<SelfCheckInQr> {
+    const user = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireCheckInConfigurator(user, event);
+    const settings = this.getCheckInSettings(event.id);
+
+    this.requireSelfCheckInEnabled(settings);
+    if (!this.isSelfCheckInEvent(event)) {
+      throw new BackendError("CHECK_IN_NOT_OPEN", "CHECK_IN_NOT_OPEN");
+    }
+    if (settings.qrMode === "fixed") {
+      return { token: `fixed:${event.id}`, qrMode: "fixed" };
+    }
+
+    const token = `tbk_checkin_${randomBytes(24).toString("base64url")}`;
+    const expiresAt = Date.now() + 90_000;
+    this.selfCheckInSessions.set(token, { eventId: event.id, expiresAt });
+    return { token, expiresAt: new Date(expiresAt).toISOString(), qrMode: "rotating" };
+  }
+
+  async getSelfCheckInContext(qrToken: string): Promise<SelfCheckInContext> {
+    const resolved = this.resolveSelfCheckInQr(qrToken);
+    const event = resolved.event;
+    const settings = this.getCheckInSettings(event.id);
+    if (settings.mode === "staff_only") {
+      throw new BackendError("SELF_CHECK_IN_DISABLED", "SELF_CHECK_IN_DISABLED");
+    }
+    return {
+      event: cloneEvent(event),
+      mode: settings.mode,
+      state: settings.state,
+      qrMode: settings.qrMode,
+      available:
+        resolved.valid &&
+        settings.qrMode === resolved.qrMode &&
+        settings.state === "open" &&
+        this.isSelfCheckInEvent(event),
+    };
+  }
+
+  async selfCheckIn(sessionToken: string, qrToken: string): Promise<SelfCheckInResult> {
+    const rider = this.requireUser(sessionToken);
+    if (rider.role !== "rider") {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
+    const resolved = this.resolveSelfCheckInQr(qrToken);
+    const event = resolved.event;
+    const settings = this.getCheckInSettings(event.id);
+
+    this.requireSelfCheckInEnabled(settings);
+    if (settings.qrMode !== resolved.qrMode) {
+      throw new BackendError("QR_EXPIRED", "QR_EXPIRED");
+    }
+    if (!resolved.valid) {
+      throw new BackendError("QR_EXPIRED", "QR_EXPIRED");
+    }
+    if (!this.isSelfCheckInEvent(event)) {
+      throw new BackendError("CHECK_IN_NOT_OPEN", "CHECK_IN_NOT_OPEN");
+    }
+
+    const pass = Array.from(this.passes.values()).find(
+      (candidate) => candidate.eventId === event.id && candidate.userId === rider.id,
+    );
+    if (!pass) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    if (pass.status === "cancelled") {
+      throw new BackendError("CANCELLED_PASS", "CANCELLED_PASS");
+    }
+
+    const existing = this.findCheckIn(event.id, pass.id);
+    if (existing?.status === "pending") {
+      return { status: "pending", pass: { ...pass } };
+    }
+    if (existing?.status === "confirmed" || pass.status === "checked_in") {
+      throw new BackendError("ALREADY_CHECKED_IN", "ALREADY_CHECKED_IN");
+    }
+
+    const timestamp = new Date().toISOString();
+    const status: CheckInStatus = settings.mode === "self_review" ? "pending" : "confirmed";
+    const checkIn: CheckInRecord = {
+      id: `checkin-${randomUUID()}`,
+      eventId: event.id,
+      passId: pass.id,
+      userId: rider.id,
+      timestamp,
+      confirmedAt: status === "confirmed" ? timestamp : undefined,
+      status,
+      method: "rider_qr",
+    };
+    this.checkIns.set(checkIn.id, checkIn);
+    this.audit("SELF_CHECK_IN_REQUESTED", rider.id, checkIn.id);
+
+    if (status === "confirmed") {
+      pass.status = "checked_in";
+      this.audit("CHECK_IN_CREATED", rider.id, checkIn.id);
+    }
+
+    return { status, pass: { ...pass } };
+  }
+
   async scanPass(
     sessionToken: string,
     eventId: string,
     qrToken: string,
-    method: "qr" | "manual",
+    method: ScanMethod,
   ) {
     const scanner = this.requireUser(sessionToken);
-    if (!["organizer", "venue", "admin"].includes(scanner.role)) {
-      throw new BackendError("FORBIDDEN", "FORBIDDEN");
-    }
-
     const event = this.requireEvent(eventId);
+    this.requireCheckInStaff(scanner, event);
+    const staffMethod = normalizeStaffScanMethod(method);
     const pass = Array.from(this.passes.values()).find(
       (candidate) => candidate.qrToken === qrToken,
     );
@@ -434,18 +640,32 @@ export class TambikeBackend {
     if (pass.status === "cancelled") {
       throw new BackendError("CANCELLED_PASS", "CANCELLED_PASS");
     }
-    if (pass.status === "checked_in") {
+    const existing = this.findCheckIn(event.id, pass.id);
+    if (existing?.status === "pending") {
+      const confirmedAt = new Date().toISOString();
+      existing.status = "confirmed";
+      existing.scannedBy = scanner.id;
+      existing.confirmedAt = confirmedAt;
+      existing.confirmationMethod = staffMethod;
+      pass.status = "checked_in";
+      this.audit("CHECK_IN_CONFIRMED", scanner.id, existing.id);
+      return { ...pass };
+    }
+    if (existing?.status === "confirmed" || pass.status === "checked_in") {
       throw new BackendError("ALREADY_CHECKED_IN", "ALREADY_CHECKED_IN");
     }
 
+    const timestamp = new Date().toISOString();
     const checkIn: CheckInRecord = {
       id: `checkin-${randomUUID()}`,
       eventId: event.id,
       passId: pass.id,
       userId: pass.userId,
       scannedBy: scanner.id,
-      timestamp: new Date().toISOString(),
-      method,
+      timestamp,
+      confirmedAt: timestamp,
+      status: "confirmed",
+      method: staffMethod,
     };
 
     pass.status = "checked_in";
@@ -486,10 +706,18 @@ export class TambikeBackend {
         (candidate) => candidate.eventId === event.id && candidate.userId === rsvp.userId,
       );
       const checkIn = pass
-        ? Array.from(this.checkIns.values()).find((candidate) => candidate.passId === pass.id)
+        ? Array.from(this.checkIns.values()).find(
+            (candidate) => candidate.passId === pass.id && candidate.status === "confirmed",
+          )
         : null;
       rows.push(
-        [event.id, attendee?.email ?? "", rsvp.status, pass?.status ?? "", checkIn?.timestamp ?? ""]
+        [
+          event.id,
+          attendee?.email ?? "",
+          rsvp.status,
+          pass?.status ?? "",
+          checkIn?.confirmedAt ?? checkIn?.timestamp ?? "",
+        ]
           .map((value) => JSON.stringify(value))
           .join(","),
       );
@@ -543,7 +771,21 @@ export class TambikeBackend {
   }
 
   listEvents(query?: EventQueryInput) {
-    return filterEventsByQuery(Array.from(this.events.values()).map(cloneEvent), query);
+    return filterEventsByQuery(
+      Array.from(this.events.values()).map((event) => this.withAttendanceCounts(event)),
+      query,
+    );
+  }
+
+  private withAttendanceCounts(event: Event): Event {
+    const arrivals = Array.from(this.checkIns.values()).filter(
+      (checkIn) => checkIn.eventId === event.id,
+    );
+    return {
+      ...cloneEvent(event),
+      confirmedCheckIns: arrivals.filter((checkIn) => checkIn.status === "confirmed").length,
+      pendingCheckIns: arrivals.filter((checkIn) => checkIn.status === "pending").length,
+    };
   }
 
   private createSessionForUser(userId: string): SessionRecord {
@@ -590,6 +832,93 @@ export class TambikeBackend {
     }
 
     return event;
+  }
+
+  private getCheckInSettings(eventId: string): CheckInSettings {
+    return this.checkInSettings.get(eventId) ?? {
+      eventId,
+      mode: "staff_only",
+      state: "closed",
+      qrMode: "rotating",
+      fixedQrAcknowledged: false,
+    };
+  }
+
+  private resolveSelfCheckInQr(qrToken: string) {
+    if (qrToken.startsWith("fixed:")) {
+      return {
+        event: this.requireEvent(qrToken.slice("fixed:".length)),
+        qrMode: "fixed" as const,
+        valid: true,
+      };
+    }
+
+    const session = this.selfCheckInSessions.get(qrToken);
+    if (!session) {
+      throw new BackendError("QR_EXPIRED", "QR_EXPIRED");
+    }
+    return {
+      event: this.requireEvent(session.eventId),
+      qrMode: "rotating" as const,
+      valid: !session.revokedAt && session.expiresAt >= Date.now(),
+    };
+  }
+
+  private requireSelfCheckInEnabled(settings: CheckInSettings) {
+    if (settings.mode === "staff_only") {
+      throw new BackendError("SELF_CHECK_IN_DISABLED", "SELF_CHECK_IN_DISABLED");
+    }
+    if (settings.state !== "open") {
+      throw new BackendError("CHECK_IN_NOT_OPEN", "CHECK_IN_NOT_OPEN");
+    }
+    if (settings.qrMode === "fixed" && !settings.fixedQrAcknowledged) {
+      throw new BackendError("SELF_CHECK_IN_DISABLED", "SELF_CHECK_IN_DISABLED");
+    }
+  }
+
+  private isSelfCheckInEvent(event: Event) {
+    return event.status === "PUBLISHED" || event.status === "ONGOING";
+  }
+
+  private requireCheckInConfigurator(user: BackendUser, event: Event) {
+    if (user.role === "admin") {
+      return;
+    }
+    if (
+      user.role === "organizer" &&
+      user.verificationStatus === "APPROVED" &&
+      user.organizerProfileId === event.organizerId
+    ) {
+      return;
+    }
+    throw new BackendError("FORBIDDEN", "FORBIDDEN");
+  }
+
+  private requireCheckInStaff(user: BackendUser, event: Event) {
+    if (user.role === "admin") {
+      return;
+    }
+    if (
+      user.role === "organizer" &&
+      user.verificationStatus === "APPROVED" &&
+      user.organizerProfileId === event.organizerId
+    ) {
+      return;
+    }
+    if (
+      user.role === "venue" &&
+      user.verificationStatus === "APPROVED" &&
+      user.venueId === event.venueId
+    ) {
+      return;
+    }
+    throw new BackendError("FORBIDDEN", "FORBIDDEN");
+  }
+
+  private findCheckIn(eventId: string, passId: string) {
+    return Array.from(this.checkIns.values()).find(
+      (checkIn) => checkIn.eventId === eventId && checkIn.passId === passId,
+    );
   }
 
   private findUserByEmail(email: string) {

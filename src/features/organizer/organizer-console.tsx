@@ -59,15 +59,19 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
+import { CheckInPolicyPanel } from "@/features/check-in/check-in-policy-panel";
 import { demoEvents, getVenue, mockUsers, venues } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type {
   CreateEventInput,
+  CheckInConfiguration,
   Event,
+  EventCheckInSettings,
   EventStatus,
   EventType,
   ScanMethod,
   ScanPassResult,
+  SelfCheckInQr,
   UserProfile,
 } from "@/features/tambike-demo/types";
 
@@ -92,15 +96,6 @@ type OrganizerEventRow = {
   date: string;
 };
 
-type AttendeeRow = {
-  id: string;
-  name: string;
-  pass: string;
-  status: "Going" | "Interested" | "Checked in" | "No-show";
-  checkIn: string;
-  club: string;
-};
-
 type ReportRow = {
   id: string;
   event: string;
@@ -108,6 +103,7 @@ type ReportRow = {
   going: number;
   interested: number;
   checkIns: number;
+  pendingCheckIns: number;
   conversion: string;
 };
 
@@ -186,7 +182,6 @@ export function OrganizerConsole({
     events,
     createEventDraft,
     scanPass,
-    checkedInCount,
   } = useDemo();
 
   if (!currentUser) {
@@ -222,7 +217,10 @@ export function OrganizerConsole({
   const eventRows = getOrganizerEventRows(organizerEvents);
   const reportRows = getReportRows(organizerEvents);
   const metrics = getSidebarMetrics(organizerEvents);
-  const cards = getSectionCards(organizerEvents, checkedInCount);
+  const cards = getSectionCards(
+    organizerEvents,
+    organizerEvents.reduce((total, event) => total + (event.confirmedCheckIns ?? 0), 0),
+  );
   const chartData = getChartData(organizerEvents);
   const activeEventId = selectedEvent?.id ?? organizerEvents[0]?.id ?? null;
   const createDisabledReason =
@@ -276,7 +274,7 @@ export function OrganizerConsole({
               <ScannerSection
                 event={selectedEvent}
                 scanPass={scanPass}
-                checkedInCount={checkedInCount}
+                checkedInCount={selectedEvent.confirmedCheckIns ?? 0}
               />
             ) : null}
             {section === "reports" ? <ReportsSection rows={reportRows} /> : null}
@@ -702,7 +700,35 @@ function CreateEventSection({
 }
 
 function EventDetailSection({ event }: { event: Event }) {
+  const { checkInSettings, configureCheckIn, issueSelfCheckInQr } = useDemo();
+  const [isSavingPolicy, setIsSavingPolicy] = React.useState(false);
+  const [issuedQr, setIssuedQr] = React.useState<SelfCheckInQr | null>(null);
   const venue = getVenue(event.venueId);
+  const settings: EventCheckInSettings =
+    checkInSettings.find((candidate) => candidate.eventId === event.id) ?? {
+      eventId: event.id,
+      mode: "staff_only",
+      state: "closed",
+      qrMode: "rotating",
+      fixedQrAcknowledged: false,
+    };
+
+  const saveCheckInPolicy = async (input: CheckInConfiguration) => {
+    setIsSavingPolicy(true);
+    try {
+      await configureCheckIn(event.id, input);
+      setIssuedQr(null);
+    } finally {
+      setIsSavingPolicy(false);
+    }
+  };
+
+  const issueQr = async () => {
+    const qr = await issueSelfCheckInQr(event.id);
+    setIssuedQr(qr);
+    return qr;
+  };
+
   return (
     <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-6">
       <Card>
@@ -747,16 +773,26 @@ function EventDetailSection({ event }: { event: Event }) {
           </Button>
         </CardContent>
       </Card>
+      <div className="lg:col-span-2">
+        <CheckInPolicyPanel
+          key={`${event.id}:${settings.mode}:${settings.state}:${settings.qrMode}:${settings.fixedQrAcknowledged}`}
+          event={event}
+          settings={settings}
+          pending={isSavingPolicy}
+          issuedQr={issuedQr}
+          onSave={saveCheckInPolicy}
+          onIssueQr={issueQr}
+        />
+      </div>
     </div>
   );
 }
 
 function AttendeesSection({ event }: { event: Event }) {
-  const rows = getAttendeeRows(event);
   return (
     <TablePanel
       title={`${event.title} attendees`}
-      description="Mock rider groups for going, interested, checked-in, and no-show review."
+      description="Live attendance totals for this event. Rider-level records are not fabricated in the organizer workspace."
       actions={
         <Button asChild variant="outline" size="sm">
           <Link href={`/organizer/events/${event.id}/scanner`}>
@@ -766,7 +802,16 @@ function AttendeesSection({ event }: { event: Event }) {
         </Button>
       }
     >
-      <DataTable columns={attendeeColumns} data={rows} filterColumn="name" filterPlaceholder="Filter riders..." />
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricBlock label="Going" value={String(event.going)} />
+        <MetricBlock label="Confirmed check-ins" value={String(getCheckIns(event))} />
+        <MetricBlock label="Pending staff review" value={String(event.pendingCheckIns ?? 0)} />
+        <MetricBlock label="Interested" value={String(event.interested)} />
+      </div>
+      <div className="mt-4 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+        Pending review requests do not count as attendance. Use the staff scanner to confirm arrivals; a
+        rider-level attendee directory can be added when the backend exposes it.
+      </div>
     </TablePanel>
   );
 }
@@ -813,14 +858,16 @@ function ReportDetailSection({ event }: { event: Event }) {
           <CardDescription>Attendance and event-day summary for organizer review.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-5">
             <MetricBlock label="Going" value={String(event.going)} />
             <MetricBlock label="Interested" value={String(event.interested)} />
-            <MetricBlock label="Check-ins" value={String(checkIns)} />
+            <MetricBlock label="Confirmed check-ins" value={String(checkIns)} />
+            <MetricBlock label="Pending staff review" value={String(event.pendingCheckIns ?? 0)} />
             <MetricBlock label="Conversion" value={conversion} />
           </div>
           <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-            {event.perkPreview} is the current perk preview. Keep report exports aligned with actual redeemed perks once backend exports are connected.
+            {event.perkPreview} is the current perk preview. Attendance never redeems a limited perk automatically;
+            redemption remains a separate staff action.
           </div>
         </CardContent>
       </Card>
@@ -948,33 +995,6 @@ const eventColumns: ColumnDef<OrganizerEventRow>[] = [
   ]),
 ];
 
-const attendeeColumns: ColumnDef<AttendeeRow>[] = [
-  selectColumn<AttendeeRow>(),
-  {
-    accessorKey: "name",
-    header: ({ column }) => <SortableHeader column={column}>Rider</SortableHeader>,
-    cell: ({ row }) => (
-      <div className="min-w-48">
-        <div className="font-medium">{row.original.name}</div>
-        <div className="text-sm text-muted-foreground">{row.original.club}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "pass",
-    header: "Pass",
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <Badge variant={row.original.status === "Checked in" ? "outline" : "secondary"}>{row.original.status}</Badge>,
-  },
-  {
-    accessorKey: "checkIn",
-    header: "Check-in",
-  },
-];
-
 const reportColumns: ColumnDef<ReportRow>[] = [
   {
     accessorKey: "event",
@@ -998,8 +1018,13 @@ const reportColumns: ColumnDef<ReportRow>[] = [
   },
   {
     accessorKey: "checkIns",
-    header: "Check-ins",
+    header: "Confirmed check-ins",
     cell: ({ row }) => <span className="tabular-nums">{row.original.checkIns}</span>,
+  },
+  {
+    accessorKey: "pendingCheckIns",
+    header: "Pending review",
+    cell: ({ row }) => <span className="tabular-nums">{row.original.pendingCheckIns}</span>,
   },
   {
     accessorKey: "conversion",
@@ -1152,29 +1177,8 @@ function getReportRows(events: Event[]): ReportRow[] {
     going: event.going,
     interested: event.interested,
     checkIns: getCheckIns(event),
+    pendingCheckIns: event.pendingCheckIns ?? 0,
     conversion: getConversion(event),
-  }));
-}
-
-function getAttendeeRows(event: Event): AttendeeRow[] {
-  const names = [
-    "Mina Rider",
-    "RJ Santos",
-    "Kara Moto",
-    "Luis Tambay",
-    "Bea Cruz",
-    "Nico Reyes",
-    "Iya Navarro",
-    "Paolo Gear",
-  ];
-  const statuses: AttendeeRow["status"][] = ["Checked in", "Going", "Interested", "No-show"];
-  return names.map((name, index) => ({
-    id: `${event.id}-${index}`,
-    name,
-    pass: `TB-${event.id.slice(0, 4).toUpperCase()}-${String(index + 11).padStart(2, "0")}`,
-    status: statuses[index % statuses.length],
-    checkIn: index % 4 === 0 ? "6:42 PM" : index % 4 === 1 ? "Pending" : "Not due",
-    club: index % 2 === 0 ? "Weekend Tambike Crew" : "Direct rider",
   }));
 }
 
@@ -1207,7 +1211,7 @@ function getSectionCards(events: Event[], checkedInCount: number): SectionCard[]
     {
       label: "Today check-ins",
       value: String(checkedInCount),
-      detail: "Scanner total from the current demo event",
+      detail: "Confirmed arrivals only",
       trend: "Live",
       icon: <ScanLineIcon data-icon="inline-start" />,
     },
@@ -1235,7 +1239,7 @@ function getChartData(events: Event[]): AdminChartPoint[] {
 }
 
 function getCheckIns(event: Event) {
-  return Math.floor(event.going * 0.82);
+  return event.confirmedCheckIns ?? 0;
 }
 
 function getConversion(event: Event) {
