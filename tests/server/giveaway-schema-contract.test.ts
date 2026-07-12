@@ -12,6 +12,7 @@ const giveawayMigrationSql = readFileSync(
   ),
   "utf8",
 );
+const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
 
 const requiredEnums = {
   GiveawayKind: ["raffle", "giveaway"],
@@ -120,6 +121,28 @@ describe("giveaway Prisma schema contract", () => {
       kind: "object",
       type: "EventGiveaway",
     });
+  });
+
+  test("persists a bounded per-rider entry cap and each entry source fingerprint", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const giveaway = models.get("EventGiveaway");
+    const entry = models.get("GiveawayEntry");
+
+    expect(giveaway?.fields.find((field) => field.name === "maxEntriesPerRider")).toMatchObject({
+      kind: "scalar",
+      type: "Int",
+    });
+    expect(entry?.fields.find((field) => field.name === "qualifiedSourceFingerprint")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(prismaSchema).toMatch(/maxEntriesPerRider\s+Int\s*\n/);
+    expect(prismaSchema).toMatch(/qualifiedSourceFingerprint\s+String\s*\n/);
+    expect(giveawayMigrationSql).toContain('"maxEntriesPerRider" INTEGER NOT NULL');
+    expect(giveawayMigrationSql).toContain(
+      'CONSTRAINT "EventGiveaway_maxEntriesPerRider_bounded" CHECK ("maxEntriesPerRider" >= 1 AND "maxEntriesPerRider" <= 10000)',
+    );
+    expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
   });
 
   test("keeps finite prize item rows bounded by their pool inventory in the migration", () => {

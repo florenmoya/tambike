@@ -66,7 +66,8 @@ export class BackendError extends Error {
       | "CHECK_IN_NOT_OPEN"
       | "QR_EXPIRED"
       | "GIVEAWAY_COMPLIANCE_REQUIRED"
-      | "INVALID_GIVEAWAY_STATE",
+      | "INVALID_GIVEAWAY_STATE"
+      | "GIVEAWAY_ENTRY_MODE_LOCKED",
     message = code,
   ) {
     super(message);
@@ -220,6 +221,7 @@ type GiveawayEntryRecord = {
   riderId: string;
   status: "eligible" | "locked" | "disqualified" | "withdrawn";
   currentWeight: number;
+  qualifiedSourceFingerprint: string;
   opaquePublicReference: string;
   createdAt: string;
   updatedAt: string;
@@ -279,6 +281,7 @@ type GiveawayAggregate = {
   state: GiveawayState;
   complianceStatus: GiveawayComplianceStatus;
   entryMode: GiveawayEntryMode;
+  maxEntriesPerRider: number;
   publicVisibility: GiveawayPublicVisibility;
   timeZone: string;
   entryOpensAt?: string;
@@ -332,6 +335,16 @@ type GiveawayCampaignView = {
   state: GiveawayState;
   complianceStatus: GiveawayComplianceStatus;
   mechanicsVersion: number;
+};
+
+type GiveawayConditionEvaluation = {
+  satisfied: boolean;
+  sourceFact: Record<string, unknown>;
+};
+
+type QualifiedAutomaticGiveawayGroup = {
+  group: GiveawayEligibilityGroupRecord;
+  sourceFacts: Record<string, unknown>[];
 };
 
 type BackendSeed = {
@@ -718,6 +731,13 @@ export class TambikeBackend {
     }
 
     const patch = parsed as Record<string, unknown>;
+    if (
+      Object.hasOwn(patch, "entryMode") &&
+      patch.entryMode !== giveaway.entryMode &&
+      (giveaway.entriesByRider.size > 0 || giveaway.entryEvents.length > 0)
+    ) {
+      throw new BackendError("GIVEAWAY_ENTRY_MODE_LOCKED", "GIVEAWAY_ENTRY_MODE_LOCKED");
+    }
     const currentMechanics = this.currentGiveawayMechanics(giveaway);
     let nextMechanics = currentMechanics.mechanics;
     let nextTerms = currentMechanics.terms;
@@ -754,6 +774,13 @@ export class TambikeBackend {
     if (Object.hasOwn(patch, "entryMode") && patch.entryMode !== giveaway.entryMode) {
       giveaway.entryMode = patch.entryMode as GiveawayEntryMode;
       changed = true;
+    }
+    if (Object.hasOwn(patch, "maxEntriesPerRider")) {
+      const next = patch.maxEntriesPerRider as number;
+      if (next !== giveaway.maxEntriesPerRider) {
+        giveaway.maxEntriesPerRider = next;
+        changed = true;
+      }
     }
     if (
       Object.hasOwn(patch, "publicVisibility") &&
@@ -897,32 +924,30 @@ export class TambikeBackend {
   async reviewGiveawayCompliance(
     sessionToken: string,
     giveawayId: string,
-    input: { decision: "approved" | "changes_requested" | "rejected"; reason?: string },
+    input: unknown,
   ) {
     const reviewer = this.requireRole(sessionToken, "admin");
     const giveaway = this.requireGiveaway(giveawayId);
+    const review = this.parseGiveawayComplianceReview(input);
     if (giveaway.complianceStatus !== "pending_review") {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    if (!["approved", "changes_requested", "rejected"].includes(input.decision)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
 
     const now = new Date().toISOString();
-    giveaway.complianceStatus = input.decision;
+    giveaway.complianceStatus = review.decision;
     giveaway.complianceReviewerId = reviewer.id;
     giveaway.complianceReviewedAt = now;
-    giveaway.complianceReviewReason = input.reason?.trim() || undefined;
+    giveaway.complianceReviewReason = review.reason;
     const mechanicsVersion = giveaway.mechanicsVersions.at(-1);
     if (mechanicsVersion) {
       mechanicsVersion.reviewedByUserId = reviewer.id;
-      mechanicsVersion.reviewDecision = input.decision;
+      mechanicsVersion.reviewDecision = review.decision;
       mechanicsVersion.reviewReason = giveaway.complianceReviewReason;
       mechanicsVersion.reviewedAt = now;
     }
     giveaway.updatedAt = now;
     const reviewAuditPayload: Record<string, unknown> = {
-      decision: input.decision,
+      decision: review.decision,
       mechanicsVersion: mechanicsVersion?.version ?? 1,
     };
     if (giveaway.complianceReviewReason) {
@@ -1002,32 +1027,32 @@ export class TambikeBackend {
     return this.toGiveawayCampaignView(giveaway);
   }
 
-  async cancelGiveaway(sessionToken: string, giveawayId: string, reason: string) {
+  async cancelGiveaway(sessionToken: string, giveawayId: string, reason: unknown) {
     const user = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
-    if (!reason.trim()) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    const normalizedReason = this.requireGiveawayReason(reason);
     this.transitionGiveaway(giveaway, "cancelled");
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_CANCELLED", "giveaway", giveaway.id, {
       state: giveaway.state,
-      reasonDigest: this.hashGiveawayReason(reason),
+      reasonDigest: this.hashGiveawayReason(normalizedReason),
     });
     return this.toGiveawayCampaignView(giveaway);
   }
 
-  async suspendGiveaway(sessionToken: string, giveawayId: string, reason: string) {
+  async suspendGiveaway(sessionToken: string, giveawayId: string, reason: unknown) {
     const admin = this.requireRole(sessionToken, "admin");
     const giveaway = this.requireGiveaway(giveawayId);
-    if (!reason.trim()) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    const normalizedReason = this.requireGiveawayReason(reason);
     this.transitionGiveaway(giveaway, "suspended");
     const now = new Date().toISOString();
     giveaway.suspendedByUserId = admin.id;
     giveaway.suspendedAt = now;
-    giveaway.suspensionReason = reason.trim();
+    giveaway.suspensionReason = normalizedReason;
     giveaway.updatedAt = now;
     this.auditGiveaway(giveaway, admin.id, "GIVEAWAY_SUSPENDED", "giveaway", giveaway.id, {
       state: giveaway.state,
-      reasonDigest: this.hashGiveawayReason(reason),
+      reasonDigest: this.hashGiveawayReason(normalizedReason),
     });
     return this.toGiveawayCampaignView(giveaway);
   }
@@ -1390,6 +1415,42 @@ export class TambikeBackend {
     }
   }
 
+  private parseGiveawayComplianceReview(input: unknown): {
+    decision: "approved" | "changes_requested" | "rejected";
+    reason?: string;
+  } {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      !Object.hasOwn(record, "decision") ||
+      !["approved", "changes_requested", "rejected"].includes(record.decision as string) ||
+      Object.keys(record).some((key) => key !== "decision" && key !== "reason")
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (!Object.hasOwn(record, "reason")) {
+      return { decision: record.decision as "approved" | "changes_requested" | "rejected" };
+    }
+    const reason = this.requireGiveawayReason(record.reason);
+    return {
+      decision: record.decision as "approved" | "changes_requested" | "rejected",
+      reason,
+    };
+  }
+
+  private requireGiveawayReason(reason: unknown) {
+    if (typeof reason !== "string" || !reason.trim()) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return reason.trim();
+  }
+
   private hydrateGiveawayAggregate(giveaway: GiveawayAggregate) {
     this.giveaways.campaignsById.set(giveaway.id, giveaway);
     const eventGiveawayIds = this.giveaways.giveawayIdsByEventId.get(giveaway.eventId) ?? new Set<string>();
@@ -1437,6 +1498,7 @@ export class TambikeBackend {
       state: "draft",
       complianceStatus: "draft",
       entryMode: input.entryMode,
+      maxEntriesPerRider: input.maxEntriesPerRider,
       publicVisibility: input.publicVisibility ?? "hidden",
       timeZone: input.timeZone,
       entryOpensAt: input.entryOpensAt,
@@ -1713,27 +1775,37 @@ export class TambikeBackend {
   }
 
   private reconcileAutomaticEntry(giveaway: GiveawayAggregate, riderId: string) {
-    const qualifiedGroups = giveaway.eligibilityGroups.filter(
-      (group) =>
-        group.enabled &&
-        group.conditions.every((condition) =>
-          this.isGiveawayConditionSatisfied(giveaway.eventId, riderId, condition.condition),
-        ),
+    const qualifiedGroups = giveaway.eligibilityGroups.flatMap<QualifiedAutomaticGiveawayGroup>(
+      (group) => {
+        if (!group.enabled) return [];
+        const evaluations = group.conditions.map((condition) =>
+          this.evaluateGiveawayCondition(giveaway.eventId, riderId, condition.condition),
+        );
+        if (!evaluations.every((evaluation) => evaluation.satisfied)) return [];
+        return [{ group, sourceFacts: evaluations.map((evaluation) => evaluation.sourceFact) }];
+      },
     );
     const calculatedWeight = qualifiedGroups.reduce(
-      (total, group) => total + group.entryWeight,
+      (total, qualifiedGroup) => total + qualifiedGroup.group.entryWeight,
       0,
     );
-    // The approved create contract does not expose a per-entry cap yet. Keep this
-    // local seam so a later cap can be applied without changing source evaluation.
-    const nextWeight = calculatedWeight;
+    const nextWeight = Math.min(calculatedWeight, giveaway.maxEntriesPerRider);
+    const sourceFingerprint = this.calculateQualifiedSourceFingerprint(qualifiedGroups);
     const existing = giveaway.entriesByRider.get(riderId);
 
     if (nextWeight <= 0) {
       if (existing?.status === "eligible") {
         existing.status = "withdrawn";
+        existing.qualifiedSourceFingerprint = sourceFingerprint;
         existing.updatedAt = new Date().toISOString();
-        this.recordAutomaticEntryEvent(giveaway, existing, "source_revalidated", -existing.currentWeight, []);
+        this.recordAutomaticEntryEvent(
+          giveaway,
+          existing,
+          "source_revalidated",
+          -existing.currentWeight,
+          qualifiedGroups,
+          sourceFingerprint,
+        );
       }
       return;
     }
@@ -1745,6 +1817,7 @@ export class TambikeBackend {
         riderId,
         status: "eligible",
         currentWeight: nextWeight,
+        qualifiedSourceFingerprint: sourceFingerprint,
         opaquePublicReference: `entry_${randomBytes(16).toString("base64url")}`,
         createdAt: now,
         updatedAt: now,
@@ -1756,7 +1829,8 @@ export class TambikeBackend {
         entry,
         "automatic_qualified",
         nextWeight,
-        qualifiedGroups.map((group) => group.id),
+        qualifiedGroups,
+        sourceFingerprint,
       );
       return;
     }
@@ -1764,29 +1838,52 @@ export class TambikeBackend {
     if (existing.status === "withdrawn") {
       existing.status = "eligible";
       existing.currentWeight = nextWeight;
+      existing.qualifiedSourceFingerprint = sourceFingerprint;
       existing.updatedAt = new Date().toISOString();
       this.recordAutomaticEntryEvent(
         giveaway,
         existing,
         "source_revalidated",
         nextWeight,
-        qualifiedGroups.map((group) => group.id),
+        qualifiedGroups,
+        sourceFingerprint,
       );
       return;
     }
 
-    if (existing.status === "eligible" && existing.currentWeight !== nextWeight) {
+    if (
+      existing.status === "eligible" &&
+      (existing.currentWeight !== nextWeight ||
+        existing.qualifiedSourceFingerprint !== sourceFingerprint)
+    ) {
       const weightDelta = nextWeight - existing.currentWeight;
       existing.currentWeight = nextWeight;
+      existing.qualifiedSourceFingerprint = sourceFingerprint;
       existing.updatedAt = new Date().toISOString();
       this.recordAutomaticEntryEvent(
         giveaway,
         existing,
         "source_revalidated",
         weightDelta,
-        qualifiedGroups.map((group) => group.id),
+        qualifiedGroups,
+        sourceFingerprint,
       );
     }
+  }
+
+  private calculateQualifiedSourceFingerprint(
+    qualifiedGroups: QualifiedAutomaticGiveawayGroup[],
+  ) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          qualifiedGroups: qualifiedGroups.map(({ group, sourceFacts }) => ({
+            groupId: group.id,
+            sourceFacts,
+          })),
+        }),
+      )
+      .digest("hex");
   }
 
   private recordAutomaticEntryEvent(
@@ -1794,11 +1891,22 @@ export class TambikeBackend {
     entry: GiveawayEntryRecord,
     type: GiveawayEntryEventRecord["type"],
     weightDelta: number,
-    qualifiedGroupIds: string[],
+    qualifiedGroups: QualifiedAutomaticGiveawayGroup[],
+    sourceFingerprint: string,
   ) {
+    const sourceFacts = Object.freeze(
+      qualifiedGroups.map(({ group, sourceFacts: groupSourceFacts }) =>
+        Object.freeze({
+          groupId: group.id,
+          conditions: Object.freeze(groupSourceFacts.map((sourceFact) => Object.freeze({ ...sourceFact }))),
+        }),
+      ),
+    );
     const sourceSnapshot = Object.freeze({
-      qualifiedGroupIds: Object.freeze([...qualifiedGroupIds]),
-      effectiveWeight: qualifiedGroupIds.length === 0 ? 0 : entry.currentWeight,
+      qualifiedGroupIds: Object.freeze(qualifiedGroups.map(({ group }) => group.id)),
+      sourceFingerprint,
+      sourceFacts,
+      effectiveWeight: qualifiedGroups.length === 0 ? 0 : entry.currentWeight,
     }) as Record<string, unknown>;
     const record: GiveawayEntryEventRecord = Object.freeze({
       id: `giveaway-entry-event-${randomUUID()}`,
@@ -1816,67 +1924,110 @@ export class TambikeBackend {
       entryId: entry.id,
       type,
       weightDelta,
+      sourceFingerprint,
     });
   }
 
-  private isGiveawayConditionSatisfied(
+  private evaluateGiveawayCondition(
     eventId: string,
     riderId: string,
     condition: GiveawayEligibilityConditionInput,
-  ) {
+  ): GiveawayConditionEvaluation {
     switch (condition.source) {
       case "active_rsvp_pass": {
         const rsvp = this.rsvps.get(`${eventId}:${riderId}`);
         const pass = this.findPassForEventRider(eventId, riderId);
-        return rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled");
+        return {
+          satisfied: rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled"),
+          sourceFact: {
+            source: condition.source,
+            rsvpStatus: rsvp?.status ?? null,
+            attendanceType: rsvp?.attendanceType ?? null,
+            passId: pass?.id ?? null,
+            passStatus: pass?.status ?? null,
+          },
+        };
       }
       case "confirmed_check_in": {
         const pass = this.findPassForEventRider(eventId, riderId);
-        return Boolean(
-          pass &&
-            Array.from(this.checkIns.values()).some(
-              (checkIn) =>
-                checkIn.eventId === eventId &&
-                checkIn.passId === pass.id &&
-                checkIn.userId === riderId &&
-                checkIn.status === "confirmed",
-            ),
-        );
+        const confirmedCheckIns = pass
+          ? this.confirmedCheckInsForPass(eventId, riderId, pass.id)
+          : [];
+        return {
+          satisfied: confirmedCheckIns.length > 0,
+          sourceFact: {
+            source: condition.source,
+            confirmedCheckIns: confirmedCheckIns.map((checkIn) => ({
+              id: checkIn.id,
+              method: checkIn.method,
+              confirmationMethod: checkIn.confirmationMethod ?? null,
+            })),
+          },
+        };
       }
       case "staff_confirmed_check_in": {
         const pass = this.findPassForEventRider(eventId, riderId);
-        if (!pass) return false;
-        return Array.from(this.checkIns.values()).some((checkIn) => {
-          if (
-            checkIn.eventId !== eventId ||
-            checkIn.passId !== pass.id ||
-            checkIn.userId !== riderId ||
-            checkIn.status !== "confirmed"
-          ) {
-            return false;
-          }
-          return (
-            this.isStaffConfirmationMethod(checkIn.method) ||
-            (checkIn.method === "rider_qr" &&
-              checkIn.confirmationMethod !== undefined &&
-              this.isStaffConfirmationMethod(checkIn.confirmationMethod))
-          );
-        });
+        const staffConfirmedCheckIns = pass
+          ? this.confirmedCheckInsForPass(eventId, riderId, pass.id).filter(
+              (checkIn) =>
+                this.isStaffConfirmationMethod(checkIn.method) ||
+                (checkIn.method === "rider_qr" &&
+                  checkIn.confirmationMethod !== undefined &&
+                  this.isStaffConfirmationMethod(checkIn.confirmationMethod)),
+            )
+          : [];
+        return {
+          satisfied: staffConfirmedCheckIns.length > 0,
+          sourceFact: {
+            source: condition.source,
+            staffConfirmedCheckIns: staffConfirmedCheckIns.map((checkIn) => ({
+              id: checkIn.id,
+              method: checkIn.method,
+              confirmationMethod: checkIn.confirmationMethod ?? null,
+            })),
+          },
+        };
       }
       case "perk_redemption": {
         const event = this.requireEvent(eventId);
-        if (!event.perks.some((perk) => perk.id === condition.perkId)) return false;
-        return Array.from(this.perkRedemptions.values()).some(
-          (redemption) =>
-            redemption.perkId === condition.perkId &&
-            redemption.userId === riderId &&
-            redemption.status === "redeemed",
-        );
+        const redemptions = event.perks.some((perk) => perk.id === condition.perkId)
+          ? Array.from(this.perkRedemptions.values())
+              .filter(
+                (redemption) =>
+                  redemption.perkId === condition.perkId &&
+                  redemption.userId === riderId &&
+                  redemption.status === "redeemed",
+              )
+              .sort((left, right) => left.id.localeCompare(right.id))
+          : [];
+        return {
+          satisfied: redemptions.length > 0,
+          sourceFact: {
+            source: condition.source,
+            perkId: condition.perkId,
+            redemptionIds: redemptions.map((redemption) => redemption.id),
+          },
+        };
       }
       case "campaign_code":
       case "manual":
-        return false;
+        return {
+          satisfied: false,
+          sourceFact: { source: condition.source },
+        };
     }
+  }
+
+  private confirmedCheckInsForPass(eventId: string, riderId: string, passId: string) {
+    return Array.from(this.checkIns.values())
+      .filter(
+        (checkIn) =>
+          checkIn.eventId === eventId &&
+          checkIn.passId === passId &&
+          checkIn.userId === riderId &&
+          checkIn.status === "confirmed",
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
   }
 
   private findPassForEventRider(eventId: string, riderId: string) {

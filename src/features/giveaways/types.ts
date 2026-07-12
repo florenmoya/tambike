@@ -115,6 +115,8 @@ export interface CreateGiveawayInput {
   title: string;
   kind: GiveawayKind;
   entryMode: GiveawayEntryMode;
+  /** Hard safety ceiling for automatic draw units granted to one rider. */
+  maxEntriesPerRider: number;
   eligibilityGroups: GiveawayEligibilityGroupInput[];
   mechanics: string;
   terms: string;

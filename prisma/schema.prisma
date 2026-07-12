@@ -575,6 +575,7 @@ model EventGiveaway {
   status                   GiveawayStatus           @default(draft)
   complianceStatus         GiveawayComplianceStatus @default(draft)
   entryMode                GiveawayEntryMode
+  maxEntriesPerRider       Int
   visibility               GiveawayVisibility       @default(hidden)
   timeZone                 String
   entryOpensAt             DateTime?
@@ -705,6 +706,7 @@ model GiveawayEntry {
   riderId               String
   status                GiveawayEntryStatus @default(eligible)
   currentWeight         Int                 @default(1)
+  qualifiedSourceFingerprint String
   opaquePublicReference String              @unique
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt

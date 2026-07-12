@@ -30,6 +30,7 @@ CREATE TABLE "EventGiveaway" (
   "status" "GiveawayStatus" NOT NULL DEFAULT 'draft',
   "complianceStatus" "GiveawayComplianceStatus" NOT NULL DEFAULT 'draft',
   "entryMode" "GiveawayEntryMode" NOT NULL,
+  "maxEntriesPerRider" INTEGER NOT NULL,
   "visibility" "GiveawayVisibility" NOT NULL DEFAULT 'hidden',
   "timeZone" TEXT NOT NULL,
   "entryOpensAt" TIMESTAMP(3),
@@ -49,6 +50,7 @@ CREATE TABLE "EventGiveaway" (
   CONSTRAINT "EventGiveaway_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "EventGiveaway_maxWinsPerRider_positive" CHECK ("maxWinsPerRider" > 0),
   CONSTRAINT "EventGiveaway_maxWinsTotal_positive" CHECK ("maxWinsTotal" > 0),
+  CONSTRAINT "EventGiveaway_maxEntriesPerRider_bounded" CHECK ("maxEntriesPerRider" >= 1 AND "maxEntriesPerRider" <= 10000),
   CONSTRAINT "EventGiveaway_lifecycle_dates_ordered" CHECK (
     ("entryOpensAt" IS NULL OR "entryClosesAt" IS NULL OR "entryOpensAt" < "entryClosesAt")
     AND ("entryClosesAt" IS NULL OR "drawAt" IS NULL OR "entryClosesAt" < "drawAt")
@@ -126,6 +128,7 @@ CREATE TABLE "GiveawayEntry" (
   "riderId" TEXT NOT NULL,
   "status" "GiveawayEntryStatus" NOT NULL DEFAULT 'eligible',
   "currentWeight" INTEGER NOT NULL DEFAULT 1,
+  "qualifiedSourceFingerprint" TEXT NOT NULL,
   "opaquePublicReference" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,

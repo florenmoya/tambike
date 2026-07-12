@@ -38,6 +38,7 @@ function createValidGiveawayInput() {
     title: "Ride Day Raffle",
     kind: "raffle",
     entryMode: "automatic",
+    maxEntriesPerRider: 10_000,
     eligibilityGroups: [
       {
         id: "checked-in",
@@ -175,6 +176,21 @@ describe("giveaway draw engine", () => {
 });
 
 describe("giveaway input validation", () => {
+  test("requires maxEntriesPerRider to be a bounded positive integer", () => {
+    const input = createValidGiveawayInput();
+    const inputWithoutEntryCap = { ...input } as Record<string, unknown>;
+    delete inputWithoutEntryCap.maxEntriesPerRider;
+
+    expect(
+      createGiveawaySchema.safeParse({ ...input, maxEntriesPerRider: 10_000 }).success,
+    ).toBe(true);
+    expect(createGiveawaySchema.safeParse({ ...input, maxEntriesPerRider: 0 }).success).toBe(false);
+    expect(createGiveawaySchema.safeParse({ ...input, maxEntriesPerRider: 10_001 }).success).toBe(
+      false,
+    );
+    expect(createGiveawaySchema.safeParse(inputWithoutEntryCap).success).toBe(false);
+  });
+
   test("rejects a finite guaranteed prize pool", () => {
     const input = createValidGiveawayInput();
     input.prizePools[0].awardMode = "guaranteed";

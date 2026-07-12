@@ -65,6 +65,57 @@ Exit code: 0
 
 ## Deferred concerns
 
-- The approved input contract has no independent maximum entry-weight field, so this task sums qualifying group weights without an additional cap. Winner limits remain award limits, not entry-weight limits.
 - Perk redemption is evaluated from the isolated in-memory redemption collection, but no redemption mutation API belongs to this task.
 - The snapshot marker intentionally lacks draw seed/encryption/digest records; the later draw task owns those cryptographic fields and transactions.
+
+## Review follow-up: entry caps, source fingerprints, and boundary validation
+
+The review found four root causes: the campaign contract had no entry cap, `entryMode` could change after entry history existed, reconciliation compared only total weight, and lifecycle methods dereferenced unvalidated values. The existing giveaway migration had not been deployed, so its initial table definition was safely amended rather than creating a divergent follow-up migration.
+
+### RED evidence
+
+Before the fix:
+
+```text
+npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-draw-engine.test.ts tests/server/giveaway-schema-contract.test.ts
+Test Files  3 failed (3)
+Tests  6 failed | 56 passed (62)
+```
+
+The failures demonstrated strict rejection of the missing cap, no persisted cap/fingerprint fields, entry-mode mutation resolving after entry creation, no equal-weight source revalidation, and a `TypeError` from `null` review input.
+
+### Changes
+
+- Added required `maxEntriesPerRider` to create/update contracts, Zod validation (`1..10000`), `EventGiveaway`, the un-deployed migration, and a database CHECK constraint.
+- Added persisted `qualifiedSourceFingerprint` to `GiveawayEntry` and the migration.
+- Automatic reconciliation now uses `min(sumOfQualifiedGroupWeights, maxEntriesPerRider)`.
+- Reconciliation hashes canonical qualified group/source facts and appends a `source_revalidated` entry event even when the effective weight is unchanged.
+- Entry mode changes now fail with `GIVEAWAY_ENTRY_MODE_LOCKED` once any entry or entry event exists.
+- Compliance review, cancellation, and suspension validate malformed/empty reasons and malformed review payloads at the backend boundary with `BackendError("INVALID_INPUT")`.
+
+### GREEN and final verification
+
+```text
+npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-draw-engine.test.ts tests/server/giveaway-schema-contract.test.ts
+Test Files  3 passed (3)
+Tests  62 passed (62)
+
+npx prisma validate
+Exit code: 0
+
+npm run db:generate
+Exit code: 0
+
+npm run test:server
+Test Files  7 passed (7)
+Tests  91 passed (91)
+
+npx tsc --noEmit
+Exit code: 0
+
+npm run lint
+Exit code: 0
+
+git diff --check
+Exit code: 0
+```

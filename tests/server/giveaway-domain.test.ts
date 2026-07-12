@@ -73,6 +73,7 @@ function automaticGiveawayInput(
     title: "Ride day giveaway",
     kind: "giveaway",
     entryMode: "automatic",
+    maxEntriesPerRider: 10_000,
     eligibilityGroups,
     mechanics: "Eligible riders are entered automatically.",
     terms: "One entry is subject to the posted giveaway terms.",
@@ -239,6 +240,131 @@ describe("in-memory event giveaway lifecycle", () => {
       status: "not_eligible",
       entryCount: 0,
     });
+  });
+
+  test("caps automatic entry weight at the campaign maxEntriesPerRider limit", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { eventId, organizer, admin } = await createPublishedOrganizerEvent(backend);
+    const input = automaticGiveawayInput(eventId, [
+      {
+        id: "base-entry",
+        label: "Active RSVP",
+        weight: 3,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+      {
+        id: "bonus-entry",
+        label: "Second active RSVP group",
+        weight: 3,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+    ]) as CreateGiveawayInput & { maxEntriesPerRider: number };
+    input.maxEntriesPerRider = 10_000;
+    const giveaway = await backend.createGiveaway(organizer.sessionToken, eventId, input);
+    await backend.updateGiveaway(organizer.sessionToken, {
+      id: giveaway.id,
+      maxEntriesPerRider: 4,
+    });
+    await backend.submitGiveawayForReview(organizer.sessionToken, giveaway.id);
+    await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, { decision: "approved" });
+    await backend.openGiveaway(organizer.sessionToken, giveaway.id);
+    const { rider } = await sessions(backend);
+
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await expect(backend.getRiderGiveawayState(rider.sessionToken, giveaway.id)).resolves.toEqual({
+      giveawayId: giveaway.id,
+      status: "entered",
+      entryCount: 4,
+    });
+  });
+
+  test("does not change entry mode after automatic entries exist, even while paused", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { giveaway, eventId, organizer } = await createApprovedOpenGiveaway(backend);
+    const { rider } = await sessions(backend);
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await backend.pauseGiveaway(organizer.sessionToken, giveaway.id);
+
+    await expect(
+      backend.updateGiveaway(organizer.sessionToken, { id: giveaway.id, entryMode: "opt_in" }),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_MODE_LOCKED" });
+  });
+
+  test("revalidates an equal-weight entry when its qualified source fingerprint changes", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { giveaway, eventId } = await createApprovedOpenGiveaway(backend);
+    const { rider } = await sessions(backend);
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    expect(await backend.auditCount("GIVEAWAY_ENTRY_RECONCILED")).toBe(1);
+
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "club",
+      clubName: "Equal-weight source change",
+    });
+
+    await expect(backend.getRiderGiveawayState(rider.sessionToken, giveaway.id)).resolves.toEqual({
+      giveawayId: giveaway.id,
+      status: "entered",
+      entryCount: 3,
+    });
+    expect(await backend.auditCount("GIVEAWAY_ENTRY_RECONCILED")).toBe(2);
+  });
+
+  test("rejects malformed review decisions and lifecycle reasons with a stable invalid-input error", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { eventId, organizer, admin } = await createPublishedOrganizerEvent(backend);
+    const giveaway = await backend.createGiveaway(
+      organizer.sessionToken,
+      eventId,
+      automaticGiveawayInput(eventId),
+    );
+    await backend.submitGiveawayForReview(organizer.sessionToken, giveaway.id);
+
+    await expect(
+      backend.reviewGiveawayCompliance(
+        admin.sessionToken,
+        giveaway.id,
+        null as unknown as { decision: "approved" },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      backend.reviewGiveawayCompliance(
+        admin.sessionToken,
+        giveaway.id,
+        { decision: "invalid" } as unknown as { decision: "approved" },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      backend.reviewGiveawayCompliance(
+        admin.sessionToken,
+        giveaway.id,
+        { decision: "approved", reason: { unexpected: true } } as unknown as { decision: "approved" },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      backend.reviewGiveawayCompliance(
+        admin.sessionToken,
+        giveaway.id,
+        { decision: "approved", reason: "" },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      backend.cancelGiveaway(organizer.sessionToken, giveaway.id, {} as unknown as string),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      backend.suspendGiveaway(admin.sessionToken, giveaway.id, 42 as unknown as string),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   test("does not turn campaign-code or manual conditions into automatic entries", async () => {

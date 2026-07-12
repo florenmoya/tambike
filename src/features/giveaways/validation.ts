@@ -10,6 +10,7 @@ import type {
 const nonEmptyText = z.string().trim().min(1);
 const identifier = z.string().trim().min(1);
 const positiveInteger = z.number().int().positive();
+const boundedEntryLimit = z.number().int().min(1).max(10_000);
 
 const ianaTimeZone = nonEmptyText.superRefine((value, context) => {
   try {
@@ -131,6 +132,7 @@ const giveawayFieldsSchema = z.object({
   title: nonEmptyText,
   kind: z.enum(["raffle", "giveaway"]),
   entryMode: z.enum(["automatic", "opt_in", "claim_code", "manual_only"]),
+  maxEntriesPerRider: boundedEntryLimit,
   eligibilityGroups: z.array(eligibilityGroupSchema).min(1),
   mechanics: nonEmptyText,
   terms: nonEmptyText,
