@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, test } from "vitest";
 
 import {
@@ -187,6 +189,39 @@ describe("giveaway input validation", () => {
     );
   });
 
+  test("rejects a prize-pool patch that references groups without a complete group configuration", () => {
+    const patch = {
+      id: "giveaway-1",
+      prizePools: [
+        {
+          ...createValidGiveawayInput().prizePools[0],
+          eligibilityGroupIds: ["checked-in"],
+        },
+      ],
+    };
+
+    expect(updateGiveawaySchema.safeParse(patch).success).toBe(false);
+    expect(
+      updateGiveawaySchema.safeParse({
+        ...patch,
+        eligibilityGroups: createValidGiveawayInput().eligibilityGroups,
+      }).success,
+    ).toBe(true);
+  });
+
+  test("rejects equal adjacent schedule timestamps", () => {
+    const timestamp = "2026-07-13T10:00:00.000Z";
+
+    expect(
+      createGiveawaySchema.safeParse({
+        ...createValidGiveawayInput(),
+        opensAt: timestamp,
+        closesAt: timestamp,
+        drawAt: "2026-07-13T11:00:00.000Z",
+      }).success,
+    ).toBe(false);
+  });
+
   test("allows opening only after compliance approval and never allows post-award cancellation", () => {
     expect(canTransitionGiveawayState("scheduled", "open", "pending_review")).toBe(false);
     expect(canTransitionGiveawayState("scheduled", "open", "approved")).toBe(true);
@@ -210,5 +245,27 @@ describe("giveaway audit primitives", () => {
     expect(calculateGiveawayAuditHash("previous-hash", first)).toBe(
       calculateGiveawayAuditHash("previous-hash", second),
     );
+  });
+
+  test("rejects sparse arrays instead of silently collapsing missing audit values", () => {
+    const sparse: unknown[] = [];
+    sparse[1] = "present";
+
+    expect(() => canonicalizeJson(sparse)).toThrow("INVALID_AUDIT_PAYLOAD");
+  });
+});
+
+describe("giveaway DTO privacy", () => {
+  test("keeps the operator claim DTO free of rider identity fields", () => {
+    const typesSource = readFileSync(
+      new URL("../../src/features/giveaways/types.ts", import.meta.url),
+      "utf8",
+    );
+    const operatorClaimView = typesSource.match(
+      /export interface OperatorGiveawayClaimView \{([\s\S]*?)\n\}/,
+    )?.[1];
+
+    expect(operatorClaimView).toContain("claimReference");
+    expect(operatorClaimView).not.toContain("riderDisplayName");
   });
 });

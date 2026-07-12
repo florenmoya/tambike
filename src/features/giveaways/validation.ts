@@ -135,6 +135,17 @@ function addCrossFieldIssues(
   },
   context: z.RefinementCtx,
 ) {
+  const hasPrizePoolGroupReferences = input.prizePools?.some(
+    (pool) => (pool.eligibilityGroupIds?.length ?? 0) > 0,
+  );
+  if (hasPrizePoolGroupReferences && !input.eligibilityGroups) {
+    context.addIssue({
+      code: "custom",
+      path: ["eligibilityGroups"],
+      message: "ELIGIBILITY_GROUP_CONFIGURATION_REQUIRED",
+    });
+  }
+
   if (input.eligibilityGroups) {
     const groupIds = input.eligibilityGroups.map((group) => group.id);
     if (new Set(groupIds).size !== groupIds.length) {
@@ -171,7 +182,7 @@ function addCrossFieldIssues(
   for (const [field, value] of orderedDates) {
     if (!value) continue;
     const current = new Date(value);
-    if (previous && current.getTime() < previous.getTime()) {
+    if (previous && current.getTime() <= previous.getTime()) {
       context.addIssue({
         code: "custom",
         path: [field],

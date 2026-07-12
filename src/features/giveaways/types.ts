@@ -107,6 +107,11 @@ export interface CreateGiveawayInput {
   presenceVerificationRequired?: boolean;
 }
 
+/**
+ * Partial campaign update. A patch that assigns `eligibilityGroupIds` on any
+ * prize pool must also include the complete replacement `eligibilityGroups`
+ * configuration so references can be validated atomically.
+ */
 export type UpdateGiveawayInput = {
   id: string;
 } & Partial<Omit<CreateGiveawayInput, "eventId">>;
@@ -172,7 +177,8 @@ export interface RiderGiveawayState {
 export interface OperatorGiveawayClaimView {
   awardId: string;
   giveawayId: string;
-  riderDisplayName: string;
+  /** Opaque operator-facing reference; never a rider name, email, or phone number. */
+  claimReference: string;
   prizePoolTitle: string;
   fulfilmentMode: GiveawayFulfilmentMode;
   presenceVerificationRequired: boolean;

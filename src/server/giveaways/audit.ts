@@ -14,7 +14,12 @@ export function canonicalizeJson(value: unknown): string {
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalizeJson(item)).join(",")}]`;
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value)) throw new Error("INVALID_AUDIT_PAYLOAD");
+      items.push(canonicalizeJson(value[index]));
+    }
+    return `[${items.join(",")}]`;
   }
 
   if (!value || typeof value !== "object") throw new Error("INVALID_AUDIT_PAYLOAD");
