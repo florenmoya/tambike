@@ -124,6 +124,134 @@ enum FlagStatus {
   escalated
 }
 
+enum GiveawayKind {
+  raffle
+  giveaway
+}
+
+enum GiveawayStatus {
+  draft
+  scheduled
+  open
+  paused
+  locked
+  drawing
+  claims_open
+  completed
+  cancelled
+  suspended
+}
+
+enum GiveawayComplianceStatus {
+  draft
+  pending_review
+  approved
+  changes_requested
+  rejected
+}
+
+enum GiveawayEntryMode {
+  automatic
+  opt_in
+  claim_code
+  manual_only
+}
+
+enum GiveawayVisibility {
+  event_page
+  registered_riders
+  eligible_riders
+  hidden
+}
+
+enum GiveawayEligibilitySource {
+  active_rsvp_pass
+  confirmed_check_in
+  staff_confirmed_check_in
+  perk_redemption
+  campaign_code
+  manual
+}
+
+enum GiveawayEntryStatus {
+  eligible
+  locked
+  disqualified
+  withdrawn
+}
+
+enum GiveawayEntryEventType {
+  automatic_qualified
+  opted_in
+  campaign_code_claimed
+  manual_grant
+  manual_revoke
+  source_revalidated
+}
+
+enum GiveawayAwardMode {
+  random_draw
+  first_come
+  guaranteed
+  manual_selection
+}
+
+enum GiveawayPrizeItemStatus {
+  available
+  reserved
+  fulfilled
+  voided
+}
+
+enum GiveawayDrawType {
+  initial
+  redraw
+}
+
+enum GiveawayDrawStatus {
+  pending
+  completed
+  published
+  voided
+}
+
+enum GiveawayAwardStatus {
+  pending_verification
+  claimable
+  verified
+  fulfilled
+  declined
+  disqualified
+  expired
+  voided
+  superseded
+}
+
+enum GiveawayClaimVerificationMethod {
+  camera
+  upload
+  manual
+}
+
+enum GiveawayClaimVerificationResult {
+  verified
+  rejected
+}
+
+enum GiveawayFulfillmentType {
+  onsite
+  digital_code
+  delivery
+  manual_contact
+}
+
+enum GiveawayFulfillmentStatus {
+  pending
+  fulfilled
+  failed
+  cancelled
+}
+
 model User {
   id                 String             @id @default(cuid())
   displayName        String
@@ -149,6 +277,24 @@ model User {
   notifications         Notification[]
   auditLogs             AuditLog[]          @relation("AuditActor")
   reportedFlags         FlagReport[]        @relation("FlagReporter")
+  giveawaysCreated      EventGiveaway[]     @relation("GiveawayCreator")
+  giveawaysAttested     EventGiveaway[]     @relation("GiveawayAttestor")
+  giveawaysComplianceReviewed EventGiveaway[] @relation("GiveawayComplianceReviewer")
+  giveawaysSuspended    EventGiveaway[]     @relation("GiveawaySuspender")
+  giveawayMechanicsCreated GiveawayMechanicsVersion[] @relation("GiveawayMechanicsCreator")
+  giveawayMechanicsReviewed GiveawayMechanicsVersion[] @relation("GiveawayMechanicsReviewer")
+  giveawayCodesRevoked  GiveawayCampaignCode[] @relation("GiveawayCampaignCodeRevoker")
+  giveawayEntries       GiveawayEntry[]     @relation("GiveawayEntryRider")
+  giveawayEntryEventsActed GiveawayEntryEvent[] @relation("GiveawayEntryEventActor")
+  giveawaySnapshotsLocked GiveawaySnapshot[] @relation("GiveawaySnapshotLocker")
+  giveawayDrawsInitiated GiveawayDraw[]     @relation("GiveawayDrawInitiator")
+  giveawayAwardsWon     GiveawayAward[]     @relation("GiveawayAwardWinner")
+  giveawayClaimVerifications GiveawayClaimVerification[] @relation("GiveawayClaimVerificationStaff")
+  giveawayFulfillments  GiveawayFulfillment[] @relation("GiveawayFulfillmentStaff")
+  giveawayOperatorAssignments GiveawayOperator[] @relation("GiveawayOperatorUser")
+  giveawayOperatorGrants GiveawayOperator[] @relation("GiveawayOperatorGranter")
+  giveawayOperatorRevocations GiveawayOperator[] @relation("GiveawayOperatorRevoker")
+  giveawayAuditEvents   GiveawayAuditEvent[] @relation("GiveawayAuditActor")
 }
 
 model Session {
@@ -237,6 +383,7 @@ model Event {
   checkInSettings EventCheckInSettings?
   selfCheckInQrSessions EventSelfCheckInQrSession[]
   perks           Perk[]
+  giveaways       EventGiveaway[]
   leads           Lead[]
   flags           FlagReport[]
 }
@@ -345,6 +492,7 @@ model Perk {
 
   event       Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   redemptions PerkRedemption[]
+  giveawayEligibilityConditions GiveawayEligibilityCondition[] @relation("GiveawayEligibilityPerk")
 }
 
 model PerkRedemption {
@@ -413,4 +561,454 @@ model AuditLog {
   createdAt   DateTime @default(now())
 
   actor User? @relation("AuditActor", fields: [actorUserId], references: [id])
+}
+
+model EventGiveaway {
+  id                       String                   @id @default(cuid())
+  eventId                  String
+  creatorUserId            String
+  organizerAttestedById    String?
+  complianceReviewerId     String?
+  suspendedByUserId        String?
+  title                    String
+  kind                     GiveawayKind
+  status                   GiveawayStatus           @default(draft)
+  complianceStatus         GiveawayComplianceStatus @default(draft)
+  entryMode                GiveawayEntryMode
+  visibility               GiveawayVisibility       @default(hidden)
+  timeZone                 String
+  entryOpensAt             DateTime?
+  entryClosesAt            DateTime?
+  drawAt                   DateTime?
+  claimDeadlineAt          DateTime?
+  maxWinsPerRider          Int                      @default(1)
+  maxWinsTotal             Int                      @default(1)
+  organizerAttestedAt      DateTime?
+  complianceReviewedAt     DateTime?
+  complianceReviewReason   String?
+  suspendedAt              DateTime?
+  suspensionReason         String?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+
+  event                Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  creator              User                    @relation("GiveawayCreator", fields: [creatorUserId], references: [id], onDelete: Restrict)
+  organizerAttestedBy  User?                   @relation("GiveawayAttestor", fields: [organizerAttestedById], references: [id], onDelete: Restrict)
+  complianceReviewer   User?                   @relation("GiveawayComplianceReviewer", fields: [complianceReviewerId], references: [id], onDelete: Restrict)
+  suspendedBy          User?                   @relation("GiveawaySuspender", fields: [suspendedByUserId], references: [id], onDelete: Restrict)
+  mechanicsVersions    GiveawayMechanicsVersion[]
+  eligibilityGroups    GiveawayEligibilityGroup[]
+  campaignCodes        GiveawayCampaignCode[]
+  entries              GiveawayEntry[]
+  entryEvents          GiveawayEntryEvent[]
+  snapshot             GiveawaySnapshot?
+  prizePools           GiveawayPrizePool[]
+  draws                GiveawayDraw[]
+  awards               GiveawayAward[]
+  operators            GiveawayOperator[]
+  auditEvents          GiveawayAuditEvent[]
+
+  @@index([eventId, status])
+  @@index([complianceStatus, createdAt])
+  @@index([status, entryOpensAt])
+  @@index([status, entryClosesAt])
+  @@index([status, drawAt])
+  @@index([status, claimDeadlineAt])
+  @@index([creatorUserId])
+  @@index([organizerAttestedById])
+  @@index([complianceReviewerId])
+  @@index([suspendedByUserId])
+}
+
+model GiveawayMechanicsVersion {
+  id                String                   @id @default(cuid())
+  giveawayId        String
+  version           Int
+  mechanics         String
+  terms             String
+  sponsorDisclosure String?
+  checksum          String
+  createdByUserId   String
+  reviewedByUserId  String?
+  reviewDecision    GiveawayComplianceStatus?
+  reviewReason      String?
+  reviewedAt        DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  giveaway   EventGiveaway      @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  createdBy  User               @relation("GiveawayMechanicsCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reviewedBy User?              @relation("GiveawayMechanicsReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  snapshots  GiveawaySnapshot[]
+
+  @@unique([giveawayId, version])
+  @@index([createdByUserId])
+  @@index([reviewedByUserId])
+}
+
+model GiveawayEligibilityGroup {
+  id          String   @id @default(cuid())
+  giveawayId  String
+  position    Int
+  label       String
+  entryWeight Int
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  giveaway       EventGiveaway                    @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  conditions     GiveawayEligibilityCondition[]
+  prizePoolLinks GiveawayPrizePoolEligibilityGroup[]
+
+  @@unique([giveawayId, position])
+}
+
+model GiveawayEligibilityCondition {
+  id          String                    @id @default(cuid())
+  groupId     String
+  source      GiveawayEligibilitySource
+  perkId      String?
+  config      Json
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  group GiveawayEligibilityGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  perk  Perk?                    @relation("GiveawayEligibilityPerk", fields: [perkId], references: [id], onDelete: Restrict)
+
+  @@index([groupId])
+  @@index([perkId])
+}
+
+model GiveawayCampaignCode {
+  id              String   @id @default(cuid())
+  giveawayId      String
+  tokenHash       String   @unique
+  expiresAt       DateTime
+  maxUses         Int
+  useCount        Int      @default(0)
+  revokedAt       DateTime?
+  revokedByUserId String?
+  revocationReason String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  giveaway  EventGiveaway @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  revokedBy User?          @relation("GiveawayCampaignCodeRevoker", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([giveawayId, expiresAt])
+  @@index([revokedByUserId])
+}
+
+model GiveawayEntry {
+  id                    String              @id @default(cuid())
+  giveawayId            String
+  riderId               String
+  status                GiveawayEntryStatus @default(eligible)
+  currentWeight         Int                 @default(1)
+  opaquePublicReference String              @unique
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  giveaway        EventGiveaway         @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  rider           User                  @relation("GiveawayEntryRider", fields: [riderId], references: [id], onDelete: Restrict)
+  events          GiveawayEntryEvent[]
+  snapshotEntries GiveawaySnapshotEntry[]
+
+  @@unique([giveawayId, riderId])
+  @@index([giveawayId, status])
+  @@index([riderId])
+}
+
+model GiveawayEntryEvent {
+  id             String                 @id @default(cuid())
+  giveawayId     String
+  entryId        String
+  type           GiveawayEntryEventType
+  sourceKey      String
+  sourceSnapshot Json?
+  weightDelta    Int
+  actorUserId    String?
+  idempotencyKey String
+  createdAt      DateTime               @default(now())
+
+  giveaway EventGiveaway @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  entry    GiveawayEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  actor    User?         @relation("GiveawayEntryEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@unique([giveawayId, idempotencyKey])
+  @@index([entryId])
+  @@index([actorUserId])
+  @@index([giveawayId, createdAt])
+}
+
+model GiveawaySnapshot {
+  id                      String   @id @default(cuid())
+  giveawayId              String   @unique
+  mechanicsVersionId      String
+  configDigest            String
+  snapshotDigest          String
+  candidateCount          Int
+  seedCommitment          String
+  encryptedSeedCiphertext String
+  encryptedSeedIv         String
+  encryptedSeedAuthTag    String
+  encryptionKeyVersion    String
+  algorithmVersion        String
+  lockedByUserId          String
+  lockedAt                DateTime @default(now())
+  seedRevealedAt          DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  giveaway         EventGiveaway          @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  mechanicsVersion GiveawayMechanicsVersion @relation(fields: [mechanicsVersionId], references: [id], onDelete: Restrict)
+  lockedBy         User                   @relation("GiveawaySnapshotLocker", fields: [lockedByUserId], references: [id], onDelete: Restrict)
+  entries          GiveawaySnapshotEntry[]
+  draws            GiveawayDraw[]
+
+  @@index([mechanicsVersionId])
+  @@index([lockedByUserId])
+}
+
+model GiveawaySnapshotEntry {
+  id                    String   @id @default(cuid())
+  snapshotId            String
+  entryId               String
+  opaquePublicReference String
+  frozenWeight          Int
+  rankSourceDigest      String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  snapshot GiveawaySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  entry    GiveawayEntry    @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  awards   GiveawayAward[]
+
+  @@unique([snapshotId, entryId])
+  @@index([entryId])
+}
+
+model GiveawayPrizePool {
+  id                           String                @id @default(cuid())
+  giveawayId                   String
+  position                     Int
+  title                        String
+  description                  String?
+  awardMode                    GiveawayAwardMode
+  fulfillmentType              GiveawayFulfillmentType
+  inventoryLimit               Int?
+  maxWinsPerRider              Int                   @default(1)
+  presenceVerificationRequired Boolean               @default(false)
+  claimDeadlineAt              DateTime?
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+
+  giveaway          EventGiveaway                    @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  prizeItems        GiveawayPrizeItem[]
+  eligibilityGroups GiveawayPrizePoolEligibilityGroup[]
+  awards            GiveawayAward[]
+
+  @@unique([giveawayId, position])
+  @@index([giveawayId, awardMode])
+}
+
+model GiveawayPrizeItem {
+  id                     String                  @id @default(cuid())
+  prizePoolId            String
+  position               Int
+  title                  String
+  description            String?
+  status                 GiveawayPrizeItemStatus @default(available)
+  digitalSecretCiphertext String?
+  digitalSecretIv        String?
+  digitalSecretAuthTag   String?
+  encryptionKeyVersion   String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  prizePool GiveawayPrizePool @relation(fields: [prizePoolId], references: [id], onDelete: Restrict)
+  awards    GiveawayAward[]
+
+  @@unique([prizePoolId, position])
+  @@index([prizePoolId, status])
+}
+
+model GiveawayPrizePoolEligibilityGroup {
+  id                 String   @id @default(cuid())
+  prizePoolId        String
+  eligibilityGroupId String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  prizePool        GiveawayPrizePool        @relation(fields: [prizePoolId], references: [id], onDelete: Restrict)
+  eligibilityGroup GiveawayEligibilityGroup @relation(fields: [eligibilityGroupId], references: [id], onDelete: Restrict)
+
+  @@unique([prizePoolId, eligibilityGroupId])
+  @@index([eligibilityGroupId])
+}
+
+model GiveawayDraw {
+  id                String             @id @default(cuid())
+  giveawayId        String
+  snapshotId        String
+  sequence          Int
+  type              GiveawayDrawType
+  status            GiveawayDrawStatus @default(pending)
+  idempotencyKey    String
+  algorithmVersion  String
+  inputDigest       String
+  resultDigest      String?
+  initiatedByUserId String
+  reason            String?
+  completedAt       DateTime?
+  publishedAt       DateTime?
+  voidedAt          DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  giveaway    EventGiveaway  @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  snapshot    GiveawaySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  initiatedBy User           @relation("GiveawayDrawInitiator", fields: [initiatedByUserId], references: [id], onDelete: Restrict)
+  awards      GiveawayAward[]
+
+  @@unique([giveawayId, sequence])
+  @@unique([giveawayId, idempotencyKey])
+  @@index([giveawayId, status])
+  @@index([snapshotId])
+  @@index([initiatedByUserId])
+}
+
+model GiveawayAward {
+  id                    String              @id @default(cuid())
+  giveawayId            String
+  drawId                String
+  prizePoolId           String
+  prizeItemId           String?
+  snapshotEntryId       String
+  winnerUserId          String
+  status                GiveawayAwardStatus @default(pending_verification)
+  isCurrent             Boolean             @default(true)
+  rank                  Int
+  opaqueClaimReference  String              @unique
+  claimTokenHash        String?             @unique
+  claimDeadlineAt       DateTime?
+  reason                String?
+  predecessorAwardId    String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  giveaway        EventGiveaway             @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  draw            GiveawayDraw              @relation(fields: [drawId], references: [id], onDelete: Restrict)
+  prizePool       GiveawayPrizePool         @relation(fields: [prizePoolId], references: [id], onDelete: Restrict)
+  prizeItem       GiveawayPrizeItem?        @relation(fields: [prizeItemId], references: [id], onDelete: Restrict)
+  snapshotEntry   GiveawaySnapshotEntry     @relation(fields: [snapshotEntryId], references: [id], onDelete: Restrict)
+  winner          User                      @relation("GiveawayAwardWinner", fields: [winnerUserId], references: [id], onDelete: Restrict)
+  predecessor     GiveawayAward?            @relation("GiveawayAwardPredecessor", fields: [predecessorAwardId], references: [id], onDelete: Restrict)
+  redrawSuccessors GiveawayAward[]          @relation("GiveawayAwardPredecessor")
+  claimVerifications GiveawayClaimVerification[]
+  fulfillments    GiveawayFulfillment[]
+  deliveryDetail  GiveawayDeliveryDetail?
+
+  @@index([giveawayId, status])
+  @@index([drawId])
+  @@index([prizePoolId])
+  @@index([prizeItemId])
+  @@index([snapshotEntryId])
+  @@index([winnerUserId])
+  @@index([predecessorAwardId])
+}
+
+model GiveawayClaimVerification {
+  id                String                          @id @default(cuid())
+  awardId           String
+  method            GiveawayClaimVerificationMethod
+  result            GiveawayClaimVerificationResult
+  staffActorUserId  String
+  note              String?
+  createdAt         DateTime                        @default(now())
+
+  award      GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  staffActor User          @relation("GiveawayClaimVerificationStaff", fields: [staffActorUserId], references: [id], onDelete: Restrict)
+
+  @@index([awardId, createdAt])
+  @@index([staffActorUserId])
+}
+
+model GiveawayFulfillment {
+  id                String                   @id @default(cuid())
+  awardId           String
+  type              GiveawayFulfillmentType
+  status            GiveawayFulfillmentStatus @default(pending)
+  staffActorUserId  String
+  reference         String?
+  note              String?
+  fulfilledAt       DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  award      GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  staffActor User          @relation("GiveawayFulfillmentStaff", fields: [staffActorUserId], references: [id], onDelete: Restrict)
+
+  @@index([awardId, status])
+  @@index([staffActorUserId])
+}
+
+model GiveawayDeliveryDetail {
+  id                  String   @id @default(cuid())
+  awardId             String   @unique
+  encryptedPayload    String
+  encryptedIv         String
+  encryptedAuthTag    String
+  encryptionKeyVersion String
+  winnerConsentedAt   DateTime
+  retentionExpiresAt  DateTime
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  award GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+}
+
+model GiveawayOperator {
+  id              String   @id @default(cuid())
+  giveawayId      String
+  userId          String
+  grantedByUserId String
+  grantedAt       DateTime @default(now())
+  revokedByUserId String?
+  revokedAt       DateTime?
+  revocationReason String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  giveaway  EventGiveaway @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  user      User          @relation("GiveawayOperatorUser", fields: [userId], references: [id], onDelete: Restrict)
+  grantedBy User          @relation("GiveawayOperatorGranter", fields: [grantedByUserId], references: [id], onDelete: Restrict)
+  revokedBy User?         @relation("GiveawayOperatorRevoker", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([giveawayId, userId])
+  @@index([userId])
+  @@index([grantedByUserId])
+  @@index([revokedByUserId])
+}
+
+model GiveawayAuditEvent {
+  id               String   @id @default(cuid())
+  giveawayId       String
+  sequence         Int
+  actorUserId      String?
+  action           String
+  targetType       String
+  targetId         String?
+  canonicalPayload String
+  payload          Json
+  previousHash     String?
+  hash             String
+  createdAt        DateTime @default(now())
+
+  giveaway EventGiveaway @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  actor    User?         @relation("GiveawayAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@unique([giveawayId, sequence])
+  @@index([actorUserId])
+  @@index([giveawayId, createdAt])
 }

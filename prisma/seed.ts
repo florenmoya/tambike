@@ -39,23 +39,56 @@ async function main() {
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
   const internalOwnerPasswordHash = await bcrypt.hash(randomUUID(), 10);
 
-  await prisma.auditLog.deleteMany();
-  await prisma.notification.deleteMany();
-  await prisma.flagReport.deleteMany();
-  await prisma.lead.deleteMany();
-  await prisma.perkRedemption.deleteMany();
-  await prisma.checkIn.deleteMany();
-  await prisma.eventSelfCheckInQrSession.deleteMany();
-  await prisma.eventCheckInSettings.deleteMany();
-  await prisma.pass.deleteMany();
-  await prisma.rSVP.deleteMany();
-  await prisma.eventApproval.deleteMany();
-  await prisma.perk.deleteMany();
-  await prisma.event.deleteMany();
-  await prisma.venue.deleteMany();
-  await prisma.organizerProfile.deleteMany();
-  await prisma.session.deleteMany();
-  await prisma.user.deleteMany();
+  await prisma.$transaction(async (transaction) => {
+    // This transaction-local setting is the only supported audit-purge bypass,
+    // and is used solely to reset the disposable seed dataset.
+    await transaction.$executeRaw`
+      SELECT set_config('tambike.allow_giveaway_audit_purge', 'on', true)
+    `;
+
+    await transaction.giveawayDeliveryDetail.deleteMany();
+    await transaction.giveawayFulfillment.deleteMany();
+    await transaction.giveawayClaimVerification.deleteMany();
+    // Redraw awards preserve a self-referential predecessor in production.
+    // Clear it only inside this disposable reset transaction before deleting all awards.
+    await transaction.giveawayAward.updateMany({
+      data: { predecessorAwardId: null },
+    });
+    await transaction.giveawayAward.deleteMany();
+    await transaction.giveawayDraw.deleteMany();
+    await transaction.giveawaySnapshotEntry.deleteMany();
+    await transaction.giveawaySnapshot.deleteMany();
+    await transaction.giveawayEntryEvent.deleteMany();
+    await transaction.giveawayEntry.deleteMany();
+    await transaction.giveawayPrizePoolEligibilityGroup.deleteMany();
+    await transaction.giveawayPrizeItem.deleteMany();
+    await transaction.giveawayPrizePool.deleteMany();
+    await transaction.giveawayEligibilityCondition.deleteMany();
+    await transaction.giveawayEligibilityGroup.deleteMany();
+    await transaction.giveawayCampaignCode.deleteMany();
+    await transaction.giveawayOperator.deleteMany();
+    await transaction.giveawayMechanicsVersion.deleteMany();
+    await transaction.giveawayAuditEvent.deleteMany();
+    await transaction.eventGiveaway.deleteMany();
+
+    await transaction.auditLog.deleteMany();
+    await transaction.notification.deleteMany();
+    await transaction.flagReport.deleteMany();
+    await transaction.lead.deleteMany();
+    await transaction.perkRedemption.deleteMany();
+    await transaction.checkIn.deleteMany();
+    await transaction.eventSelfCheckInQrSession.deleteMany();
+    await transaction.eventCheckInSettings.deleteMany();
+    await transaction.pass.deleteMany();
+    await transaction.rSVP.deleteMany();
+    await transaction.eventApproval.deleteMany();
+    await transaction.perk.deleteMany();
+    await transaction.event.deleteMany();
+    await transaction.venue.deleteMany();
+    await transaction.organizerProfile.deleteMany();
+    await transaction.session.deleteMany();
+    await transaction.user.deleteMany();
+  });
 
   for (const user of mockUsers) {
     await prisma.user.create({
