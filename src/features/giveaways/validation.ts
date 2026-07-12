@@ -203,6 +203,15 @@ function addCrossFieldIssues(
 }
 
 function addAtomicUpdateBundleIssues(input: object, context: z.RefinementCtx) {
+  const record = input as Record<string, unknown>;
+  const bundleFields = [...eligibilityBundleFields, ...scheduleBundleFields];
+  if (bundleFields.some((field) => Object.hasOwn(record, field) && record[field] === undefined)) {
+    context.addIssue({
+      code: "custom",
+      message: "ATOMIC_UPDATE_BUNDLE_MEMBER_UNDEFINED",
+    });
+  }
+
   const hasEligibilityGroups = Object.hasOwn(input, "eligibilityGroups");
   const hasPrizePools = Object.hasOwn(input, "prizePools");
   if (hasEligibilityGroups !== hasPrizePools) {
@@ -226,10 +235,13 @@ function addAtomicUpdateBundleIssues(input: object, context: z.RefinementCtx) {
 function assertAtomicUpdateBundleOwnership(input: unknown): void {
   if (!input || typeof input !== "object" || Array.isArray(input)) return;
 
-  const record = input as object;
+  const record = input as Record<string, unknown>;
   const bundleFields = [...eligibilityBundleFields, ...scheduleBundleFields];
   if (bundleFields.some((field) => field in record && !Object.hasOwn(record, field))) {
     throw new Error("UPDATE_BUNDLE_FIELDS_MUST_BE_OWN_PROPERTIES");
+  }
+  if (bundleFields.some((field) => Object.hasOwn(record, field) && record[field] === undefined)) {
+    throw new Error("ATOMIC_UPDATE_BUNDLE_MEMBER_UNDEFINED");
   }
 
   const hasEligibilityGroups = Object.hasOwn(record, "eligibilityGroups");

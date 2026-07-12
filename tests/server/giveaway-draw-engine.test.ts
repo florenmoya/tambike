@@ -20,6 +20,7 @@ import {
   canTransitionGiveawayState,
   createGiveawaySchema,
   parseUpdateGiveawayInput,
+  updateGiveawaySchema,
 } from "../../src/features/giveaways/validation";
 
 const drawSeed = Buffer.from("0123456789abcdef0123456789abcdef", "utf8");
@@ -227,6 +228,24 @@ describe("giveaway input validation", () => {
     ).toMatchObject({ id: "giveaway-1" });
   });
 
+  test("rejects undefined eligibility bundle members while allowing the whole bundle to be omitted", () => {
+    const input = createValidGiveawayInput();
+    const patch = {
+      id: "giveaway-1",
+      eligibilityGroups: undefined,
+      prizePools: input.prizePools,
+    };
+
+    expect(updateGiveawaySchema.safeParse(patch).success).toBe(false);
+    expect(() => validateGiveawayUpdateInput(patch)).toThrow(
+      "ATOMIC_UPDATE_BUNDLE_MEMBER_UNDEFINED",
+    );
+    expect(validateGiveawayUpdateInput({ id: "giveaway-1", title: "No bundle update" })).toEqual({
+      id: "giveaway-1",
+      title: "No bundle update",
+    });
+  });
+
   test("validates prize-pool group references against the supplied complete bundle", () => {
     const input = createValidGiveawayInput();
 
@@ -262,6 +281,25 @@ describe("giveaway input validation", () => {
         claimDeadlineAt: null,
       }),
     ).toMatchObject({ id: "giveaway-1" });
+  });
+
+  test("rejects undefined schedule bundle members while allowing the whole bundle to be omitted", () => {
+    const patch = {
+      id: "giveaway-1",
+      entryOpensAt: "2026-07-13T10:00:00.000Z",
+      entryClosesAt: undefined,
+      drawAt: undefined,
+      claimDeadlineAt: undefined,
+    };
+
+    expect(updateGiveawaySchema.safeParse(patch).success).toBe(false);
+    expect(() => validateGiveawayUpdateInput(patch)).toThrow(
+      "ATOMIC_UPDATE_BUNDLE_MEMBER_UNDEFINED",
+    );
+    expect(validateGiveawayUpdateInput({ id: "giveaway-1", mechanics: "No schedule update" })).toEqual({
+      id: "giveaway-1",
+      mechanics: "No schedule update",
+    });
   });
 
   test("rejects inherited schedule fields instead of treating them as an update bundle", () => {
