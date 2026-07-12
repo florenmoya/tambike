@@ -668,3 +668,390 @@ CREATE TRIGGER "GiveawayAward_inventory_guard"
 BEFORE INSERT OR UPDATE OF "giveawayId", "prizePoolId", "prizeItemId"
 ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_inventory"();
+
+-- Finite prize allocation is item-backed. The pool check establishes whether
+-- inventory is finite; these two guards make the item count authoritative.
+CREATE FUNCTION "validate_giveaway_prize_item_inventory"()
+RETURNS TRIGGER AS $$
+DECLARE
+  pool_award_mode "GiveawayAwardMode";
+  pool_inventory_limit INTEGER;
+  pool_item_count INTEGER;
+BEGIN
+  SELECT "awardMode", "inventoryLimit"
+    INTO pool_award_mode, pool_inventory_limit
+  FROM "GiveawayPrizePool"
+  WHERE "id" = NEW."prizePoolId" FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'GiveawayPrizeItem requires an existing prize pool';
+  END IF;
+
+  IF pool_award_mode = 'guaranteed' THEN
+    RAISE EXCEPTION 'Unlimited guaranteed pools cannot contain prize items';
+  END IF;
+
+  IF pool_inventory_limit IS NULL OR pool_inventory_limit <= 0 THEN
+    RAISE EXCEPTION 'Finite prize pools require a positive inventory limit';
+  END IF;
+
+  SELECT COUNT(*)
+    INTO pool_item_count
+  FROM "GiveawayPrizeItem"
+  WHERE "prizePoolId" = NEW."prizePoolId"
+    AND "id" <> NEW."id";
+
+  IF pool_item_count >= pool_inventory_limit THEN
+    RAISE EXCEPTION 'GiveawayPrizeItem exceeds its pool inventory limit';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizeItem_inventory_guard"
+BEFORE INSERT OR UPDATE OF "prizePoolId" ON "GiveawayPrizeItem"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_item_inventory"();
+
+CREATE FUNCTION "validate_giveaway_prize_pool_inventory"()
+RETURNS TRIGGER AS $$
+DECLARE
+  pool_item_count INTEGER;
+BEGIN
+  SELECT COUNT(*)
+    INTO pool_item_count
+  FROM "GiveawayPrizeItem"
+  WHERE "prizePoolId" = NEW."id";
+
+  IF NEW."awardMode" = 'guaranteed' THEN
+    IF pool_item_count > 0 THEN
+      RAISE EXCEPTION 'Unlimited guaranteed pools cannot contain prize items';
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF NEW."inventoryLimit" IS NULL OR NEW."inventoryLimit" <= 0 THEN
+    RAISE EXCEPTION 'Finite prize pools require a positive inventory limit';
+  END IF;
+
+  IF pool_item_count > NEW."inventoryLimit" THEN
+    RAISE EXCEPTION 'GiveawayPrizePool inventory limit cannot be below existing prize item count';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizePool_inventory_guard"
+BEFORE INSERT OR UPDATE OF "awardMode", "inventoryLimit" ON "GiveawayPrizePool"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_pool_inventory"();
+
+-- The aggregate stores simple ids rather than duplicating campaign ids on all
+-- children, so join-aware write guards preserve parentage without redundant
+-- scope columns or undocumented composite foreign keys.
+CREATE FUNCTION "validate_giveaway_draw_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  snapshot_giveaway_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO snapshot_giveaway_id
+  FROM "GiveawaySnapshot"
+  WHERE "id" = NEW."snapshotId";
+
+  IF NOT FOUND OR snapshot_giveaway_id <> NEW."giveawayId" THEN
+    RAISE EXCEPTION 'GiveawayDraw snapshot must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayDraw_parentage_guard"
+BEFORE INSERT OR UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_draw_parentage"();
+
+CREATE FUNCTION "validate_giveaway_award_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  draw_giveaway_id TEXT;
+  pool_giveaway_id TEXT;
+  snapshot_entry_giveaway_id TEXT;
+  snapshot_entry_rider_id TEXT;
+  predecessor_giveaway_id TEXT;
+  predecessor_pool_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO draw_giveaway_id
+  FROM "GiveawayDraw"
+  WHERE "id" = NEW."drawId";
+
+  IF NOT FOUND OR draw_giveaway_id <> NEW."giveawayId" THEN
+    RAISE EXCEPTION 'GiveawayAward draw must belong to the same giveaway';
+  END IF;
+
+  SELECT "giveawayId"
+    INTO pool_giveaway_id
+  FROM "GiveawayPrizePool"
+  WHERE "id" = NEW."prizePoolId";
+
+  IF NOT FOUND OR pool_giveaway_id <> NEW."giveawayId" THEN
+    RAISE EXCEPTION 'GiveawayAward prize pool must belong to the same giveaway';
+  END IF;
+
+  SELECT snapshot."giveawayId", entry."riderId"
+    INTO snapshot_entry_giveaway_id, snapshot_entry_rider_id
+  FROM "GiveawaySnapshotEntry" AS snapshot_entry
+  JOIN "GiveawaySnapshot" AS snapshot ON snapshot."id" = snapshot_entry."snapshotId"
+  JOIN "GiveawayEntry" AS entry ON entry."id" = snapshot_entry."entryId"
+  WHERE snapshot_entry."id" = NEW."snapshotEntryId";
+
+  IF NOT FOUND
+    OR snapshot_entry_giveaway_id <> NEW."giveawayId"
+    OR snapshot_entry_rider_id <> NEW."winnerUserId" THEN
+    RAISE EXCEPTION 'GiveawayAward snapshot entry and winner must belong to the same giveaway rider';
+  END IF;
+
+  IF NEW."predecessorAwardId" IS NOT NULL THEN
+    SELECT "giveawayId", "prizePoolId"
+      INTO predecessor_giveaway_id, predecessor_pool_id
+    FROM "GiveawayAward"
+    WHERE "id" = NEW."predecessorAwardId";
+
+    IF NOT FOUND
+      OR predecessor_giveaway_id <> NEW."giveawayId"
+      OR predecessor_pool_id <> NEW."prizePoolId" THEN
+      RAISE EXCEPTION 'GiveawayAward predecessor must belong to the same giveaway and prize pool';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayAward_parentage_guard"
+BEFORE INSERT OR UPDATE OF "giveawayId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "predecessorAwardId"
+ON "GiveawayAward"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_parentage"();
+
+CREATE FUNCTION "validate_giveaway_prize_pool_eligibility_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  pool_giveaway_id TEXT;
+  group_giveaway_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO pool_giveaway_id
+  FROM "GiveawayPrizePool"
+  WHERE "id" = NEW."prizePoolId";
+
+  SELECT "giveawayId"
+    INTO group_giveaway_id
+  FROM "GiveawayEligibilityGroup"
+  WHERE "id" = NEW."eligibilityGroupId";
+
+  IF pool_giveaway_id IS NULL
+    OR group_giveaway_id IS NULL
+    OR pool_giveaway_id <> group_giveaway_id THEN
+    RAISE EXCEPTION 'GiveawayPrizePoolEligibilityGroup members must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizePoolEligibilityGroup_parentage_guard"
+BEFORE INSERT OR UPDATE OF "prizePoolId", "eligibilityGroupId"
+ON "GiveawayPrizePoolEligibilityGroup"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_pool_eligibility_parentage"();
+
+CREATE FUNCTION "validate_giveaway_entry_event_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  entry_giveaway_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO entry_giveaway_id
+  FROM "GiveawayEntry"
+  WHERE "id" = NEW."entryId";
+
+  IF NOT FOUND OR entry_giveaway_id <> NEW."giveawayId" THEN
+    RAISE EXCEPTION 'GiveawayEntryEvent entry must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEntryEvent_parentage_guard"
+BEFORE INSERT OR UPDATE OF "giveawayId", "entryId" ON "GiveawayEntryEvent"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_entry_event_parentage"();
+
+CREATE FUNCTION "validate_giveaway_snapshot_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  mechanics_giveaway_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO mechanics_giveaway_id
+  FROM "GiveawayMechanicsVersion"
+  WHERE "id" = NEW."mechanicsVersionId";
+
+  IF NOT FOUND OR mechanics_giveaway_id <> NEW."giveawayId" THEN
+    RAISE EXCEPTION 'GiveawaySnapshot mechanics version must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawaySnapshot_parentage_guard"
+BEFORE INSERT OR UPDATE OF "giveawayId", "mechanicsVersionId" ON "GiveawaySnapshot"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_snapshot_parentage"();
+
+CREATE FUNCTION "validate_giveaway_snapshot_entry_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  snapshot_giveaway_id TEXT;
+  entry_giveaway_id TEXT;
+BEGIN
+  SELECT "giveawayId"
+    INTO snapshot_giveaway_id
+  FROM "GiveawaySnapshot"
+  WHERE "id" = NEW."snapshotId";
+
+  SELECT "giveawayId"
+    INTO entry_giveaway_id
+  FROM "GiveawayEntry"
+  WHERE "id" = NEW."entryId";
+
+  IF snapshot_giveaway_id IS NULL
+    OR entry_giveaway_id IS NULL
+    OR snapshot_giveaway_id <> entry_giveaway_id THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry snapshot and entry must belong to the same giveaway';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawaySnapshotEntry_parentage_guard"
+BEFORE INSERT OR UPDATE OF "snapshotId", "entryId" ON "GiveawaySnapshotEntry"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_snapshot_entry_parentage"();
+
+CREATE FUNCTION "validate_giveaway_eligibility_condition_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  condition_event_id TEXT;
+  perk_event_id TEXT;
+BEGIN
+  IF NEW."perkId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT giveaway."eventId"
+    INTO condition_event_id
+  FROM "GiveawayEligibilityGroup" AS eligibility_group
+  JOIN "EventGiveaway" AS giveaway ON giveaway."id" = eligibility_group."giveawayId"
+  WHERE eligibility_group."id" = NEW."groupId";
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'GiveawayEligibilityCondition requires an existing eligibility group';
+  END IF;
+
+  SELECT "eventId"
+    INTO perk_event_id
+  FROM "Perk"
+  WHERE "id" = NEW."perkId";
+
+  IF NOT FOUND OR perk_event_id <> condition_event_id THEN
+    RAISE EXCEPTION 'GiveawayEligibilityCondition perk must belong to the giveaway event';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEligibilityCondition_parentage_guard"
+BEFORE INSERT OR UPDATE OF "groupId", "perkId" ON "GiveawayEligibilityCondition"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_eligibility_condition_parentage"();
+
+-- Child-side parentage guards cannot observe a later update to an owning
+-- scope. Campaign ownership and frozen snapshot links are immutable once set.
+CREATE FUNCTION "prevent_giveaway_scope_reparenting"()
+RETURNS TRIGGER AS $$
+DECLARE
+  field_name TEXT;
+BEGIN
+  FOREACH field_name IN ARRAY TG_ARGV LOOP
+    IF (to_jsonb(NEW) ->> field_name) IS DISTINCT FROM (to_jsonb(OLD) ->> field_name) THEN
+      RAISE EXCEPTION '% scope field is immutable once created', TG_TABLE_NAME || '.' || field_name;
+    END IF;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "EventGiveaway_scope_immutable"
+BEFORE UPDATE OF "eventId" ON "EventGiveaway"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('eventId');
+
+CREATE TRIGGER "GiveawayMechanicsVersion_scope_immutable"
+BEFORE UPDATE OF "giveawayId" ON "GiveawayMechanicsVersion"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
+
+CREATE TRIGGER "GiveawayEligibilityGroup_scope_immutable"
+BEFORE UPDATE OF "giveawayId" ON "GiveawayEligibilityGroup"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
+
+CREATE TRIGGER "GiveawayEntry_scope_immutable"
+BEFORE UPDATE OF "giveawayId" ON "GiveawayEntry"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
+
+CREATE TRIGGER "GiveawaySnapshot_scope_immutable"
+BEFORE UPDATE OF "giveawayId", "mechanicsVersionId" ON "GiveawaySnapshot"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'mechanicsVersionId');
+
+CREATE TRIGGER "GiveawaySnapshotEntry_scope_immutable"
+BEFORE UPDATE OF "snapshotId", "entryId" ON "GiveawaySnapshotEntry"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('snapshotId', 'entryId');
+
+CREATE TRIGGER "GiveawayPrizePool_scope_immutable"
+BEFORE UPDATE OF "giveawayId" ON "GiveawayPrizePool"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
+
+CREATE TRIGGER "GiveawayPrizeItem_scope_immutable"
+BEFORE UPDATE OF "prizePoolId" ON "GiveawayPrizeItem"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('prizePoolId');
+
+CREATE TRIGGER "GiveawayDraw_scope_immutable"
+BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
+
+CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."eventId" IS NOT DISTINCT FROM OLD."eventId" THEN
+    RETURN NEW;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM "GiveawayEligibilityCondition" AS condition
+    JOIN "GiveawayEligibilityGroup" AS eligibility_group ON eligibility_group."id" = condition."groupId"
+    JOIN "EventGiveaway" AS giveaway ON giveaway."id" = eligibility_group."giveawayId"
+    WHERE condition."perkId" = OLD."id"
+      AND giveaway."eventId" IS DISTINCT FROM NEW."eventId"
+  ) THEN
+    RAISE EXCEPTION 'Perk event cannot change while a giveaway eligibility condition references it';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "Perk_giveaway_event_parentage_guard"
+BEFORE UPDATE OF "eventId" ON "Perk"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_perk_event_parentage"();

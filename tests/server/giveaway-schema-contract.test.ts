@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import * as generatedPrismaClient from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { describe, expect, test } from "vitest";
+
+const giveawayMigrationSql = readFileSync(
+  resolve(
+    process.cwd(),
+    "prisma/migrations/20260713000000_flexible_event_giveaways/migration.sql",
+  ),
+  "utf8",
+);
 
 const requiredEnums = {
   GiveawayKind: ["raffle", "giveaway"],
@@ -109,5 +120,71 @@ describe("giveaway Prisma schema contract", () => {
       kind: "object",
       type: "EventGiveaway",
     });
+  });
+
+  test("keeps finite prize item rows bounded by their pool inventory in the migration", () => {
+    expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_prize_item_inventory"()');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayPrizeItem_inventory_guard"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayPrizePool_inventory_guard"');
+    expect(giveawayMigrationSql).toContain('"inventoryLimit"');
+    expect(giveawayMigrationSql).toContain('"awardMode" = \'guaranteed\'');
+    expect(giveawayMigrationSql).toContain('WHERE "id" = NEW."prizePoolId" FOR UPDATE');
+  });
+
+  test("guards every required cross-campaign parentage link in the migration", () => {
+    const guards = [
+      ["validate_giveaway_draw_parentage", "GiveawayDraw_parentage_guard"],
+      ["validate_giveaway_award_parentage", "GiveawayAward_parentage_guard"],
+      [
+        "validate_giveaway_prize_pool_eligibility_parentage",
+        "GiveawayPrizePoolEligibilityGroup_parentage_guard",
+      ],
+      ["validate_giveaway_entry_event_parentage", "GiveawayEntryEvent_parentage_guard"],
+      ["validate_giveaway_snapshot_parentage", "GiveawaySnapshot_parentage_guard"],
+      [
+        "validate_giveaway_snapshot_entry_parentage",
+        "GiveawaySnapshotEntry_parentage_guard",
+      ],
+      [
+        "validate_giveaway_eligibility_condition_parentage",
+        "GiveawayEligibilityCondition_parentage_guard",
+      ],
+    ] as const;
+
+    for (const [functionName, triggerName] of guards) {
+      expect(giveawayMigrationSql).toContain(`CREATE FUNCTION "${functionName}"()`);
+      expect(giveawayMigrationSql).toContain(`CREATE TRIGGER "${triggerName}"`);
+    }
+
+    expect(giveawayMigrationSql).toContain('"snapshotId"');
+    expect(giveawayMigrationSql).toContain('"predecessorAwardId"');
+    expect(giveawayMigrationSql).toContain('snapshot_entry_rider_id');
+    expect(giveawayMigrationSql).toContain('NEW."winnerUserId"');
+    expect(giveawayMigrationSql).toContain('"perkId"');
+  });
+
+  test("prevents scoped-parent updates from bypassing giveaway parentage guards", () => {
+    expect(giveawayMigrationSql).toContain('CREATE FUNCTION "prevent_giveaway_scope_reparenting"()');
+    expect(giveawayMigrationSql).toContain('TG_ARGV');
+    expect(giveawayMigrationSql).toContain('to_jsonb(NEW)');
+
+    const immutableScopeTriggers = [
+      "EventGiveaway_scope_immutable",
+      "GiveawayMechanicsVersion_scope_immutable",
+      "GiveawayEligibilityGroup_scope_immutable",
+      "GiveawayEntry_scope_immutable",
+      "GiveawaySnapshot_scope_immutable",
+      "GiveawaySnapshotEntry_scope_immutable",
+      "GiveawayPrizePool_scope_immutable",
+      "GiveawayPrizeItem_scope_immutable",
+      "GiveawayDraw_scope_immutable",
+    ];
+
+    for (const triggerName of immutableScopeTriggers) {
+      expect(giveawayMigrationSql).toContain(`CREATE TRIGGER "${triggerName}"`);
+    }
+
+    expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_perk_event_parentage"()');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "Perk_giveaway_event_parentage_guard"');
   });
 });
