@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, test } from "vitest";
 
+import * as giveawayValidation from "../../src/features/giveaways/validation";
+
 import {
   buildPublicDrawVerification,
   createDrawSeedCommitment,
@@ -17,11 +19,17 @@ import {
 import {
   canTransitionGiveawayState,
   createGiveawaySchema,
-  updateGiveawaySchema,
+  parseUpdateGiveawayInput,
 } from "../../src/features/giveaways/validation";
 
 const drawSeed = Buffer.from("0123456789abcdef0123456789abcdef", "utf8");
 const encryptionKey = Buffer.alloc(32, 9).toString("base64");
+
+function validateGiveawayUpdateInput(input: unknown) {
+  const validator = Reflect.get(giveawayValidation, "validateGiveawayUpdateInput");
+  if (typeof validator === "function") return validator(input);
+  return parseUpdateGiveawayInput(input);
+}
 
 function createValidGiveawayInput() {
   return {
@@ -168,7 +176,7 @@ describe("giveaway input validation", () => {
 
   test.each([
     ["an invalid IANA time zone", { timeZone: "Not/AZone" }],
-    ["a backwards schedule", { opensAt: "2026-07-13T10:00:00.000Z", closesAt: "2026-07-13T09:00:00.000Z" }],
+    ["a backwards schedule", { entryOpensAt: "2026-07-13T10:00:00.000Z", entryClosesAt: "2026-07-13T09:00:00.000Z" }],
     ["a missing organizer attestation", { organizerAttestation: false }],
     ["a group without conditions", { eligibilityGroups: [{ id: "empty", label: "Empty", weight: 1, conditions: [] }] }],
     ["a non-positive group weight", { eligibilityGroups: [{ id: "zero", label: "Zero", weight: 0, conditions: [{ source: "confirmed_check_in" }] }] }],
@@ -183,43 +191,114 @@ describe("giveaway input validation", () => {
   });
 
   test("validates update inputs with the same field constraints", () => {
-    expect(updateGiveawaySchema.safeParse({ id: "giveaway-1", title: "" }).success).toBe(false);
-    expect(updateGiveawaySchema.safeParse({ id: "giveaway-1", title: "Updated title" }).success).toBe(
-      true,
+    expect(() => validateGiveawayUpdateInput({ id: "giveaway-1", title: "" })).toThrow();
+    expect(validateGiveawayUpdateInput({ id: "giveaway-1", title: "Updated title" })).toEqual({
+      id: "giveaway-1",
+      title: "Updated title",
+    });
+  });
+
+  test("exports the authoritative atomic giveaway update validator", () => {
+    expect(Reflect.get(giveawayValidation, "validateGiveawayUpdateInput")).toBeTypeOf("function");
+  });
+
+  test("requires eligibility groups and prize pools as one update bundle", () => {
+    const input = createValidGiveawayInput();
+    const pool = input.prizePools[0];
+
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        eligibilityGroups: input.eligibilityGroups,
+      }),
+    ).toThrow("ELIGIBILITY_PRIZE_POOL_BUNDLE_REQUIRED");
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        prizePools: [pool],
+      }),
+    ).toThrow("ELIGIBILITY_PRIZE_POOL_BUNDLE_REQUIRED");
+    expect(
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        eligibilityGroups: input.eligibilityGroups,
+        prizePools: [pool],
+      }),
+    ).toMatchObject({ id: "giveaway-1" });
+  });
+
+  test("validates prize-pool group references against the supplied complete bundle", () => {
+    const input = createValidGiveawayInput();
+
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        eligibilityGroups: input.eligibilityGroups,
+        prizePools: [
+          {
+            ...input.prizePools[0],
+            eligibilityGroupIds: ["unknown-group"],
+          },
+        ],
+      }),
+    ).toThrow("UNKNOWN_ELIGIBILITY_GROUP");
+  });
+
+  test("requires every own schedule field before accepting an update bundle", () => {
+    const timestamp = "2026-07-13T10:00:00.000Z";
+
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        entryOpensAt: timestamp,
+      }),
+    ).toThrow("SCHEDULE_BUNDLE_REQUIRED");
+    expect(
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        entryOpensAt: timestamp,
+        entryClosesAt: "2026-07-13T11:00:00.000Z",
+        drawAt: null,
+        claimDeadlineAt: null,
+      }),
+    ).toMatchObject({ id: "giveaway-1" });
+  });
+
+  test("rejects inherited schedule fields instead of treating them as an update bundle", () => {
+    const inherited = Object.create({
+      entryOpensAt: "2026-07-13T10:00:00.000Z",
+      entryClosesAt: "2026-07-13T11:00:00.000Z",
+      drawAt: null,
+      claimDeadlineAt: null,
+    }) as Record<string, unknown>;
+    inherited.id = "giveaway-1";
+
+    expect(() => validateGiveawayUpdateInput(inherited)).toThrow(
+      "UPDATE_BUNDLE_FIELDS_MUST_BE_OWN_PROPERTIES",
     );
   });
 
-  test("rejects a prize-pool patch that references groups without a complete group configuration", () => {
-    const patch = {
-      id: "giveaway-1",
-      prizePools: [
-        {
-          ...createValidGiveawayInput().prizePools[0],
-          eligibilityGroupIds: ["checked-in"],
-        },
-      ],
-    };
-
-    expect(updateGiveawaySchema.safeParse(patch).success).toBe(false);
-    expect(
-      updateGiveawaySchema.safeParse({
-        ...patch,
-        eligibilityGroups: createValidGiveawayInput().eligibilityGroups,
-      }).success,
-    ).toBe(true);
-  });
-
-  test("rejects equal adjacent schedule timestamps", () => {
+  test("accepts null only for optional draw and claim dates and rejects equal present dates", () => {
     const timestamp = "2026-07-13T10:00:00.000Z";
 
-    expect(
-      createGiveawaySchema.safeParse({
-        ...createValidGiveawayInput(),
-        opensAt: timestamp,
-        closesAt: timestamp,
-        drawAt: "2026-07-13T11:00:00.000Z",
-      }).success,
-    ).toBe(false);
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        entryOpensAt: null,
+        entryClosesAt: "2026-07-13T11:00:00.000Z",
+        drawAt: null,
+        claimDeadlineAt: null,
+      }),
+    ).toThrow();
+    expect(() =>
+      validateGiveawayUpdateInput({
+        id: "giveaway-1",
+        entryOpensAt: timestamp,
+        entryClosesAt: timestamp,
+        drawAt: null,
+        claimDeadlineAt: null,
+      }),
+    ).toThrow("SCHEDULE_ORDER_INVALID");
   });
 
   test("allows opening only after compliance approval and never allows post-award cancellation", () => {
@@ -253,19 +332,47 @@ describe("giveaway audit primitives", () => {
 
     expect(() => canonicalizeJson(sparse)).toThrow("INVALID_AUDIT_PAYLOAD");
   });
+
+  test("rejects inherited numeric array properties instead of treating them as present", () => {
+    const sparse: unknown[] = [];
+    Object.setPrototypeOf(sparse, { 0: "inherited" });
+    sparse.length = 1;
+
+    expect(() => canonicalizeJson(sparse)).toThrow("INVALID_AUDIT_PAYLOAD");
+  });
 });
 
 describe("giveaway DTO privacy", () => {
-  test("keeps the operator claim DTO free of rider identity fields", () => {
-    const typesSource = readFileSync(
-      new URL("../../src/features/giveaways/types.ts", import.meta.url),
-      "utf8",
-    );
-    const operatorClaimView = typesSource.match(
-      /export interface OperatorGiveawayClaimView \{([\s\S]*?)\n\}/,
+  test.each([
+    "PublicGiveawayCampaignSummary",
+    "RiderGiveawayState",
+    "OperatorGiveawayClaimView",
+  ])("keeps %s free of rider identity fields", (interfaceName) => {
+    const typesSource = readFileSync(new URL("../../src/features/giveaways/types.ts", import.meta.url), "utf8");
+    const interfaceBody = typesSource.match(
+      new RegExp(`export interface ${interfaceName} \\{([\\s\\S]*?)\\n\\}`),
     )?.[1];
+    expect(interfaceBody).toBeDefined();
+    const fieldNames = Array.from(
+      interfaceBody?.matchAll(/^\s*([A-Za-z][A-Za-z0-9_]*)\??:/gm) ?? [],
+      ([, fieldName]) => fieldName,
+    );
 
-    expect(operatorClaimView).toContain("claimReference");
-    expect(operatorClaimView).not.toContain("riderDisplayName");
+    for (const identityField of [
+      "displayName",
+      "riderDisplayName",
+      "email",
+      "phone",
+      "firstName",
+      "lastName",
+      "fullName",
+      "riderId",
+      "userId",
+    ]) {
+      expect(fieldNames).not.toContain(identityField);
+    }
+    if (interfaceName === "OperatorGiveawayClaimView") {
+      expect(fieldNames).toContain("claimReference");
+    }
   });
 });

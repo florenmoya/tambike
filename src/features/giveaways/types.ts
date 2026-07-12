@@ -98,23 +98,61 @@ export interface CreateGiveawayInput {
   winnerLimits: GiveawayWinnerLimitsInput;
   organizerAttestation: true;
   prizePools: GiveawayPrizePoolInput[];
-  opensAt?: string;
-  closesAt?: string;
-  drawAt?: string;
-  claimDeadlineAt?: string;
+  entryOpensAt?: string;
+  entryClosesAt?: string;
+  drawAt?: string | null;
+  claimDeadlineAt?: string | null;
   publicVisibility?: GiveawayPublicVisibility;
   sponsorDisclosure?: string;
   presenceVerificationRequired?: boolean;
 }
 
+export type GiveawayConfigurationUpdateBundle =
+  | {
+      eligibilityGroups: GiveawayEligibilityGroupInput[];
+      prizePools: GiveawayPrizePoolInput[];
+    }
+  | {
+      eligibilityGroups?: never;
+      prizePools?: never;
+    };
+
+export type GiveawayScheduleUpdateBundle =
+  | {
+      entryOpensAt: string;
+      entryClosesAt: string;
+      drawAt: string | null;
+      claimDeadlineAt: string | null;
+    }
+  | {
+      entryOpensAt?: never;
+      entryClosesAt?: never;
+      drawAt?: never;
+      claimDeadlineAt?: never;
+    };
+
 /**
- * Partial campaign update. A patch that assigns `eligibilityGroupIds` on any
- * prize pool must also include the complete replacement `eligibilityGroups`
- * configuration so references can be validated atomically.
+ * Partial campaign update. Eligibility groups and prize pools are an atomic
+ * replacement bundle, as are all schedule fields. This prevents validation
+ * from relying on unknown persisted configuration.
  */
 export type UpdateGiveawayInput = {
   id: string;
-} & Partial<Omit<CreateGiveawayInput, "eventId">>;
+} &
+  Partial<
+    Omit<
+      CreateGiveawayInput,
+      | "eventId"
+      | "eligibilityGroups"
+      | "prizePools"
+      | "entryOpensAt"
+      | "entryClosesAt"
+      | "drawAt"
+      | "claimDeadlineAt"
+    >
+  > &
+  GiveawayConfigurationUpdateBundle &
+  GiveawayScheduleUpdateBundle;
 
 export interface PublicGiveawayPrizePoolSummary {
   id: string;
@@ -141,8 +179,8 @@ export interface PublicGiveawayCampaignSummary {
   timeZone: string;
   publicVisibility: GiveawayPublicVisibility;
   sponsorDisclosure?: string;
-  opensAt?: string;
-  closesAt?: string;
+  entryOpensAt?: string;
+  entryClosesAt?: string;
   drawAt?: string;
   claimDeadlineAt?: string;
   prizePools: PublicGiveawayPrizePoolSummary[];

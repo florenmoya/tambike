@@ -96,11 +96,19 @@ const prizePoolSchema = z
   });
 
 const scheduleFields = {
-  opensAt: z.string().datetime({ offset: true }).optional(),
-  closesAt: z.string().datetime({ offset: true }).optional(),
-  drawAt: z.string().datetime({ offset: true }).optional(),
-  claimDeadlineAt: z.string().datetime({ offset: true }).optional(),
+  entryOpensAt: z.string().datetime({ offset: true }).optional(),
+  entryClosesAt: z.string().datetime({ offset: true }).optional(),
+  drawAt: z.string().datetime({ offset: true }).nullable().optional(),
+  claimDeadlineAt: z.string().datetime({ offset: true }).nullable().optional(),
 };
+
+const eligibilityBundleFields = ["eligibilityGroups", "prizePools"] as const;
+const scheduleBundleFields = [
+  "entryOpensAt",
+  "entryClosesAt",
+  "drawAt",
+  "claimDeadlineAt",
+] as const;
 
 const giveawayFieldsSchema = z.object({
   title: nonEmptyText,
@@ -128,10 +136,10 @@ function addCrossFieldIssues(
   input: {
     eligibilityGroups?: Array<{ id: string }>;
     prizePools?: Array<{ eligibilityGroupIds?: string[] }>;
-    opensAt?: string;
-    closesAt?: string;
-    drawAt?: string;
-    claimDeadlineAt?: string;
+    entryOpensAt?: string;
+    entryClosesAt?: string;
+    drawAt?: string | null;
+    claimDeadlineAt?: string | null;
   },
   context: z.RefinementCtx,
 ) {
@@ -171,8 +179,8 @@ function addCrossFieldIssues(
   }
 
   const orderedDates = [
-    ["opensAt", input.opensAt],
-    ["closesAt", input.closesAt],
+    ["entryOpensAt", input.entryOpensAt],
+    ["entryClosesAt", input.entryClosesAt],
     ["drawAt", input.drawAt],
     ["claimDeadlineAt", input.claimDeadlineAt],
   ] as const;
@@ -180,7 +188,7 @@ function addCrossFieldIssues(
   let previousField: string | undefined;
 
   for (const [field, value] of orderedDates) {
-    if (!value) continue;
+    if (value === undefined || value === null) continue;
     const current = new Date(value);
     if (previous && current.getTime() <= previous.getTime()) {
       context.addIssue({
@@ -191,6 +199,48 @@ function addCrossFieldIssues(
     }
     previous = current;
     previousField = field;
+  }
+}
+
+function addAtomicUpdateBundleIssues(input: object, context: z.RefinementCtx) {
+  const hasEligibilityGroups = Object.hasOwn(input, "eligibilityGroups");
+  const hasPrizePools = Object.hasOwn(input, "prizePools");
+  if (hasEligibilityGroups !== hasPrizePools) {
+    context.addIssue({
+      code: "custom",
+      path: hasEligibilityGroups ? ["prizePools"] : ["eligibilityGroups"],
+      message: "ELIGIBILITY_PRIZE_POOL_BUNDLE_REQUIRED",
+    });
+  }
+
+  const suppliedScheduleFields = scheduleBundleFields.filter((field) => Object.hasOwn(input, field));
+  if (suppliedScheduleFields.length > 0 && suppliedScheduleFields.length !== scheduleBundleFields.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["entryOpensAt"],
+      message: "SCHEDULE_BUNDLE_REQUIRED",
+    });
+  }
+}
+
+function assertAtomicUpdateBundleOwnership(input: unknown): void {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return;
+
+  const record = input as object;
+  const bundleFields = [...eligibilityBundleFields, ...scheduleBundleFields];
+  if (bundleFields.some((field) => field in record && !Object.hasOwn(record, field))) {
+    throw new Error("UPDATE_BUNDLE_FIELDS_MUST_BE_OWN_PROPERTIES");
+  }
+
+  const hasEligibilityGroups = Object.hasOwn(record, "eligibilityGroups");
+  const hasPrizePools = Object.hasOwn(record, "prizePools");
+  if (hasEligibilityGroups !== hasPrizePools) {
+    throw new Error("ELIGIBILITY_PRIZE_POOL_BUNDLE_REQUIRED");
+  }
+
+  const suppliedScheduleFields = scheduleBundleFields.filter((field) => Object.hasOwn(record, field));
+  if (suppliedScheduleFields.length > 0 && suppliedScheduleFields.length !== scheduleBundleFields.length) {
+    throw new Error("SCHEDULE_BUNDLE_REQUIRED");
   }
 }
 
@@ -208,14 +258,22 @@ export const updateGiveawaySchema = z
     ...giveawayFieldsSchema.partial().shape,
   })
   .strict()
-  .superRefine(addCrossFieldIssues);
+  .superRefine((input, context) => {
+    addAtomicUpdateBundleIssues(input, context);
+    addCrossFieldIssues(input, context);
+  });
 
 export function parseCreateGiveawayInput(input: unknown): CreateGiveawayInput {
   return createGiveawaySchema.parse(input) as CreateGiveawayInput;
 }
 
-export function parseUpdateGiveawayInput(input: unknown): UpdateGiveawayInput {
+export function validateGiveawayUpdateInput(input: unknown): UpdateGiveawayInput {
+  assertAtomicUpdateBundleOwnership(input);
   return updateGiveawaySchema.parse(input) as UpdateGiveawayInput;
+}
+
+export function parseUpdateGiveawayInput(input: unknown): UpdateGiveawayInput {
+  return validateGiveawayUpdateInput(input);
 }
 
 const allowedTransitions: Record<GiveawayState, readonly GiveawayState[]> = {
