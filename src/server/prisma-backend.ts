@@ -2473,8 +2473,8 @@ export class PrismaTambikeBackend {
       if (draw.giveawayId !== giveaway.id || draw.snapshotId !== snapshot.id) {
         throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
       }
-      const seed = this.decryptGiveawayDrawSeed(snapshot);
       if (draw.status === "published") {
+        const seed = this.decryptGiveawayDrawSeed(snapshot);
         return this.buildGiveawayDrawVerification(giveaway, snapshot, draw, seed, true);
       }
       if (draw.status !== "completed") {
@@ -2483,6 +2483,13 @@ export class PrismaTambikeBackend {
       if (giveaway.status !== "drawing") {
         throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
       }
+      if (
+        !snapshot.seedRevealedAt &&
+        await this.hasAwardableManualSelectionCandidates(tx, giveaway, snapshot)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const seed = this.decryptGiveawayDrawSeed(snapshot);
       const publishedAt = snapshot.seedRevealedAt ?? new Date();
       if (!snapshot.seedRevealedAt) {
         await tx.giveawaySnapshot.update({
@@ -6531,6 +6538,43 @@ export class PrismaTambikeBackend {
       allowedGroupIds.length === 0 ||
       allowedGroupIds.some((groupId) => qualifiedGroupIds.includes(groupId))
     );
+  }
+
+  /**
+   * Publication is the irreversible boundary for a snapshot. Before revealing
+   * its seed, ensure no manual pool has both inventory and a frozen entry that
+   * still fits the campaign and per-pool award caps. An empty or exhausted
+   * candidate set is deliberately publishable even when inventory remains.
+   */
+  private async hasAwardableManualSelectionCandidates(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    snapshot: GiveawaySnapshotWithEntries,
+  ) {
+    const manualPools = giveaway.prizePools.filter(
+      (pool) => pool.awardMode === "manual_selection",
+    );
+    if (manualPools.length === 0) return false;
+
+    const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id);
+    this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
+    const entriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
+    for (const pool of manualPools) {
+      if (!pool.prizeItems.some((item) => item.status === "available")) continue;
+      for (const snapshotEntry of snapshot.entries) {
+        const entry = entriesById.get(snapshotEntry.entryId);
+        if (!entry) {
+          throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+        }
+        if (
+          this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) &&
+          await this.canCreateDrawGiveawayAward(tx, giveaway, pool, entry.riderId)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private async canCreateDrawGiveawayAward(

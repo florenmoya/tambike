@@ -340,4 +340,35 @@ describe("organizer giveaway lifecycle route", () => {
     expect(preLockMarkup).toBe("");
     expect(lockedManualHeader).not.toContain("Run draw");
   });
+
+  test("holds the publish control while loaded manual candidate data still has awardable choices", () => {
+    const publishBlockedProps = {
+      campaign: {
+        id: "giveaway-manual",
+        eventId: "event-1",
+        title: "Manual award campaign",
+        state: "drawing" as const,
+        complianceStatus: "approved" as const,
+        mechanicsVersion: 1,
+      },
+      isPending: false,
+      drawId: "draw-1",
+      canRunInitialRandomDraw: false,
+      hasAwardableManualSelections: true,
+      onSubmit: () => undefined,
+      onSchedule: () => undefined,
+      onOpen: () => undefined,
+      onPause: () => undefined,
+      onLock: () => undefined,
+      onDraw: () => undefined,
+      onPublish: () => undefined,
+    } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>;
+
+    const markup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, publishBlockedProps),
+    );
+
+    expect(markup).toContain("Complete the remaining manual selections before publishing.");
+    expect(markup).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?Publish result/);
+  });
 });

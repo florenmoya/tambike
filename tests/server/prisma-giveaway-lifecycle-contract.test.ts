@@ -366,6 +366,25 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(publishSource).toContain('if (draw.status !== "completed")');
   });
 
+  test("keeps manual prize inventory publish-blocking only while an awardable frozen candidate remains", () => {
+    const publishSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async publishGiveawayDraw"),
+      prismaBackendSource.indexOf("async declineGiveawayAward"),
+    );
+
+    expect(publishSource).toContain(
+      "await this.hasAwardableManualSelectionCandidates(tx, giveaway, snapshot)",
+    );
+    const guardSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async hasAwardableManualSelectionCandidates"),
+      prismaBackendSource.indexOf("private async createDrawGiveawayAward"),
+    );
+    expect(guardSource).toContain('pool.awardMode === "manual_selection"');
+    expect(guardSource).toContain('item.status === "available"');
+    expect(guardSource).toContain("snapshot.entries");
+    expect(guardSource).toContain("canCreateDrawGiveawayAward");
+  });
+
   test("binds idempotent draw replays to the exact action inputs", () => {
     expect(prismaBackendSource).toContain("assertGiveawayDrawReplayInput");
     expect(prismaBackendSource).toContain('action: "initial_random_draw"');

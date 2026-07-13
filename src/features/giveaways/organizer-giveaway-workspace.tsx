@@ -271,6 +271,11 @@ export function OrganizerGiveawayWorkspace({
     (pool) => pool.awardMode === "random_draw",
   ) ?? false;
   const selectedManualSelectionPoolIds = selectedManualSelectionPools.map((pool) => pool.id).join("|");
+  const hasAwardableManualSelections = selectedManualSelectionPools.some(
+    (pool) =>
+      manualSelectionInventoryStatusByPool[pool.id] === "ready" &&
+      (manualSelectionCandidatesByPool[pool.id]?.length ?? 0) > 0,
+  );
 
   const refreshCampaigns = React.useCallback(async () => {
     const result = await listOrganizerGiveawaysAction(eventId);
@@ -360,17 +365,39 @@ export function OrganizerGiveawayWorkspace({
     };
   }, [configurationFailures, selectedCampaignIdForConfiguration, selectedDraft]);
 
-  const refreshCampaignReport = React.useCallback(async (giveawayId: string) => {
+  const loadCampaignReport = React.useCallback(async (giveawayId: string) => {
     const result = await getOrganizerGiveawayReportAction(giveawayId);
     if (!result.ok) throw new Error("GIVEAWAY_REPORT_UNAVAILABLE");
-    setReport({ campaignId: giveawayId, value: result.data });
+    return result.data as OrganizerGiveawayReport;
   }, []);
+
+  const refreshCampaignReport = React.useCallback(
+    async (giveawayId: string) => {
+      const value = await loadCampaignReport(giveawayId);
+      setReport({ campaignId: giveawayId, value });
+    },
+    [loadCampaignReport],
+  );
 
   const selectedCampaignIdForReport = selectedCampaign?.id;
   React.useEffect(() => {
     if (!selectedCampaignIdForReport) return;
-    void refreshCampaignReport(selectedCampaignIdForReport).catch(() => undefined);
-  }, [refreshCampaignReport, selectedCampaignIdForReport]);
+    let cancelled = false;
+    const loadReport = async () => {
+      try {
+        const value = await loadCampaignReport(selectedCampaignIdForReport);
+        if (!cancelled) {
+          setReport({ campaignId: selectedCampaignIdForReport, value });
+        }
+      } catch {
+        // A report failure must not replace the last valid view or race a campaign switch.
+      }
+    };
+    void Promise.resolve().then(loadReport);
+    return () => {
+      cancelled = true;
+    };
+  }, [loadCampaignReport, selectedCampaignIdForReport]);
 
   const refreshEntryOperationsInventory = React.useCallback(
     async (giveawayId: string, entryMode: GiveawayEntryMode) => {
@@ -439,6 +466,17 @@ export function OrganizerGiveawayWorkspace({
     [],
   );
 
+  const refreshManualSelectionCandidatePools = React.useCallback(
+    async (giveawayId: string, prizePoolIds: readonly string[]) => {
+      await Promise.all(
+        prizePoolIds.map((prizePoolId) =>
+          refreshManualSelectionCandidates(giveawayId, prizePoolId),
+        ),
+      );
+    },
+    [refreshManualSelectionCandidates],
+  );
+
   const selectedManualSelectionCampaignId = selectedCampaign?.id;
   const selectedManualSelectionState = selectedCampaign?.state;
   React.useEffect(() => {
@@ -450,14 +488,12 @@ export function OrganizerGiveawayWorkspace({
     ) {
       return;
     }
-    const prizePoolIds = selectedManualSelectionPoolIds.split("|");
-    void Promise.all(
-      prizePoolIds.map((prizePoolId) =>
-        refreshManualSelectionCandidates(selectedManualSelectionCampaignId, prizePoolId),
-      ),
+    void refreshManualSelectionCandidatePools(
+      selectedManualSelectionCampaignId,
+      selectedManualSelectionPoolIds.split("|"),
     ).catch(() => undefined);
   }, [
-    refreshManualSelectionCandidates,
+    refreshManualSelectionCandidatePools,
     selectedManualSelectionCampaignId,
     selectedManualSelectionPoolIds,
     selectedManualSelectionState,
@@ -653,7 +689,12 @@ export function OrganizerGiveawayWorkspace({
           setDraws((current) => ({ ...current, [selectedCampaign.id]: drawId }));
           await refreshCampaigns();
           await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
-          await refreshManualSelectionCandidates(selectedCampaign.id, prizePoolId).catch(() => undefined);
+          await refreshManualSelectionCandidatePools(
+            selectedCampaign.id,
+            selectedManualSelectionPoolIds
+              ? selectedManualSelectionPoolIds.split("|")
+              : [],
+          ).catch(() => undefined);
           setNotice({
             tone: "success",
             text: "Manual selection recorded from the locked candidate snapshot. Review the result before publishing.",
@@ -669,9 +710,10 @@ export function OrganizerGiveawayWorkspace({
     [
       refreshCampaignReport,
       refreshCampaigns,
-      refreshManualSelectionCandidates,
+      refreshManualSelectionCandidatePools,
       selectedCampaign,
       selectedDraft,
+      selectedManualSelectionPoolIds,
       startTransition,
     ],
   );
@@ -770,6 +812,7 @@ export function OrganizerGiveawayWorkspace({
               isPending={isPending}
               drawId={draws[selectedCampaign.id]}
               canRunInitialRandomDraw={canRunInitialRandomDraw}
+              hasAwardableManualSelections={hasAwardableManualSelections}
               onSubmit={() => runWorkspaceAction("Campaign sent for compliance review.", () => submitGiveawayForReviewAction(selectedCampaign.id))}
               onSchedule={() => runWorkspaceAction("Campaign scheduled. Automatic lifecycle work remains server-controlled.", () => scheduleGiveawayAction(selectedCampaign.id))}
               onOpen={() => runWorkspaceAction("Campaign is open for qualifying entries.", () => openGiveawayAction(selectedCampaign.id))}
@@ -1038,15 +1081,12 @@ function ManualSelectionPoolControls({
   const [snapshotEntryId, setSnapshotEntryId] = React.useState("");
   const [reason, setReason] = React.useState("");
   const selectedEntryIsCurrent = candidates.some((candidate) => candidate.snapshotEntryId === snapshotEntryId);
+  const currentSnapshotEntryId = selectedEntryIsCurrent ? snapshotEntryId : "";
   const canSubmit =
     inventoryStatus === "ready" &&
     !isPending &&
     selectedEntryIsCurrent &&
     Boolean(reason.trim());
-
-  React.useEffect(() => {
-    if (!selectedEntryIsCurrent && snapshotEntryId) setSnapshotEntryId("");
-  }, [selectedEntryIsCurrent, snapshotEntryId]);
 
   return (
     <section className="grid gap-3 rounded-lg border bg-muted/20 p-3">
@@ -1073,7 +1113,7 @@ function ManualSelectionPoolControls({
           <select
             id={`${campaignId}-${prizePoolId}-manual-selection-entry`}
             className={selectClassName}
-            value={snapshotEntryId}
+            value={currentSnapshotEntryId}
             onChange={(event) => setSnapshotEntryId(event.target.value)}
           >
             <option value="">Choose a locked entry</option>
@@ -1093,7 +1133,7 @@ function ManualSelectionPoolControls({
         <p className="text-xs text-muted-foreground">A non-empty reason is recorded in the audit trail. Random draw is not used for this pool.</p>
         <Button
           type="button"
-          onClick={() => onSelect(prizePoolId, snapshotEntryId, reason.trim())}
+          onClick={() => onSelect(prizePoolId, currentSnapshotEntryId, reason.trim())}
           disabled={!canSubmit}
         >
           {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <CheckCircle2Icon data-icon="inline-start" />}
@@ -1109,6 +1149,7 @@ export function CampaignOperationalHeader({
   isPending,
   drawId,
   canRunInitialRandomDraw,
+  hasAwardableManualSelections = false,
   onSubmit,
   onSchedule,
   onOpen,
@@ -1121,6 +1162,7 @@ export function CampaignOperationalHeader({
   isPending: boolean;
   drawId?: string;
   canRunInitialRandomDraw: boolean;
+  hasAwardableManualSelections?: boolean;
   onSubmit: () => void;
   onSchedule: () => void;
   onOpen: () => void;
@@ -1180,10 +1222,30 @@ export function CampaignOperationalHeader({
               </Button>
             ) : null}
             {campaign.state === "drawing" && drawId ? (
-              <Button type="button" size="sm" onClick={onPublish} disabled={isPending}>
-                <CheckCircle2Icon data-icon="inline-start" />
-                Publish result
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={onPublish}
+                  disabled={isPending || hasAwardableManualSelections}
+                  aria-describedby={
+                    hasAwardableManualSelections
+                      ? `${campaign.id}-manual-selection-publish-hold`
+                      : undefined
+                  }
+                >
+                  <CheckCircle2Icon data-icon="inline-start" />
+                  Publish result
+                </Button>
+                {hasAwardableManualSelections ? (
+                  <span
+                    id={`${campaign.id}-manual-selection-publish-hold`}
+                    className="self-center text-xs text-muted-foreground"
+                  >
+                    Complete the remaining manual selections before publishing.
+                  </span>
+                ) : null}
+              </>
             ) : null}
           </div>
         </div>

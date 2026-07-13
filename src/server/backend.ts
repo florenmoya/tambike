@@ -2043,8 +2043,8 @@ export class TambikeBackend {
     if (!snapshot || draw.snapshotId !== snapshot.id) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    const seed = this.decryptGiveawayDrawSeed(snapshot);
     if (draw.status === "published") {
+      const seed = this.decryptGiveawayDrawSeed(snapshot);
       return this.buildGiveawayDrawVerification(giveaway, draw, seed, true);
     }
     if (draw.status !== "completed") {
@@ -2053,6 +2053,13 @@ export class TambikeBackend {
     if (giveaway.state !== "drawing") {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
+    if (
+      !snapshot.seedRevealedAt &&
+      this.hasAwardableManualSelectionCandidates(giveaway, snapshot)
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
     if (!snapshot.seedRevealedAt) snapshot.seedRevealedAt = new Date().toISOString();
     for (const campaignDraw of giveaway.draws) {
       if (campaignDraw.snapshotId === snapshot.id && campaignDraw.status === "completed") {
@@ -2061,11 +2068,9 @@ export class TambikeBackend {
       }
     }
     this.transitionGiveaway(giveaway, "claims_open");
-    for (const awardId of draw.awardIds) {
-      const award = this.giveaways.awardsById.get(awardId);
-      if (award) {
-        this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_winner", { awardId: award.id });
-      }
+    for (const award of giveaway.awards) {
+      if (!award.drawId) continue;
+      this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_winner", { awardId: award.id });
     }
     this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_DRAW_PUBLISHED", "draw", draw.id, {
       drawId: draw.id,
@@ -4922,6 +4927,36 @@ export class TambikeBackend {
       pool.eligibilityGroupIds.length === 0 ||
       pool.eligibilityGroupIds.some((groupId) => entry.qualifiedGroupIds.includes(groupId))
     );
+  }
+
+  /**
+   * The first publication permanently reveals the draw seed and moves the
+   * campaign into claims. Do not strand a manual prize when the frozen
+   * snapshot still contains someone who can receive it. Pools with no
+   * remaining eligible capacity are intentionally allowed to publish.
+   */
+  private hasAwardableManualSelectionCandidates(
+    giveaway: GiveawayAggregate,
+    snapshot: GiveawaySnapshotRecord,
+  ) {
+    return giveaway.prizePools.some((pool) => {
+      if (
+        pool.awardMode !== "manual_selection" ||
+        !pool.items.some((item) => item.status === "available")
+      ) {
+        return false;
+      }
+      return snapshot.entries.some((snapshotEntry) => {
+        const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
+        return Boolean(
+          entry &&
+            entry.status === "locked" &&
+            entry.riderId === snapshotEntry.riderId &&
+            this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) &&
+            this.canCreateGiveawayAward(giveaway, pool, snapshotEntry.riderId),
+        );
+      });
+    });
   }
 
   private canCreateGiveawayAward(
