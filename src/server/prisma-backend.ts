@@ -839,6 +839,7 @@ export class PrismaTambikeBackend {
           label: `Random redraw for ${pool.title}`,
           status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
           recoveryKind: "random_redraw",
+          claimDeadlineRequired: !this.hasUsableGiveawayReplacementDeadline(giveaway),
         });
         continue;
       }
@@ -858,6 +859,7 @@ export class PrismaTambikeBackend {
           label: `Manual replacement for ${pool.title}`,
           status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
           recoveryKind: "manual_replacement",
+          claimDeadlineRequired: !this.hasUsableGiveawayReplacementDeadline(giveaway),
         });
         continue;
       }
@@ -874,6 +876,10 @@ export class PrismaTambikeBackend {
           label: `Direct re-offer for ${pool.title}`,
           status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
           recoveryKind: "direct_reoffer",
+          // Direct recovery has no inherited replacement deadline: the action
+          // always requires an explicit future deadline, even when the
+          // campaign-level deadline has not elapsed.
+          claimDeadlineRequired: true,
         });
       }
     }

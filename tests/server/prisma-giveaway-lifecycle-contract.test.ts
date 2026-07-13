@@ -587,6 +587,10 @@ describe("Prisma giveaway lifecycle contract", () => {
       prismaBackendSource.indexOf("async getOrganizerGiveawayOperations"),
       prismaBackendSource.indexOf("async listGiveawayCampaignCodes"),
     );
+    const directReofferSource = operationsSource.slice(
+      operationsSource.indexOf("label: `Direct re-offer"),
+      operationsSource.indexOf("      }\n    }\n", operationsSource.indexOf("label: `Direct re-offer")),
+    );
 
     expect(prismaBackendSource).toMatch(/async getOrganizerGiveawayOperations\(/);
     expect(operationsSource).toContain("requireGiveawayConfigurator");
@@ -603,6 +607,12 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(operationsSource).toContain("canRunInitialRandomDraw");
     expect(operationsSource).toContain("canCancel");
     expect(operationsSource).toContain("publishableDrawId");
+    expect(
+      operationsSource.match(
+        /claimDeadlineRequired: !this\.hasUsableGiveawayReplacementDeadline\(giveaway\)/g,
+      ),
+    ).toHaveLength(2);
+    expect(directReofferSource).toContain("claimDeadlineRequired: true");
     expect(operationsSource).not.toContain("displayName");
     expect(operationsSource).not.toContain("claimTokenHash");
     expect(operationsSource).not.toContain("encryptedSeed");
