@@ -36,7 +36,6 @@ import type {
 import {
   disqualifyGiveawayAwardAction,
   grantGiveawayOperatorAction,
-  redrawGiveawayAwardAction,
   revokeGiveawayOperatorAction,
   reviewGiveawayComplianceAction,
   suspendGiveawayAction,
@@ -101,7 +100,7 @@ export function AdminGiveawayList({ initialCampaigns, initialError = null }: Adm
         <div className="grid border-t bg-muted/20 sm:grid-cols-3">
           <OpsRail label="Review" detail="Approve or return mechanics" />
           <OpsRail label="Protect" detail="Suspend with a recorded reason" />
-          <OpsRail label="Resolve" detail="Void, disqualify, or redraw by award reference" />
+          <OpsRail label="Resolve" detail="Void or disqualify from the audit record. Open the event recovery workspace for eligible replacements." />
         </div>
       </section>
 
@@ -268,7 +267,7 @@ export function AdminGiveawayDetail({
         <Card>
           <CardHeader>
             <CardTitle>Audit-safe award resolution</CardTitle>
-            <CardDescription>Use an opaque award reference. The rider’s identity, claim credential, and delivery data never appear in this control.</CardDescription>
+            <CardDescription>Use an opaque award reference for an audit intervention. Replacement paths stay in the event’s server-owned recovery workspace.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -283,7 +282,9 @@ export function AdminGiveawayDetail({
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" disabled={isPending || !awardReference.trim() || !awardReason.trim()} onClick={() => runAction("Award voided and audit recorded.", () => voidGiveawayAwardAction(awardReference.trim(), awardReason.trim()))}><FileWarningIcon data-icon="inline-start" />Void award</Button>
               <Button type="button" variant="outline" disabled={isPending || !awardReference.trim() || !awardReason.trim()} onClick={() => runAction("Award disqualified and audit recorded.", () => disqualifyGiveawayAwardAction(awardReference.trim(), awardReason.trim()))}><ShieldAlertIcon data-icon="inline-start" />Disqualify</Button>
-              <Button type="button" disabled={isPending || !awardReference.trim() || !awardReason.trim()} onClick={() => runAction("Replacement draw recorded from the frozen snapshot.", () => redrawGiveawayAwardAction({ awardId: awardReference.trim(), reason: awardReason.trim(), idempotencyKey: makeIdempotencyKey("redraw") }))}><RefreshCwIcon data-icon="inline-start" />Redraw next candidate</Button>
+              <Button asChild>
+                <Link href={`/organizer/events/${encodeURIComponent(workspace.eventId)}/giveaways`}><RefreshCwIcon data-icon="inline-start" />Open safe recovery workspace</Link>
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -386,8 +387,4 @@ export function getAuditOperatorReferences(events: AdminGiveawayAudit["events"])
 function formatAuditTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Recorded time" : new Intl.DateTimeFormat("en-PH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Manila" }).format(date);
-}
-
-function makeIdempotencyKey(operation: string) {
-  return `giveaway-admin-${operation}:${crypto.randomUUID()}`;
 }

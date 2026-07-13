@@ -180,7 +180,6 @@ describe("giveaway operations UI boundaries", () => {
       "suspendGiveawayAction",
       "voidGiveawayAwardAction",
       "disqualifyGiveawayAwardAction",
-      "redrawGiveawayAwardAction",
       "getAdminGiveawayAuditAction",
       "listEventGiveawayOperatorClaimsAction",
       "grantGiveawayOperatorAction",
@@ -189,6 +188,10 @@ describe("giveaway operations UI boundaries", () => {
     ]) {
       expect(source).toContain(action);
     }
+
+    expect(sources[0]).toContain("Open safe recovery workspace");
+    expect(sources[0]).toContain('href={`/organizer/events/${encodeURIComponent(workspace.eventId)}/giveaways`}');
+    expect(sources[0]).not.toContain("redrawGiveawayAwardAction");
 
     expect(source).not.toMatch(/useDemo|DemoState|readGiveawayDeliveryDetailsAction|PrivateGiveawayDeliveryDetails|IssuedGiveawayClaimToken|sourceFact/i);
   });
