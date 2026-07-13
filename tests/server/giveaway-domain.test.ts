@@ -183,6 +183,8 @@ function internalGiveawayCampaign(
     drawId?: string;
     snapshotEntryId?: string;
     predecessorAwardId?: string;
+    recoveryClosedAt?: string;
+    recoverySourceAwardId?: string;
     rank?: number;
     status: string;
     isCurrent: boolean;
@@ -205,6 +207,8 @@ function internalGiveawayCampaign(
             drawId?: string;
             snapshotEntryId?: string;
             predecessorAwardId?: string;
+            recoveryClosedAt?: string;
+            recoverySourceAwardId?: string;
             rank?: number;
             status: string;
             isCurrent: boolean;
@@ -2116,12 +2120,17 @@ describe("in-memory event giveaway lifecycle", () => {
         reason: "Initial paper entry",
       }),
     ).resolves.toMatchObject({ status: "claimable" });
+    const source = internalGiveawayCampaign(backend, context.giveaway.id).awards.find(
+      (award) => award.winnerUserId === context.rider.user.id && award.isCurrent,
+    );
+    if (!source) throw new Error("TEST_MANUAL_REVOKE_SOURCE_MISSING");
     await backend.revokeManualGiveawayEntry(
       context.organizer.sessionToken,
       context.giveaway.id,
       context.rider.user.id,
       "Paper entry invalidated",
     );
+    expect(source.recoveryClosedAt).toEqual(expect.any(String));
     await expect(
       backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
         giveawayId: context.giveaway.id,
@@ -2187,6 +2196,224 @@ describe("in-memory event giveaway lifecycle", () => {
     await expect(
       backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    const source = campaign.awards.find((award) => award.id === firstState.award?.awardId);
+    const replacement = campaign.awards.find(
+      (award) => award.recoverySourceAwardId === firstState.award?.awardId,
+    );
+    expect(source).toMatchObject({
+      isCurrent: false,
+      status: "declined",
+      recoveryClosedAt: expect.any(String),
+    });
+    expect(replacement).toMatchObject({
+      isCurrent: true,
+      winnerUserId: replacementRider.user.id,
+      recoverySourceAwardId: source?.id,
+    });
+  });
+
+  test("links a later manual direct allocation to the unresolved released source", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        entryMode: "manual_only",
+        eligibilityGroups: [
+          {
+            id: "manual-entry",
+            label: "Audited manual entry",
+            weight: 1,
+            conditions: [{ source: "manual" }],
+          },
+        ],
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "later-manual-first-come",
+            title: "Later manual first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Later capacity prize" }],
+          },
+        ],
+      }),
+    );
+    const replacementRider = await createExtraRider(backend, "later-manual-recovery");
+    const firstState = await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: context.rider.user.id,
+      reason: "First audited paper entry",
+    });
+    if (!firstState.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    await expect(
+      backend.declineGiveawayAward(
+        context.rider.sessionToken,
+        firstState.award.awardId,
+        "Declined before another manual candidate existed",
+      ),
+    ).resolves.toMatchObject({ status: "declined" });
+
+    await expect(
+      backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        riderId: replacementRider.user.id,
+        reason: "Later audited paper entry",
+      }),
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    const source = campaign.awards.find((award) => award.id === firstState.award?.awardId);
+    const replacement = campaign.awards.find(
+      (award) => award.recoverySourceAwardId === firstState.award?.awardId,
+    );
+    expect(source).toMatchObject({
+      isCurrent: false,
+      status: "declined",
+      recoveryClosedAt: expect.any(String),
+    });
+    expect(replacement).toMatchObject({
+      isCurrent: true,
+      winnerUserId: replacementRider.user.id,
+      recoverySourceAwardId: source?.id,
+    });
+  });
+
+  test("keeps an elapsed direct source prize item out of generic allocation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-01T06:30:00.000Z"));
+      const backend = asGiveawayBackend(await createTambikeTestBackend());
+      const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+        giveawayInput(eventId, {
+          entryMode: "manual_only",
+          entryOpensAt: "2026-08-01T06:00:00.000Z",
+          entryClosesAt: "2026-08-01T07:00:00.000Z",
+          drawAt: "2026-08-01T08:00:00.000Z",
+          claimDeadlineAt: "2026-08-01T09:00:00.000Z",
+          eligibilityGroups: [
+            {
+              id: "manual-entry",
+              label: "Audited manual entry",
+              weight: 1,
+              conditions: [{ source: "manual" }],
+            },
+          ],
+          winnerLimits: { perRider: 1, total: 2 },
+          prizePools: [
+            {
+              id: "elapsed-source-finite",
+              title: "Elapsed source finite prize",
+              awardMode: "first_come",
+              fulfilmentMode: "onsite",
+              inventory: { kind: "finite", quantity: 2 },
+              items: [{ title: "Reserved recovery item" }, { title: "Still allocatable item" }],
+            },
+          ],
+        }),
+      );
+      const replacementRider = await createExtraRider(backend, "elapsed-source-finite");
+      const firstState = await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        riderId: context.rider.user.id,
+        reason: "Initial item holder",
+      });
+      if (!firstState.award) throw new Error("TEST_ELAPSED_SOURCE_AWARD_MISSING");
+
+      vi.setSystemTime(new Date("2026-08-01T10:00:00.000Z"));
+      await backend.voidGiveawayAward(
+        context.admin.sessionToken,
+        firstState.award.awardId,
+        "Hold this expired direct source for explicit recovery",
+      );
+      await expect(
+        backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+          giveawayId: context.giveaway.id,
+          riderId: replacementRider.user.id,
+          reason: "Later audited entry",
+        }),
+      ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
+
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const source = campaign.awards.find((award) => award.id === firstState.award?.awardId);
+      const replacement = campaign.awards.find(
+        (award) => award.winnerUserId === replacementRider.user.id && award.isCurrent,
+      );
+      expect(source).toMatchObject({ status: "voided", isCurrent: false });
+      expect(source?.recoveryClosedAt).toBeUndefined();
+      expect(replacement?.prizeItemId).toBeDefined();
+      expect(replacement?.prizeItemId).not.toBe(source?.prizeItemId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reserves elapsed unlimited direct capacity from generic allocation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-01T06:30:00.000Z"));
+      const backend = asGiveawayBackend(await createTambikeTestBackend());
+      const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+        giveawayInput(eventId, {
+          entryMode: "manual_only",
+          entryOpensAt: "2026-08-01T06:00:00.000Z",
+          entryClosesAt: "2026-08-01T07:00:00.000Z",
+          drawAt: "2026-08-01T08:00:00.000Z",
+          claimDeadlineAt: "2026-08-01T09:00:00.000Z",
+          eligibilityGroups: [
+            {
+              id: "manual-entry",
+              label: "Audited manual entry",
+              weight: 1,
+              conditions: [{ source: "manual" }],
+            },
+          ],
+          winnerLimits: { perRider: 1, total: 1 },
+          prizePools: [
+            {
+              id: "elapsed-source-unlimited",
+              title: "Elapsed source unlimited prize",
+              awardMode: "guaranteed",
+              fulfilmentMode: "onsite",
+              inventory: { kind: "unlimited" },
+              items: [],
+            },
+          ],
+        }),
+      );
+      const replacementRider = await createExtraRider(backend, "elapsed-source-unlimited");
+      const firstState = await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        riderId: context.rider.user.id,
+        reason: "Initial unlimited holder",
+      });
+      if (!firstState.award) throw new Error("TEST_ELAPSED_UNLIMITED_SOURCE_AWARD_MISSING");
+
+      vi.setSystemTime(new Date("2026-08-01T10:00:00.000Z"));
+      await backend.voidGiveawayAward(
+        context.admin.sessionToken,
+        firstState.award.awardId,
+        "Hold this expired unlimited source for explicit recovery",
+      );
+      await expect(
+        backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+          giveawayId: context.giveaway.id,
+          riderId: replacementRider.user.id,
+          reason: "Later audited entry",
+        }),
+      ).resolves.toMatchObject({ status: "entered" });
+
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const source = campaign.awards.find((award) => award.id === firstState.award?.awardId);
+      expect(source).toMatchObject({ status: "voided", isCurrent: false });
+      expect(source?.recoveryClosedAt).toBeUndefined();
+      expect(
+        campaign.awards.some((award) => award.winnerUserId === replacementRider.user.id && award.isCurrent),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("does not let organizers publish or redraw a campaign after admin suspension", async () => {

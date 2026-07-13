@@ -554,12 +554,18 @@ model FlagReport {
 model Notification {
   id        String    @id @default(cuid())
   userId    String
+  kind      String    @default("general")
   title     String
   body      String
+  href      String?
+  dedupeKey String
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
 }
 
 model AuditLog {
@@ -951,6 +957,9 @@ model GiveawayAward {
   claimTokenVersion    Int                 @default(0)
   claimDeadlineAt      DateTime?
   reasonDigest         String?
+  recoveryClosedAt     DateTime?
+  recoveryClosedReasonDigest String?
+  recoverySourceAwardId String?            @unique
   predecessorAwardId   String?
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
@@ -962,6 +971,8 @@ model GiveawayAward {
   prizeItem          GiveawayPrizeItem?          @relation(fields: [prizeItemId], references: [id], onDelete: Restrict)
   snapshotEntry      GiveawaySnapshotEntry?      @relation(fields: [snapshotEntryId], references: [id], onDelete: Restrict)
   winner             User                        @relation("GiveawayAwardWinner", fields: [winnerUserId], references: [id], onDelete: Restrict)
+  recoverySource     GiveawayAward?              @relation("GiveawayAwardRecovery", fields: [recoverySourceAwardId], references: [id], onDelete: Restrict)
+  recoverySuccessor  GiveawayAward?              @relation("GiveawayAwardRecovery")
   predecessor        GiveawayAward?              @relation("GiveawayAwardPredecessor", fields: [predecessorAwardId], references: [id], onDelete: Restrict)
   redrawSuccessors   GiveawayAward[]             @relation("GiveawayAwardPredecessor")
   claimVerifications GiveawayClaimVerification[]
@@ -975,6 +986,7 @@ model GiveawayAward {
   @@index([prizeItemId])
   @@index([snapshotEntryId])
   @@index([winnerUserId])
+  @@index([recoveryClosedAt])
   @@index([predecessorAwardId])
 }
 

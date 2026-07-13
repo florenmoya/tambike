@@ -302,6 +302,82 @@ export interface PrivateGiveawayDeliveryDetails {
   details: Record<string, unknown>;
 }
 
+/** Nonsecret in-app notification categories. Claim secrets never belong here. */
+export type GiveawayNotificationKind =
+  | "giveaway_entry"
+  | "giveaway_winner"
+  | "giveaway_claim_verified"
+  | "giveaway_claim_expired"
+  | "giveaway_fulfilled";
+
+/** A recipient-scoped notification. It is deliberately absent from DemoState. */
+export interface GiveawayNotification {
+  id: string;
+  kind: GiveawayNotificationKind;
+  title: string;
+  body: string;
+  href?: string;
+  createdAt: string;
+  readAt?: string;
+}
+
+/** Identity-free organizer report for one campaign. */
+export interface OrganizerGiveawayReport {
+  giveawayId: string;
+  eventId: string;
+  title: string;
+  state: GiveawayState;
+  complianceStatus: GiveawayComplianceStatus;
+  entries: Record<"eligible" | "locked" | "disqualified" | "withdrawn", number>;
+  awards: Record<
+    | "pending_verification"
+    | "claimable"
+    | "verified"
+    | "fulfilled"
+    | "declined"
+    | "disqualified"
+    | "expired"
+    | "voided",
+    number
+  >;
+  prizePools: Array<{
+    id: string;
+    title: string;
+    awardMode: GiveawayAwardMode;
+    fulfilmentMode: GiveawayFulfilmentMode;
+    availableItemCount?: number;
+    reservedItemCount?: number;
+    fulfilledItemCount?: number;
+  }>;
+}
+
+/** Sanitized admin audit chain. Internal payloads and source facts are omitted. */
+export interface AdminGiveawayAuditEvent {
+  id: string;
+  sequence: number;
+  action: string;
+  targetType: string;
+  targetId?: string;
+  actorUserId?: string;
+  previousHash?: string;
+  hash: string;
+  createdAt: string;
+}
+
+export interface AdminGiveawayAudit {
+  giveawayId: string;
+  events: AdminGiveawayAuditEvent[];
+}
+
+export interface GiveawayLifecycleAdvanceResult {
+  opened: number;
+  locked: number;
+  drawn: number;
+  expired: number;
+  completed: number;
+  purgedDeliveryDetails: number;
+}
+
 /** Public fairness proof. `seed` is omitted until a draw is published. */
 export interface PublicGiveawayDrawVerification {
   giveawayId: string;

@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import type { PrismaTambikeBackend } from "./prisma-backend";
 import { getRuntimeDatabaseUrl } from "./database-url";
 import type {
+  AdminGiveawayAudit,
   CreateGiveawayInput,
   FulfillGiveawayAwardInput,
   GiveawayClaimScannerMethod,
@@ -14,9 +15,13 @@ import type {
   GiveawayEntryMode,
   GiveawayFulfilmentMode,
   GiveawayKind,
+  GiveawayLifecycleAdvanceResult,
+  GiveawayNotification,
+  GiveawayNotificationKind,
   GiveawayPublicVisibility,
   GiveawayState,
   IssuedGiveawayClaimToken,
+  OrganizerGiveawayReport,
   OperatorGiveawayClaimView,
   PrivateGiveawayDeliveryDetails,
   PublicGiveawayCampaignSummary,
@@ -84,6 +89,12 @@ import {
   resolveGiveawayPoolEligibilityPriority,
   type GiveawayEligibilityGroupTiming,
 } from "./giveaways/eligibility-timing";
+import { buildGiveawayCsv } from "./giveaways/export";
+import {
+  assertSafeGiveawayNotification,
+  createGiveawayNotificationDraft,
+  type GiveawayNotificationDraft,
+} from "./giveaways/notifications";
 
 export class BackendError extends Error {
   constructor(
@@ -174,13 +185,17 @@ export type AuditAction =
   | "GIVEAWAY_CLAIM_EXPIRED"
   | "GIVEAWAY_AWARD_RECOVERED"
   | "GIVEAWAY_AWARD_SETTLED"
+  | "GIVEAWAY_DIRECT_RECOVERY_LINKED"
   | "GIVEAWAY_OPERATOR_GRANTED"
   | "GIVEAWAY_OPERATOR_REVOKED"
   | "GIVEAWAY_DELIVERY_SUBMITTED"
   | "GIVEAWAY_DELIVERY_READ"
   | "GIVEAWAY_DELIVERY_WITHDRAWN"
   | "GIVEAWAY_DELIVERY_PURGED"
-  | "GIVEAWAY_COMPLETED";
+  | "GIVEAWAY_COMPLETED"
+  | "GIVEAWAY_SCHEDULED"
+  | "GIVEAWAY_CRON_ADVANCED"
+  | "GIVEAWAY_EXPORT_CREATED";
 
 type BackendUser = UserProfile & {
   passwordHash: string;
@@ -448,9 +463,19 @@ type GiveawayAwardRecord = {
   claimTokenVersion: number;
   claimDeadlineAt?: string;
   reasonDigest?: string;
+  /** One-way terminal resolution for a historical direct-award recovery source. */
+  recoveryClosedAt?: string;
+  recoveryClosedReasonDigest?: string;
+  /** Immutable successor link. At most one award can consume a source slot. */
+  recoverySourceAwardId?: string;
   predecessorAwardId?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type ElapsedDirectGiveawayRecoveryReservation = {
+  reservedTotalAwardSlots: number;
+  protectedPrizeItemIdsByPool: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 type GiveawayClaimVerificationRecord = {
@@ -507,6 +532,11 @@ type GiveawayOperatorRecord = {
   revocationReasonDigest?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type GiveawayNotificationRecord = GiveawayNotification & {
+  userId: string;
+  dedupeKey: string;
 };
 
 type GiveawayAggregate = {
@@ -761,6 +791,9 @@ export class TambikeBackend {
   private readonly checkInSettings = new Map<string, CheckInSettings>();
   private readonly selfCheckInSessions = new Map<string, SelfCheckInSession>();
   private readonly perkRedemptions = new Map<string, PerkRedemptionRecord>();
+  /** Recipient-scoped notifications are never included in DemoState/getSnapshot(). */
+  private readonly giveawayNotifications = new Map<string, GiveawayNotificationRecord>();
+  private readonly giveawayNotificationIdsByUserDedupeKey = new Map<string, string>();
   /**
    * Giveaway data is intentionally absent from getSnapshot()/DemoState. Only
    * privacy-scoped giveaway methods may read this aggregate.
@@ -1173,6 +1206,157 @@ export class TambikeBackend {
       .map((giveaway) => this.toGiveawayCampaignView(giveaway));
   }
 
+  async getOrganizerGiveawayReport(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<OrganizerGiveawayReport> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+
+    const entries: OrganizerGiveawayReport["entries"] = {
+      eligible: 0,
+      locked: 0,
+      disqualified: 0,
+      withdrawn: 0,
+    };
+    for (const entry of giveaway.entriesByRider.values()) {
+      entries[entry.status] += 1;
+    }
+    const awards: OrganizerGiveawayReport["awards"] = {
+      pending_verification: 0,
+      claimable: 0,
+      verified: 0,
+      fulfilled: 0,
+      declined: 0,
+      disqualified: 0,
+      expired: 0,
+      voided: 0,
+    };
+    for (const award of giveaway.awards) {
+      if (award.status !== "superseded") awards[award.status] += 1;
+    }
+
+    return {
+      giveawayId: giveaway.id,
+      eventId: giveaway.eventId,
+      title: giveaway.title,
+      state: giveaway.state,
+      complianceStatus: giveaway.complianceStatus,
+      entries,
+      awards,
+      prizePools: giveaway.prizePools.map((pool) => ({
+        id: pool.id,
+        title: pool.title,
+        awardMode: pool.awardMode,
+        fulfilmentMode: pool.fulfilmentMode,
+        ...(pool.inventoryKind === "finite"
+          ? {
+              availableItemCount: pool.items.filter((item) => item.status === "available").length,
+              reservedItemCount: pool.items.filter((item) => item.status === "reserved").length,
+              fulfilledItemCount: pool.items.filter((item) => item.status === "fulfilled").length,
+            }
+          : {}),
+      })),
+    };
+  }
+
+  async getAdminGiveawayAudit(sessionToken: string, giveawayId: string): Promise<AdminGiveawayAudit> {
+    this.requireRole(sessionToken, "admin");
+    const giveaway = this.requireGiveaway(giveawayId);
+    return {
+      giveawayId: giveaway.id,
+      events: giveaway.auditEvents.map((event) => ({
+        id: event.id,
+        sequence: event.sequence,
+        action: event.action,
+        targetType: event.targetType,
+        ...(event.targetId ? { targetId: event.targetId } : {}),
+        ...(event.actorUserId ? { actorUserId: event.actorUserId } : {}),
+        ...(event.previousHash ? { previousHash: event.previousHash } : {}),
+        hash: event.hash,
+        createdAt: event.createdAt,
+      })),
+    };
+  }
+
+  async listGiveawayNotifications(sessionToken: string): Promise<GiveawayNotification[]> {
+    const user = this.requireUser(sessionToken);
+    return Array.from(this.giveawayNotifications.values())
+      .filter((notification) => notification.userId === user.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+      .map((notification) => ({
+        id: notification.id,
+        kind: notification.kind,
+        title: notification.title,
+        body: notification.body,
+        ...(notification.href ? { href: notification.href } : {}),
+        createdAt: notification.createdAt,
+        ...(notification.readAt ? { readAt: notification.readAt } : {}),
+      }));
+  }
+
+  async exportGiveawayCsv(sessionToken: string, giveawayId: string) {
+    const administrator = this.requireRole(sessionToken, "admin");
+    const giveaway = this.requireGiveaway(giveawayId);
+    const event = this.requireEvent(giveaway.eventId);
+    const awardByEntryId = new Map<string, GiveawayAwardRecord[]>();
+    for (const award of giveaway.awards) {
+      const records = awardByEntryId.get(award.entryId) ?? [];
+      records.push(award);
+      awardByEntryId.set(award.entryId, records);
+    }
+    const rows: Array<Record<string, unknown>> = [];
+    for (const entry of giveaway.entriesByRider.values()) {
+      const awards = awardByEntryId.get(entry.id) ?? [undefined];
+      for (const award of awards) {
+        const pool = award ? giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId) : undefined;
+        const item = award && pool?.items.find((candidate) => candidate.id === award.prizeItemId);
+        const rider = this.users.get(entry.riderId);
+        rows.push({
+          giveaway_id: giveaway.id,
+          event_id: event.id,
+          giveaway_title: giveaway.title,
+          entry_reference: entry.opaquePublicReference,
+          entry_status: entry.status,
+          entry_path: entry.entryPath,
+          award_id: award?.id ?? "",
+          award_status: award?.status ?? "",
+          prize_pool: pool?.title ?? "",
+          prize_item: item?.title ?? "",
+          winner_user_id: award?.winnerUserId ?? "",
+          winner_email: award ? rider?.email ?? "" : "",
+          entry_created_at: entry.createdAt,
+          award_created_at: award?.createdAt ?? "",
+        });
+      }
+    }
+    const csv = buildGiveawayCsv(
+      [
+        "giveaway_id",
+        "event_id",
+        "giveaway_title",
+        "entry_reference",
+        "entry_status",
+        "entry_path",
+        "award_id",
+        "award_status",
+        "prize_pool",
+        "prize_item",
+        "winner_user_id",
+        "winner_email",
+        "entry_created_at",
+        "award_created_at",
+      ],
+      rows,
+    );
+    this.auditGiveaway(giveaway, administrator.id, "GIVEAWAY_EXPORT_CREATED", "giveaway", giveaway.id, {
+      rowCount: rows.length,
+      format: "csv",
+    });
+    return csv;
+  }
+
   async getPublicGiveaway(giveawayId: string, sessionToken?: string): Promise<PublicGiveawayCampaignSummary> {
     const giveaway = this.requireGiveaway(giveawayId);
     if (giveaway.publicVisibility === "hidden") {
@@ -1415,6 +1599,15 @@ export class TambikeBackend {
     const organizer = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(parsed.giveawayId);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    return this.runGiveawayDrawAsActor(organizer, giveaway, parsed);
+  }
+
+  private runGiveawayDrawAsActor(
+    organizer: BackendUser,
+    giveaway: GiveawayAggregate,
+    parsed: { giveawayId: string; idempotencyKey: string; reason?: string },
+    options: { initiatedVia?: "cron" } = {},
+  ) {
     const snapshot = giveaway.snapshot;
     if (!snapshot) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
@@ -1511,6 +1704,7 @@ export class TambikeBackend {
       sequence: draw.sequence,
       resultDigest: draw.resultDigest,
       awardCount: draw.awardIds.length,
+      ...(options.initiatedVia ? { initiatedVia: options.initiatedVia } : {}),
     });
     return this.toGiveawayDrawResult(giveaway, draw);
   }
@@ -1546,6 +1740,12 @@ export class TambikeBackend {
       }
     }
     this.transitionGiveaway(giveaway, "claims_open");
+    for (const awardId of draw.awardIds) {
+      const award = this.giveaways.awardsById.get(awardId);
+      if (award) {
+        this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_winner", { awardId: award.id });
+      }
+    }
     this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_DRAW_PUBLISHED", "draw", draw.id, {
       drawId: draw.id,
       resultDigest: draw.resultDigest,
@@ -1664,6 +1864,7 @@ export class TambikeBackend {
       method: verification.method,
       presenceObserved: verification.presenceObserved,
     });
+    this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_claim_verified", { awardId: award.id });
     return this.toOperatorGiveawayClaimView(giveaway, award);
   }
 
@@ -1735,6 +1936,7 @@ export class TambikeBackend {
       fulfillmentId: fulfillment.id,
       fulfillmentType: fulfillment.type,
     });
+    this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_fulfilled", { awardId: award.id });
     return this.toOperatorGiveawayClaimView(giveaway, award);
   }
 
@@ -1953,18 +2155,47 @@ export class TambikeBackend {
     return { purgedCount };
   }
 
+  /**
+   * Retention is a privileged system obligation, not a campaign-owner action.
+   * It must keep purging due encrypted payloads even if an organizer is
+   * suspended, deleted, or otherwise ineligible to advance lifecycle state.
+   */
+  private purgeExpiredGiveawayDeliveryDetailsAsSystem(now: Date) {
+    let purgedCount = 0;
+    for (const giveaway of this.giveaways.campaignsById.values()) {
+      for (const detail of giveaway.deliveryDetails) {
+        if (!detail.purgedAt && new Date(detail.retentionExpiresAt).getTime() <= now.getTime()) {
+          this.purgeGiveawayDeliveryDetail(giveaway, detail, undefined, "retention_expired", {
+            initiatedVia: "cron",
+          });
+          purgedCount += 1;
+        }
+      }
+    }
+    return purgedCount;
+  }
+
   async expireGiveawayClaims(sessionToken: string, giveawayId: string): Promise<{ expiredCount: number }> {
     const administrator = this.requireRole(sessionToken, "admin");
     const giveaway = this.requireGiveaway(giveawayId);
+    return this.expireGiveawayClaimsAsActor(giveaway, administrator.id);
+  }
+
+  private expireGiveawayClaimsAsActor(
+    giveaway: GiveawayAggregate,
+    actorUserId: string,
+    options: { now?: Date; initiatedVia?: "cron" } = {},
+  ): { expiredCount: number } {
     if (giveaway.state !== "claims_open") {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
+    const now = options.now ?? new Date();
     let expiredCount = 0;
     for (const award of giveaway.awards) {
       if (
         award.isCurrent &&
         ["pending_verification", "claimable"].includes(award.status) &&
-        this.isGiveawayClaimDeadlineElapsed(award)
+        this.isGiveawayClaimDeadlineElapsed(award, now)
       ) {
         const reasonDigest = this.hashGiveawayReason("claim_deadline_elapsed");
         if (this.isDirectGiveawayAward(award)) {
@@ -1980,21 +2211,20 @@ export class TambikeBackend {
         }
         const detail = this.giveaways.deliveryDetailsByAwardId.get(award.id);
         if (detail && !detail.purgedAt) {
-          this.purgeGiveawayDeliveryDetail(giveaway, detail, administrator.id, "award_expired");
+          this.purgeGiveawayDeliveryDetail(giveaway, detail, actorUserId, "award_expired");
         }
-        this.auditGiveaway(giveaway, administrator.id, "GIVEAWAY_CLAIM_EXPIRED", "award", award.id, {
+        this.auditGiveaway(giveaway, actorUserId, "GIVEAWAY_CLAIM_EXPIRED", "award", award.id, {
           awardId: award.id,
+          ...(options.initiatedVia ? { initiatedVia: options.initiatedVia } : {}),
         });
+        this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_claim_expired", { awardId: award.id });
         expiredCount += 1;
       }
     }
     return { expiredCount };
   }
 
-  /**
-   * Completion is an explicit organizer/admin decision. Expiry and fulfilment
-   * never close a campaign on their own, which keeps recovery/redraw possible.
-   */
+  /** Completion requires every recovery/redraw path to be settled first. */
   async completeGiveawayClaims(
     sessionToken: string,
     giveawayId: string,
@@ -2014,6 +2244,9 @@ export class TambikeBackend {
           ),
       )
     ) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    if (this.hasUnresolvedTerminalDirectGiveawayAward(giveaway)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
     this.transitionGiveaway(giveaway, "completed");
@@ -2039,17 +2272,29 @@ export class TambikeBackend {
     if (!award) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     const giveaway = this.requireGiveawayByAward(award);
     this.requireGiveawayConfigurator(actor, this.requireEvent(giveaway.eventId));
+    const closableDirectRecoverySource =
+      this.isDirectGiveawayAward(award) &&
+      !award.isCurrent &&
+      !award.recoveryClosedAt &&
+      ["declined", "disqualified", "expired", "voided"].includes(award.status);
     if (
       giveaway.state !== "claims_open" ||
-      !award.isCurrent ||
-      !["declined", "disqualified", "expired", "voided"].includes(award.status)
+      (!closableDirectRecoverySource &&
+        (!award.isCurrent || !["declined", "disqualified", "expired", "voided"].includes(award.status)))
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
-    const reasonDigest = this.hashGiveawayReason(this.requireGiveawayReason(reason));
-    award.isCurrent = false;
-    award.reasonDigest = reasonDigest;
-    award.updatedAt = new Date().toISOString();
+    const reasonDigest = this.hashGiveawayReason(this.requireGiveawayRecoveryClosureReason(reason));
+    if (closableDirectRecoverySource) {
+      this.closeGiveawayDirectRecoverySource(award, reasonDigest);
+    } else {
+      award.isCurrent = false;
+      award.reasonDigest = reasonDigest;
+      award.updatedAt = new Date().toISOString();
+      if (this.isDirectGiveawayAward(award)) {
+        this.closeGiveawayDirectRecoverySource(award, reasonDigest);
+      }
+    }
     if (award.prizeItemId) {
       const pool = this.requireGiveawayPrizePool(giveaway, award.prizePoolId);
       const item = pool.items.find((candidate) => candidate.id === award.prizeItemId);
@@ -2063,6 +2308,7 @@ export class TambikeBackend {
       awardId: award.id,
       status: award.status,
       reasonDigest,
+      recoveryClosed: this.isDirectGiveawayAward(award),
     });
     return { id: award.id };
   }
@@ -2087,6 +2333,7 @@ export class TambikeBackend {
     if (
       giveaway.state !== "claims_open" ||
       sourceAward.isCurrent ||
+      sourceAward.recoveryClosedAt ||
       !["expired", "voided", "disqualified", "declined"].includes(sourceAward.status) ||
       !this.isGiveawayClaimDeadlineElapsed(sourceAward)
     ) {
@@ -2100,25 +2347,20 @@ export class TambikeBackend {
     if (!Number.isFinite(deadline.getTime()) || deadline.getTime() <= Date.now()) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    const currentAwardIds = new Set(
-      giveaway.awards.filter((award) => award.isCurrent && award.prizePoolId === pool.id).map((award) => award.id),
+    const reasonDigest = this.hashGiveawayReason(parsed.reason);
+    const replacement = this.recoverFrozenImmediateGiveawayAwardSlot(
+      giveaway,
+      sourceAward,
+      pool,
+      deadline.toISOString(),
     );
-    this.reallocateFrozenImmediateGiveawayAwards(giveaway, {
-      prizePoolId: pool.id,
-      claimDeadlineAt: deadline.toISOString(),
-    });
-    const replacement = giveaway.awards
-      .filter(
-        (award) =>
-          award.isCurrent &&
-          award.prizePoolId === pool.id &&
-          !currentAwardIds.has(award.id),
-      )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (replacement) {
+      this.linkGiveawayDirectRecoverySource(giveaway, sourceAward, replacement, reasonDigest, "explicit");
+    }
     this.auditGiveaway(giveaway, actor.id, "GIVEAWAY_AWARD_RECOVERED", "award", sourceAward.id, {
       awardId: sourceAward.id,
       replacementAwardId: replacement?.id ?? null,
-      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      reasonDigest,
       claimDeadlineAt: deadline.toISOString(),
     });
     return { awardId: replacement?.id ?? null };
@@ -2320,6 +2562,11 @@ export class TambikeBackend {
       reasonDigest: draw.reasonDigest,
       claimDeadlineAt: replacementDeadline ?? null,
     });
+    if (snapshot.seedRevealedAt) {
+      this.notifyGiveaway(giveaway, replacement.winnerUserId, "giveaway_winner", {
+        awardId: replacement.id,
+      });
+    }
     return this.toGiveawayDrawResult(giveaway, draw);
   }
 
@@ -2467,11 +2714,132 @@ export class TambikeBackend {
     return this.toGiveawayCampaignView(giveaway);
   }
 
+  /**
+   * Scheduling is an explicit owner/admin decision. Cron only advances this
+   * already-approved state; it never promotes a draft based on timestamps.
+   */
+  async scheduleGiveaway(sessionToken: string, giveawayId: string) {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    const entryOpensAt = giveaway.entryOpensAt ? new Date(giveaway.entryOpensAt) : null;
+    if (
+      giveaway.state !== "draft" ||
+      giveaway.complianceStatus !== "approved" ||
+      !entryOpensAt ||
+      !Number.isFinite(entryOpensAt.getTime()) ||
+      entryOpensAt.getTime() <= Date.now()
+    ) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    this.transitionGiveaway(giveaway, "scheduled");
+    this.auditGiveaway(giveaway, user.id, "GIVEAWAY_SCHEDULED", "giveaway", giveaway.id, {
+      entryOpensAt: giveaway.entryOpensAt,
+    });
+    return this.toGiveawayCampaignView(giveaway);
+  }
+
+  /**
+   * Trusted scheduler entry point. It accepts a server-supplied clock only and
+   * advances one-way lifecycle states; it never restores paused campaigns or
+   * creates a redraw. Draw provenance remains the real configured actor plus
+   * an immutable initiatedVia: cron audit fact.
+   */
+  async advanceScheduledGiveawayLifecycle(now: Date): Promise<GiveawayLifecycleAdvanceResult> {
+    if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const result: GiveawayLifecycleAdvanceResult = {
+      opened: 0,
+      locked: 0,
+      drawn: 0,
+      expired: 0,
+      completed: 0,
+      purgedDeliveryDetails: 0,
+    };
+    // This runs before any lifecycle actor lookup so encrypted payload
+    // retention cannot be held hostage by a suspended or deleted creator.
+    result.purgedDeliveryDetails = this.purgeExpiredGiveawayDeliveryDetailsAsSystem(now);
+    const giveaways = Array.from(this.giveaways.campaignsById.values()).sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+
+    for (const giveaway of giveaways) {
+      const event = this.events.get(giveaway.eventId);
+      const actor = event ? this.getGiveawayCronActor(giveaway, event) : null;
+
+      if (actor && giveaway.state === "scheduled" && this.isGiveawayScheduleDue(giveaway.entryOpensAt, now)) {
+        try {
+          this.openGiveawayAsActor(actor, giveaway, event!, { initiatedVia: "cron" });
+          result.opened += 1;
+        } catch (error) {
+          if (!(error instanceof BackendError)) throw error;
+        }
+      }
+
+      if (actor && giveaway.state === "open" && this.isGiveawayScheduleDue(giveaway.entryClosesAt, now)) {
+        try {
+          this.lockGiveawayAsActor(actor, giveaway, { initiatedVia: "cron" });
+          result.locked += 1;
+        } catch (error) {
+          if (!(error instanceof BackendError)) throw error;
+        }
+      }
+
+      if (actor && giveaway.state === "locked" && this.isGiveawayScheduleDue(giveaway.drawAt, now)) {
+        try {
+          this.runGiveawayDrawAsActor(
+            actor,
+            giveaway,
+            {
+              giveawayId: giveaway.id,
+              idempotencyKey: `cron-initial-draw:${giveaway.id}:${giveaway.drawAt}`,
+              reason: "scheduled_initial_draw",
+            },
+            { initiatedVia: "cron" },
+          );
+          result.drawn += 1;
+        } catch (error) {
+          if (!(error instanceof BackendError)) throw error;
+        }
+      }
+
+      if (giveaway.state === "claims_open" && actor) {
+        result.expired += this.expireGiveawayClaimsAsActor(giveaway, actor.id, {
+          now,
+          initiatedVia: "cron",
+        }).expiredCount;
+        if (
+          !giveaway.awards.some((award) => award.isCurrent && award.status !== "fulfilled") &&
+          !this.hasUnresolvedTerminalDirectGiveawayAward(giveaway)
+        ) {
+          this.transitionGiveaway(giveaway, "completed");
+          this.auditGiveaway(giveaway, actor.id, "GIVEAWAY_COMPLETED", "giveaway", giveaway.id, {
+            giveawayId: giveaway.id,
+            completion: "cron_eligible_settlement",
+            initiatedVia: "cron",
+          });
+          result.completed += 1;
+        }
+      }
+    }
+    return result;
+  }
+
   async openGiveaway(sessionToken: string, giveawayId: string) {
     const user = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     const event = this.requireEvent(giveaway.eventId);
     this.requireGiveawayConfigurator(user, event);
+    return this.openGiveawayAsActor(user, giveaway, event);
+  }
+
+  private openGiveawayAsActor(
+    user: BackendUser,
+    giveaway: GiveawayAggregate,
+    event: Event,
+    options: { initiatedVia?: "cron" } = {},
+  ) {
     if (giveaway.complianceStatus !== "approved") {
       throw new BackendError("GIVEAWAY_COMPLIANCE_REQUIRED", "GIVEAWAY_COMPLIANCE_REQUIRED");
     }
@@ -2485,6 +2853,7 @@ export class TambikeBackend {
     this.reallocateImmediateGiveawayAwards(giveaway);
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_OPENED", "giveaway", giveaway.id, {
       state: giveaway.state,
+      ...(options.initiatedVia ? { initiatedVia: options.initiatedVia } : {}),
     });
     return this.toGiveawayCampaignView(giveaway);
   }
@@ -2493,7 +2862,7 @@ export class TambikeBackend {
     const user = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
-    if (giveaway.state !== "open") {
+    if (!["scheduled", "open"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
     this.transitionGiveaway(giveaway, "paused");
@@ -2507,6 +2876,14 @@ export class TambikeBackend {
     const user = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    return this.lockGiveawayAsActor(user, giveaway);
+  }
+
+  private lockGiveawayAsActor(
+    user: BackendUser,
+    giveaway: GiveawayAggregate,
+    options: { initiatedVia?: "cron" } = {},
+  ) {
     if (giveaway.snapshot) {
       return this.toGiveawayLockResult(giveaway);
     }
@@ -2610,6 +2987,7 @@ export class TambikeBackend {
       snapshotDigest,
       commitment,
       seedByteLength: seed.byteLength,
+      ...(options.initiatedVia ? { initiatedVia: options.initiatedVia } : {}),
     });
     return this.toGiveawayLockResult(giveaway);
   }
@@ -3053,6 +3431,14 @@ export class TambikeBackend {
     return reason.trim();
   }
 
+  private requireGiveawayRecoveryClosureReason(reason: unknown) {
+    const normalized = this.requireGiveawayReason(reason);
+    if (normalized.length > 500) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return normalized;
+  }
+
   private requireGiveawayRider(sessionToken: string) {
     const rider = this.requireUser(sessionToken);
     if (rider.role !== "rider") throw new BackendError("FORBIDDEN", "FORBIDDEN");
@@ -3101,10 +3487,13 @@ export class TambikeBackend {
     }
   }
 
-  private isGiveawayClaimDeadlineElapsed(award: Pick<GiveawayAwardRecord, "claimDeadlineAt">) {
+  private isGiveawayClaimDeadlineElapsed(
+    award: Pick<GiveawayAwardRecord, "claimDeadlineAt">,
+    now: Date = new Date(),
+  ) {
     if (!award.claimDeadlineAt) return false;
     const deadline = new Date(award.claimDeadlineAt).getTime();
-    return !Number.isFinite(deadline) || deadline <= Date.now();
+    return !Number.isFinite(deadline) || deadline <= now.getTime();
   }
 
   /** A new winner may never inherit an elapsed campaign deadline. */
@@ -3335,6 +3724,7 @@ export class TambikeBackend {
     detail: GiveawayDeliveryDetailRecord,
     actorUserId: string | undefined,
     reason: "withdrawn" | "retention_expired" | "award_expired",
+    options: { initiatedVia?: "cron" } = {},
   ) {
     if (detail.purgedAt) return;
     const now = new Date().toISOString();
@@ -3349,7 +3739,12 @@ export class TambikeBackend {
       reason === "withdrawn" ? "GIVEAWAY_DELIVERY_WITHDRAWN" : "GIVEAWAY_DELIVERY_PURGED",
       "delivery_detail",
       detail.id,
-      { awardId: detail.awardId, deliveryDetailId: detail.id, reason },
+      {
+        awardId: detail.awardId,
+        deliveryDetailId: detail.id,
+        reason,
+        ...(options.initiatedVia ? { initiatedVia: options.initiatedVia } : {}),
+      },
     );
   }
 
@@ -3852,6 +4247,7 @@ export class TambikeBackend {
         ...(input.reasonDigest ? { reasonDigest: input.reasonDigest } : {}),
       },
     });
+    this.notifyGiveaway(giveaway, riderId, "giveaway_entry");
     this.reallocateImmediateGiveawayAwards(giveaway);
     return entry;
   }
@@ -4077,12 +4473,13 @@ export class TambikeBackend {
     pool: GiveawayPrizePoolRecord,
     riderId: string,
     predecessorAwardIdForTotal?: string,
+    reservedTotalAwardSlots: number = 0,
   ) {
     const currentAwards = giveaway.awards.filter((award) => award.isCurrent);
     const currentAwardsForTotal = predecessorAwardIdForTotal
       ? currentAwards.filter((award) => award.id !== predecessorAwardIdForTotal)
       : currentAwards;
-    if (currentAwardsForTotal.length >= giveaway.maxWinsTotal) return false;
+    if (currentAwardsForTotal.length + reservedTotalAwardSlots >= giveaway.maxWinsTotal) return false;
     // A redraw frees one campaign-wide slot, but a predecessor still consumes
     // its rider/pool cap. That preserves a one-win limit while allowing later
     // weighted units only where the configured rider cap leaves room.
@@ -4103,6 +4500,8 @@ export class TambikeBackend {
    * lexical identifier or reconciliation loop cannot decide a first-come win.
    */
   private reallocateImmediateGiveawayAwards(giveaway: GiveawayAggregate) {
+    this.resolvePendingDirectGiveawayRecoverySources(giveaway);
+    const elapsedRecoveryReservation = this.getElapsedDirectGiveawayRecoveryReservation(giveaway);
     const candidates = Array.from(giveaway.entriesByRider.values()).filter(
       (entry) => entry.status === "eligible",
     );
@@ -4114,9 +4513,70 @@ export class TambikeBackend {
           compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
         );
       for (const entry of orderedCandidates) {
-        this.allocateImmediateGiveawayAwardForPool(giveaway, entry, pool);
+        this.allocateImmediateGiveawayAwardForPool(giveaway, entry, pool, undefined, elapsedRecoveryReservation);
       }
     }
+  }
+
+  /**
+   * A generic open-campaign allocation must not silently consume capacity that
+   * belongs to an unresolved terminal direct award. Resolve each historical
+   * source first so any successor carries its one-to-one recovery link.
+   */
+  private resolvePendingDirectGiveawayRecoverySources(giveaway: GiveawayAggregate) {
+    if (giveaway.state !== "open") return;
+    const poolPositionById = new Map(giveaway.prizePools.map((pool) => [pool.id, pool.position]));
+    const sources = giveaway.awards
+      .filter(
+        (award) =>
+          this.isDirectGiveawayAward(award) &&
+          !award.isCurrent &&
+          !award.recoveryClosedAt &&
+          !this.isGiveawayClaimDeadlineElapsed(award) &&
+          ["declined", "voided", "disqualified", "expired"].includes(award.status),
+      )
+      .sort(
+        (left, right) =>
+          (poolPositionById.get(left.prizePoolId) ?? Number.MAX_SAFE_INTEGER) -
+            (poolPositionById.get(right.prizePoolId) ?? Number.MAX_SAFE_INTEGER) ||
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      );
+    for (const source of sources) {
+      this.reallocateFinalizedDirectGiveawayAward(giveaway, source);
+    }
+  }
+
+  /**
+   * An elapsed source may only be recovered explicitly with a fresh deadline
+   * or settled. Until then it still owns one campaign-wide award slot and, for
+   * finite pools, its exact released prize item.
+   */
+  private getElapsedDirectGiveawayRecoveryReservation(
+    giveaway: GiveawayAggregate,
+    excludedSourceAwardId?: string,
+  ): ElapsedDirectGiveawayRecoveryReservation {
+    const protectedPrizeItemIdsByPool = new Map<string, Set<string>>();
+    let reservedTotalAwardSlots = 0;
+    for (const award of giveaway.awards) {
+      if (
+        award.id === excludedSourceAwardId ||
+        !this.isDirectGiveawayAward(award) ||
+        award.isCurrent ||
+        award.recoveryClosedAt ||
+        !this.isGiveawayClaimDeadlineElapsed(award) ||
+        !["declined", "voided", "disqualified", "expired"].includes(award.status)
+      ) {
+        continue;
+      }
+      reservedTotalAwardSlots += 1;
+      if (award.prizeItemId) {
+        const protectedPrizeItemIds = protectedPrizeItemIdsByPool.get(award.prizePoolId) ?? new Set<string>();
+        protectedPrizeItemIds.add(award.prizeItemId);
+        protectedPrizeItemIdsByPool.set(award.prizePoolId, protectedPrizeItemIds);
+      }
+    }
+    return { reservedTotalAwardSlots, protectedPrizeItemIdsByPool };
   }
 
   /**
@@ -4127,6 +4587,7 @@ export class TambikeBackend {
     giveaway: GiveawayAggregate,
     options: { prizePoolId?: string; claimDeadlineAt?: string } = {},
   ) {
+    const elapsedRecoveryReservation = this.getElapsedDirectGiveawayRecoveryReservation(giveaway);
     const candidates = this.frozenImmediateGiveawayCandidates(giveaway);
     for (const pool of [...giveaway.prizePools].sort((left, right) => left.position - right.position)) {
       if (options.prizePoolId && pool.id !== options.prizePoolId) continue;
@@ -4137,26 +4598,179 @@ export class TambikeBackend {
           compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
         );
       for (const entry of orderedCandidates) {
-        this.allocateImmediateGiveawayAwardForPool(giveaway, entry, pool, options.claimDeadlineAt);
+        this.allocateImmediateGiveawayAwardForPool(
+          giveaway,
+          entry,
+          pool,
+          options.claimDeadlineAt,
+          elapsedRecoveryReservation,
+        );
       }
     }
   }
 
+  /**
+   * A recovery action is scoped to one historical direct award. It may fill
+   * only that released finite item (or one unlimited guaranteed slot), never
+   * sweep every free item in the pool merely because the campaign has capacity.
+   */
+  private recoverFrozenImmediateGiveawayAwardSlot(
+    giveaway: GiveawayAggregate,
+    sourceAward: GiveawayAwardRecord,
+    pool: GiveawayPrizePoolRecord,
+    claimDeadlineAt?: string,
+    recoverySourceAwardId: string = sourceAward.id,
+  ): GiveawayAwardRecord | null {
+    const targetPrizeItem = pool.awardMode === "first_come"
+      ? pool.items.find((item) => item.id === sourceAward.prizeItemId)
+      : undefined;
+    if (pool.awardMode === "first_come" && (!targetPrizeItem || targetPrizeItem.status !== "available")) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const elapsedRecoveryReservation = this.getElapsedDirectGiveawayRecoveryReservation(
+      giveaway,
+      sourceAward.id,
+    );
+    const candidates = this.frozenImmediateGiveawayCandidates(giveaway)
+      .filter((entry) => this.isEntryEligibleForPool(entry, pool))
+      .sort((left, right) =>
+        compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
+      );
+
+    for (const entry of candidates) {
+      const allocationEligibilityAt = resolveGiveawayPoolEligibilityPriority({
+        eligibilityCycleAt: entry.eligibilityCycleAt,
+        qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
+        permittedGroupIds: pool.eligibilityGroupIds,
+      });
+      if (!allocationEligibilityAt) continue;
+      const directAllocationKey = `direct:${entry.id}:${pool.id}:${allocationEligibilityAt}`;
+      const hasHistoricAllocation = giveaway.awards.some(
+        (award) => award.directAllocationKey === directAllocationKey,
+      );
+      const hasCurrentPoolAward = giveaway.awards.some(
+        (award) =>
+          award.entryId === entry.id &&
+          award.prizePoolId === pool.id &&
+          !award.drawId &&
+          award.isCurrent,
+      );
+      if (
+        hasHistoricAllocation ||
+        hasCurrentPoolAward ||
+        !this.canCreateGiveawayAward(
+          giveaway,
+          pool,
+          entry.riderId,
+          undefined,
+          elapsedRecoveryReservation.reservedTotalAwardSlots,
+        )
+      ) {
+        continue;
+      }
+      return this.createGiveawayAward(giveaway, {
+        entry,
+        prizePool: pool,
+        ...(targetPrizeItem ? { prizeItem: targetPrizeItem } : {}),
+        directAllocationKey,
+        allocationEligibilityAt,
+        claimDeadlineAt,
+        recoverySourceAwardId,
+      });
+    }
+    return null;
+  }
+
   private reallocateFinalizedDirectGiveawayAward(
     giveaway: GiveawayAggregate,
-    sourceAward?: Pick<GiveawayAwardRecord, "claimDeadlineAt">,
+    sourceAward: GiveawayAwardRecord,
   ) {
+    if (sourceAward.recoveryClosedAt || this.isGiveawayClaimDeadlineElapsed(sourceAward)) return;
+    const pool = this.requireGiveawayPrizePool(giveaway, sourceAward.prizePoolId);
+    if (pool.awardMode !== "first_come" && pool.awardMode !== "guaranteed") return;
+    let replacement: GiveawayAwardRecord | null = null;
     if (giveaway.state === "open") {
-      this.reallocateImmediateGiveawayAwards(giveaway);
-      return;
-    }
-    if (
+      replacement = this.reallocateImmediateDirectGiveawayAwardSlot(giveaway, sourceAward, pool);
+    } else if (
       ["locked", "drawing", "claims_open"].includes(giveaway.state) &&
-      this.hasUsableGiveawayReplacementDeadline(giveaway) &&
-      (!sourceAward || !this.isGiveawayClaimDeadlineElapsed(sourceAward))
+      this.hasUsableGiveawayReplacementDeadline(giveaway)
     ) {
-      this.reallocateFrozenImmediateGiveawayAwards(giveaway);
+      replacement = this.recoverFrozenImmediateGiveawayAwardSlot(
+        giveaway,
+        sourceAward,
+        pool,
+        giveaway.claimDeadlineAt,
+      );
     }
+    if (replacement) {
+      this.linkGiveawayDirectRecoverySource(
+        giveaway,
+        sourceAward,
+        replacement,
+        this.hashGiveawayReason("automatic_direct_reallocation"),
+        "automatic",
+      );
+    }
+  }
+
+  /** Replaces only the released direct slot while an event is still open. */
+  private reallocateImmediateDirectGiveawayAwardSlot(
+    giveaway: GiveawayAggregate,
+    sourceAward: GiveawayAwardRecord,
+    pool: GiveawayPrizePoolRecord,
+  ): GiveawayAwardRecord | null {
+    const targetPrizeItem = pool.awardMode === "first_come"
+      ? pool.items.find((item) => item.id === sourceAward.prizeItemId)
+      : undefined;
+    if (pool.awardMode === "first_come" && (!targetPrizeItem || targetPrizeItem.status !== "available")) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const elapsedRecoveryReservation = this.getElapsedDirectGiveawayRecoveryReservation(
+      giveaway,
+      sourceAward.id,
+    );
+    const candidates = Array.from(giveaway.entriesByRider.values())
+      .filter((entry) => entry.status === "eligible" && this.isEntryEligibleForPool(entry, pool))
+      .sort((left, right) =>
+        compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
+      );
+    for (const entry of candidates) {
+      const allocationEligibilityAt = resolveGiveawayPoolEligibilityPriority({
+        eligibilityCycleAt: entry.eligibilityCycleAt,
+        qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
+        permittedGroupIds: pool.eligibilityGroupIds,
+      });
+      if (!allocationEligibilityAt) continue;
+      const directAllocationKey = `direct:${entry.id}:${pool.id}:${allocationEligibilityAt}`;
+      if (
+        giveaway.awards.some((award) => award.directAllocationKey === directAllocationKey) ||
+        giveaway.awards.some(
+          (award) =>
+            award.entryId === entry.id &&
+            award.prizePoolId === pool.id &&
+            !award.drawId &&
+            award.isCurrent,
+        ) ||
+        !this.canCreateGiveawayAward(
+          giveaway,
+          pool,
+          entry.riderId,
+          undefined,
+          elapsedRecoveryReservation.reservedTotalAwardSlots,
+        )
+      ) {
+        continue;
+      }
+      return this.createGiveawayAward(giveaway, {
+        entry,
+        prizePool: pool,
+        ...(targetPrizeItem ? { prizeItem: targetPrizeItem } : {}),
+        directAllocationKey,
+        allocationEligibilityAt,
+        recoverySourceAwardId: sourceAward.id,
+      });
+    }
+    return null;
   }
 
   private allocateImmediateGiveawayAwardForPool(
@@ -4164,6 +4778,10 @@ export class TambikeBackend {
     entry: ImmediateGiveawayCandidate,
     pool: GiveawayPrizePoolRecord,
     claimDeadlineAt?: string,
+    elapsedRecoveryReservation: ElapsedDirectGiveawayRecoveryReservation = {
+      reservedTotalAwardSlots: 0,
+      protectedPrizeItemIdsByPool: new Map(),
+    },
   ) {
     if (!this.isEntryEligibleForPool(entry, pool)) return false;
     if (
@@ -4188,7 +4806,17 @@ export class TambikeBackend {
       (award) => award.directAllocationKey === directAllocationKey,
     );
     if (historicAward) return historicAward.isCurrent;
-    if (!this.canCreateGiveawayAward(giveaway, pool, entry.riderId)) return false;
+    if (
+      !this.canCreateGiveawayAward(
+        giveaway,
+        pool,
+        entry.riderId,
+        undefined,
+        elapsedRecoveryReservation.reservedTotalAwardSlots,
+      )
+    ) {
+      return false;
+    }
     if (pool.awardMode === "guaranteed") {
       this.createGiveawayAward(giveaway, {
         entry,
@@ -4200,7 +4828,11 @@ export class TambikeBackend {
       return true;
     }
     const prizeItem = pool.items
-      .filter((item) => item.status === "available")
+      .filter(
+        (item) =>
+          item.status === "available" &&
+          !elapsedRecoveryReservation.protectedPrizeItemIdsByPool.get(pool.id)?.has(item.id),
+      )
       .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))[0];
     if (!prizeItem) return false;
     this.createGiveawayAward(giveaway, {
@@ -4233,18 +4865,21 @@ export class TambikeBackend {
       affectedPoolIds.add(award.prizePoolId);
       award.isCurrent = false;
       award.status = "voided";
-      award.reasonDigest = this.hashGiveawayReason(reason);
+      const reasonDigest = this.hashGiveawayReason(reason);
+      award.reasonDigest = reasonDigest;
       award.updatedAt = new Date().toISOString();
       if (award.prizeItemId) {
         const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
         const item = pool?.items.find((candidate) => candidate.id === award.prizeItemId);
         if (item?.status === "reserved") item.status = "available";
       }
+      this.closeGiveawayDirectRecoverySource(award, reasonDigest);
       this.auditGiveaway(giveaway, actorUserId, "GIVEAWAY_AWARD_VOIDED", "award", award.id, {
         awardId: award.id,
         entryId: entry.id,
         prizePoolId: award.prizePoolId,
-        reasonDigest: award.reasonDigest,
+        reasonDigest,
+        recoveryClosed: true,
       });
     }
     return affectedPoolIds;
@@ -4252,6 +4887,73 @@ export class TambikeBackend {
 
   private isDirectGiveawayAward(award: GiveawayAwardRecord) {
     return !award.drawId && !award.snapshotEntryId;
+  }
+
+  /** A recovery source can close once, either by a linked replacement or a human settlement. */
+  private closeGiveawayDirectRecoverySource(award: GiveawayAwardRecord, reasonDigest: string) {
+    if (!this.isDirectGiveawayAward(award) || award.recoveryClosedAt) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const now = new Date().toISOString();
+    award.recoveryClosedAt = now;
+    award.recoveryClosedReasonDigest = reasonDigest;
+    award.updatedAt = now;
+  }
+
+  /**
+   * A direct source may produce at most one successor. Keep the immutable
+   * child-to-source link and source closure together so retries cannot later
+   * consume an unlimited guaranteed slot a second time.
+   */
+  private linkGiveawayDirectRecoverySource(
+    giveaway: GiveawayAggregate,
+    sourceAward: GiveawayAwardRecord,
+    replacement: GiveawayAwardRecord,
+    reasonDigest: string,
+    initiatedVia: "automatic" | "explicit",
+  ) {
+    if (
+      !this.isDirectGiveawayAward(sourceAward) ||
+      !this.isDirectGiveawayAward(replacement) ||
+      sourceAward.recoveryClosedAt ||
+      replacement.recoverySourceAwardId !== sourceAward.id ||
+      sourceAward.prizePoolId !== replacement.prizePoolId ||
+      giveaway.awards.some(
+        (award) => award.id !== replacement.id && award.recoverySourceAwardId === sourceAward.id,
+      )
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    this.closeGiveawayDirectRecoverySource(sourceAward, reasonDigest);
+    if (initiatedVia === "automatic") {
+      this.auditGiveaway(giveaway, undefined, "GIVEAWAY_DIRECT_RECOVERY_LINKED", "award", sourceAward.id, {
+        awardId: sourceAward.id,
+        replacementAwardId: replacement.id,
+        reasonDigest,
+        initiatedVia,
+      });
+    }
+  }
+
+  /**
+   * A finalized direct award is historical (`isCurrent: false`), so a simple
+   * unresolved-current query would otherwise complete the campaign and remove
+   * the organizer's future authorized recovery path. Whether it is eligible
+   * to re-offer now is a separate deadline gate in the recovery action.
+   */
+  private hasUnresolvedTerminalDirectGiveawayAward(giveaway: GiveawayAggregate) {
+    return giveaway.awards.some((award) => {
+      if (
+        !this.isDirectGiveawayAward(award) ||
+        award.isCurrent ||
+        award.recoveryClosedAt ||
+        !["declined", "voided", "disqualified", "expired"].includes(award.status)
+      ) {
+        return false;
+      }
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+      return pool?.awardMode === "first_come" || pool?.awardMode === "guaranteed";
+    });
   }
 
   /**
@@ -4310,6 +5012,7 @@ export class TambikeBackend {
       rank?: number;
       directAllocationKey?: string;
       allocationEligibilityAt?: string;
+      recoverySourceAwardId?: string;
       predecessorAwardId?: string;
       claimDeadlineAt?: string;
     },
@@ -4335,6 +5038,20 @@ export class TambikeBackend {
       giveaway.awards.some((award) => award.directAllocationKey === input.directAllocationKey)
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    if (input.recoverySourceAwardId) {
+      const source = this.giveaways.awardsById.get(input.recoverySourceAwardId);
+      if (
+        !source ||
+        !this.isDirectGiveawayAward(source) ||
+        !giveaway.awards.includes(source) ||
+        source.prizePoolId !== input.prizePool.id ||
+        source.isCurrent ||
+        source.recoveryClosedAt ||
+        giveaway.awards.some((award) => award.recoverySourceAwardId === input.recoverySourceAwardId)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
     }
     if (input.prizeItem) {
       const conflictingCurrentAward = giveaway.awards.find(
@@ -4366,12 +5083,16 @@ export class TambikeBackend {
       // the single authoritative deadline for claim gates; later schedule edits
       // cannot silently extend or shorten an already-issued award.
       claimDeadlineAt: input.claimDeadlineAt ?? giveaway.claimDeadlineAt,
+      recoverySourceAwardId: input.recoverySourceAwardId,
       predecessorAwardId: input.predecessorAwardId,
       createdAt: now,
       updatedAt: now,
     };
     giveaway.awards.push(award);
     this.giveaways.awardsById.set(award.id, award);
+    if (!input.draw) {
+      this.notifyGiveaway(giveaway, award.winnerUserId, "giveaway_winner", { awardId: award.id });
+    }
     return award;
   }
 
@@ -4636,6 +5357,27 @@ export class TambikeBackend {
     this.requireCheckInConfigurator(user, event);
   }
 
+  /** Fail closed if the original configured organizer/admin is no longer valid. */
+  private getGiveawayCronActor(giveaway: GiveawayAggregate, event: Event) {
+    const actor = this.users.get(giveaway.creatorUserId);
+    // Cron has no session, but it must still honor the active-user guard that
+    // every session-backed request receives. In particular, an admin-shaped
+    // suspended creator must never become trusted lifecycle provenance.
+    if (!actor || actor.verificationStatus === "SUSPENDED") return null;
+    try {
+      this.requireGiveawayConfigurator(actor, event);
+      return actor;
+    } catch {
+      return null;
+    }
+  }
+
+  private isGiveawayScheduleDue(value: string | undefined, now: Date) {
+    if (!value) return false;
+    const dueAt = new Date(value).getTime();
+    return Number.isFinite(dueAt) && dueAt <= now.getTime();
+  }
+
   private transitionGiveaway(giveaway: GiveawayAggregate, next: GiveawayState) {
     try {
       assertGiveawayLifecycleTransition(giveaway.state, next, giveaway.complianceStatus);
@@ -4677,6 +5419,45 @@ export class TambikeBackend {
     giveaway.auditEvents.push(record);
     this.giveaways.auditEventsById.set(record.id, record);
     this.audit(action, actorUserId, targetId);
+  }
+
+  private notifyGiveaway(
+    giveaway: GiveawayAggregate,
+    userId: string,
+    kind: GiveawayNotificationKind,
+    options: { awardId?: string } = {},
+  ) {
+    const draft = createGiveawayNotificationDraft(kind, {
+      userId,
+      giveawayId: giveaway.id,
+      giveawayTitle: giveaway.title,
+      awardId: options.awardId,
+    });
+    this.recordGiveawayNotification(draft);
+  }
+
+  private recordGiveawayNotification(draft: GiveawayNotificationDraft) {
+    assertSafeGiveawayNotification(draft);
+    const lookupKey = `${draft.userId}:${draft.dedupeKey}`;
+    const existingId = this.giveawayNotificationIdsByUserDedupeKey.get(lookupKey);
+    if (existingId) {
+      const existing = this.giveawayNotifications.get(existingId);
+      if (!existing) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      return existing;
+    }
+    const record: GiveawayNotificationRecord = {
+      id: `giveaway-notification-${randomUUID()}`,
+      userId: draft.userId,
+      kind: draft.kind,
+      title: draft.title,
+      body: draft.body,
+      ...(draft.href ? { href: draft.href } : {}),
+      dedupeKey: draft.dedupeKey,
+      createdAt: new Date().toISOString(),
+    };
+    this.giveawayNotifications.set(record.id, record);
+    this.giveawayNotificationIdsByUserDedupeKey.set(lookupKey, record.id);
+    return record;
   }
 
   /**
@@ -4904,6 +5685,9 @@ export class TambikeBackend {
       weightDelta,
       sourceFingerprint,
     });
+    if (entry.status === "eligible") {
+      this.notifyGiveaway(giveaway, entry.riderId, "giveaway_entry");
+    }
   }
 
   private evaluateGiveawayCondition(

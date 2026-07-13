@@ -168,7 +168,7 @@ describe("Prisma giveaway lifecycle contract", () => {
     );
 
     expect(claimSource).toContain("async recoverExpiredDirectGiveawayAward");
-    expect(claimSource).toContain("reallocateFrozenImmediateGiveawayAwards");
+    expect(claimSource).toContain("recoverFrozenImmediateGiveawayAwardSlot");
     expect(claimSource).toContain("retentionExpiresAt.getTime() <= Date.now()");
     expect(claimSource).toContain('status: { in: ["pending_verification", "claimable"] }');
     expect(redrawSource).toContain("claimDeadlineAt: parsed.claimDeadlineAt");
@@ -235,6 +235,75 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(giveawayMigrationSql).toContain(
       `"prevent_giveaway_scope_reparenting"('giveawayId', 'riderId')`,
     );
+  });
+
+  test("makes every terminal direct source either linked once or explicitly closed", () => {
+    const award = dmmfModel("GiveawayAward");
+    const directFinalizationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async reallocateFinalizedDirectGiveawayAward"),
+      prismaBackendSource.indexOf("private async requireGiveawaySnapshot"),
+    );
+    const genericVoidSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async voidDirectGiveawayAwards"),
+      prismaBackendSource.indexOf("private async voidIneligibleDirectGiveawayAwards"),
+    );
+
+    for (const field of ["recoveryClosedAt", "recoveryClosedReasonDigest", "recoverySourceAwardId"]) {
+      expect(award?.fields.find((candidate) => candidate.name === field)).toBeTruthy();
+    }
+    expect(prismaSchema).toContain("recoverySourceAwardId String?            @unique");
+    expect(directFinalizationSource).toContain("recoverFrozenImmediateGiveawayAwardSlot");
+    expect(directFinalizationSource).toContain("reallocateImmediateDirectGiveawayAwardSlot");
+    expect(directFinalizationSource).toContain("linkGiveawayDirectRecoverySource");
+    expect(genericVoidSource).toContain("closeGiveawayDirectRecoverySource");
+    expect(prismaBackendSource).toContain("hasUnresolvedTerminalDirectGiveawayAward");
+    expect(giveawayMigrationSql).toContain('"GiveawayAward_recoverySourceAwardId_key"');
+    expect(giveawayMigrationSql).toContain('"GiveawayAward_recovery_resolution_one_way"');
+    expect(giveawayMigrationSql).toContain('"recoverySourceAwardId"');
+  });
+
+  test("resolves open direct recovery sources before generic immediate allocation", () => {
+    const immediateAllocationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async reallocateImmediateGiveawayAwards"),
+      prismaBackendSource.indexOf("private async reallocateFrozenImmediateGiveawayAwards"),
+    );
+    const recoveryResolverSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async resolvePendingDirectGiveawayRecoverySources"),
+      prismaBackendSource.indexOf("private async reallocateFrozenImmediateGiveawayAwards"),
+    );
+
+    const resolverCallPosition = immediateAllocationSource.indexOf(
+      "await this.resolvePendingDirectGiveawayRecoverySources(tx, giveaway)",
+    );
+    const genericPoolLoopPosition = immediateAllocationSource.indexOf("for (const pool of giveaway.prizePools)");
+    expect(resolverCallPosition).toBeGreaterThanOrEqual(0);
+    expect(resolverCallPosition).toBeLessThan(genericPoolLoopPosition);
+    expect(recoveryResolverSource).toContain('if (giveaway.status !== "open") return;');
+    expect(recoveryResolverSource).toContain("reallocateFinalizedDirectGiveawayAward");
+    expect(recoveryResolverSource).toContain('recoveryClosedAt: null');
+    expect(recoveryResolverSource).toContain('status: { in: ["declined", "voided", "disqualified", "expired"] }');
+  });
+
+  test("reserves elapsed direct recovery capacity from generic immediate allocation", () => {
+    const immediateAllocationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async reallocateImmediateGiveawayAwards"),
+      prismaBackendSource.indexOf("private async reallocateFrozenImmediateGiveawayAwards"),
+    );
+    const directAllocationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async allocateDirectGiveawayAwardForPool"),
+      prismaBackendSource.indexOf("private async voidDirectGiveawayAwards"),
+    );
+    const reservationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async getElapsedDirectGiveawayRecoveryReservation"),
+      prismaBackendSource.indexOf("private async reallocateFrozenImmediateGiveawayAwards"),
+    );
+
+    expect(immediateAllocationSource).toContain("getElapsedDirectGiveawayRecoveryReservation");
+    expect(directAllocationSource).toContain("reservedTotalAwardSlots");
+    expect(directAllocationSource).toContain("protectedPrizeItemIds");
+    expect(reservationSource).toContain('claimDeadlineAt: { not: null, lte: new Date() }');
+    expect(reservationSource).toContain("reservedTotalAwardSlots");
+    expect(reservationSource).toContain("protectedPrizeItemIdsByPool");
   });
 
   test("derives redraw exclusions from consumed weighted units instead of excluding every snapshot entry", () => {

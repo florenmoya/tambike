@@ -336,6 +336,9 @@ CREATE TABLE "GiveawayAward" (
   "claimTokenVersion" INTEGER NOT NULL DEFAULT 0,
   "claimDeadlineAt" TIMESTAMP(3),
   "reasonDigest" TEXT,
+  "recoveryClosedAt" TIMESTAMP(3),
+  "recoveryClosedReasonDigest" TEXT,
+  "recoverySourceAwardId" TEXT,
   "predecessorAwardId" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -355,6 +358,13 @@ CREATE TABLE "GiveawayAward" (
       AND "claimTokenHash" ~ '^[A-Za-z0-9_-]{43}$'
       AND "claimTokenHash" !~* '^(tbk_gc1_|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
     )
+  ),
+  CONSTRAINT "GiveawayAward_recovery_closure_paired" CHECK (
+    ("recoveryClosedAt" IS NULL) = ("recoveryClosedReasonDigest" IS NULL)
+  ),
+  CONSTRAINT "GiveawayAward_recoveryClosureReasonDigest_canonical" CHECK (
+    "recoveryClosedReasonDigest" IS NULL
+    OR (char_length("recoveryClosedReasonDigest") = 64 AND "recoveryClosedReasonDigest" ~ '^[a-f0-9]{64}$')
   )
 );
 
@@ -585,6 +595,8 @@ CREATE INDEX "GiveawayAward_prizePoolId_idx" ON "GiveawayAward"("prizePoolId");
 CREATE INDEX "GiveawayAward_prizeItemId_idx" ON "GiveawayAward"("prizeItemId");
 CREATE INDEX "GiveawayAward_snapshotEntryId_idx" ON "GiveawayAward"("snapshotEntryId");
 CREATE INDEX "GiveawayAward_winnerUserId_idx" ON "GiveawayAward"("winnerUserId");
+CREATE UNIQUE INDEX "GiveawayAward_recoverySourceAwardId_key" ON "GiveawayAward"("recoverySourceAwardId");
+CREATE INDEX "GiveawayAward_recoveryClosedAt_idx" ON "GiveawayAward"("recoveryClosedAt");
 CREATE INDEX "GiveawayAward_predecessorAwardId_idx" ON "GiveawayAward"("predecessorAwardId");
 CREATE INDEX "GiveawayClaimVerification_awardId_createdAt_idx" ON "GiveawayClaimVerification"("awardId", "createdAt");
 CREATE INDEX "GiveawayClaimVerification_operatorActorUserId_idx" ON "GiveawayClaimVerification"("operatorActorUserId");
@@ -718,6 +730,8 @@ ALTER TABLE "GiveawayAward"
   FOREIGN KEY ("snapshotEntryId") REFERENCES "GiveawaySnapshotEntry"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayAward_winnerUserId_fkey"
   FOREIGN KEY ("winnerUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayAward_recoverySourceAwardId_fkey"
+  FOREIGN KEY ("recoverySourceAwardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "GiveawayAward_predecessorAwardId_fkey"
   FOREIGN KEY ("predecessorAwardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -931,6 +945,37 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER "GiveawayAward_claim_token_one_way"
 BEFORE UPDATE OF "claimTokenHash", "claimTokenIssuedAt", "claimTokenVersion" ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_claim_token_mutation"();
+
+-- A terminal direct-award source can be resolved exactly once. Its successor
+-- link is insert-only and unique; a manual closure is likewise one-way so an
+-- operator cannot reopen an exhausted recovery path after a campaign settles.
+CREATE FUNCTION "validate_giveaway_award_recovery_resolution"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (NEW."recoveryClosedAt" IS NULL) <> (NEW."recoveryClosedReasonDigest" IS NULL) THEN
+    RAISE EXCEPTION 'GiveawayAward recovery closure timestamp and reason must be paired';
+  END IF;
+
+  IF OLD."recoveryClosedAt" IS NOT NULL
+    AND (
+      NEW."recoveryClosedAt" IS DISTINCT FROM OLD."recoveryClosedAt"
+      OR NEW."recoveryClosedReasonDigest" IS DISTINCT FROM OLD."recoveryClosedReasonDigest"
+    ) THEN
+    RAISE EXCEPTION 'GiveawayAward recovery closure is one-way and immutable';
+  END IF;
+
+  IF NEW."recoverySourceAwardId" IS DISTINCT FROM OLD."recoverySourceAwardId" THEN
+    RAISE EXCEPTION 'GiveawayAward recovery source link is insert-only';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayAward_recovery_resolution_one_way"
+BEFORE UPDATE OF "recoveryClosedAt", "recoveryClosedReasonDigest", "recoverySourceAwardId"
+ON "GiveawayAward"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_recovery_resolution"();
 
 CREATE FUNCTION "prevent_giveaway_snapshot_mutation"()
 RETURNS TRIGGER AS $$
@@ -1393,6 +1438,12 @@ DECLARE
   locked_snapshot_entry_qualified_source_fingerprint TEXT;
   predecessor_giveaway_id TEXT;
   predecessor_pool_id TEXT;
+  recovery_source_giveaway_id TEXT;
+  recovery_source_pool_id TEXT;
+  recovery_source_draw_id TEXT;
+  recovery_source_snapshot_entry_id TEXT;
+  recovery_source_is_current BOOLEAN;
+  recovery_source_status "GiveawayAwardStatus";
 BEGIN
   SELECT "giveawayId", "riderId", "status", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings", "currentWeight", "qualifiedSourceFingerprint"
     INTO entry_giveaway_id, entry_rider_id, entry_status, entry_eligibility_cycle_at, entry_eligibility_group_ids, entry_eligibility_group_timings, entry_current_weight, entry_qualified_source_fingerprint
@@ -1530,12 +1581,30 @@ BEGIN
     END IF;
   END IF;
 
+  IF NEW."recoverySourceAwardId" IS NOT NULL THEN
+    SELECT "giveawayId", "prizePoolId", "drawId", "snapshotEntryId", "isCurrent", "status"
+      INTO recovery_source_giveaway_id, recovery_source_pool_id, recovery_source_draw_id,
+           recovery_source_snapshot_entry_id, recovery_source_is_current, recovery_source_status
+    FROM "GiveawayAward"
+    WHERE "id" = NEW."recoverySourceAwardId";
+
+    IF NOT FOUND
+      OR recovery_source_giveaway_id <> NEW."giveawayId"
+      OR recovery_source_pool_id <> NEW."prizePoolId"
+      OR recovery_source_draw_id IS NOT NULL
+      OR recovery_source_snapshot_entry_id IS NOT NULL
+      OR recovery_source_is_current
+      OR recovery_source_status NOT IN ('declined', 'voided', 'disqualified', 'expired') THEN
+      RAISE EXCEPTION 'GiveawayAward recovery source must be one terminal direct award in the same giveaway pool';
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayAward_parentage_guard"
-BEFORE INSERT OR UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"
+BEFORE INSERT OR UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "recoverySourceAwardId", "predecessorAwardId"
 ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_parentage"();
 
@@ -2113,9 +2182,9 @@ BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
 
 CREATE TRIGGER "GiveawayAward_scope_immutable"
-BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"
+BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "recoverySourceAwardId", "predecessorAwardId"
 ON "GiveawayAward"
-FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'allocationEligibilityAt', 'predecessorAwardId');
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'allocationEligibilityAt', 'recoverySourceAwardId', 'predecessorAwardId');
 
 CREATE TRIGGER "GiveawayDeliveryDetail_scope_immutable"
 BEFORE UPDATE OF "awardId", "submittedByUserId" ON "GiveawayDeliveryDetail"
@@ -2150,3 +2219,21 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER "Perk_giveaway_event_parentage_guard"
 BEFORE UPDATE OF "eventId" ON "Perk"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_perk_event_parentage"();
+
+-- Notification is an existing product table. Extend it additively and
+-- deterministically so historic rows can participate in per-recipient
+-- idempotency without making a migration-time assumption about their content.
+ALTER TABLE "Notification" ADD COLUMN "kind" TEXT;
+ALTER TABLE "Notification" ADD COLUMN "href" TEXT;
+ALTER TABLE "Notification" ADD COLUMN "dedupeKey" TEXT;
+UPDATE "Notification"
+SET "kind" = 'general',
+    "dedupeKey" = 'legacy:' || "id"
+WHERE "kind" IS NULL OR "dedupeKey" IS NULL;
+ALTER TABLE "Notification" ALTER COLUMN "kind" SET NOT NULL;
+ALTER TABLE "Notification" ALTER COLUMN "kind" SET DEFAULT 'general';
+ALTER TABLE "Notification" ALTER COLUMN "dedupeKey" SET NOT NULL;
+CREATE UNIQUE INDEX "Notification_userId_dedupeKey_key"
+  ON "Notification"("userId", "dedupeKey");
+CREATE INDEX "Notification_userId_createdAt_idx"
+  ON "Notification"("userId", "createdAt");
