@@ -109,6 +109,39 @@ export interface OrganizerProfile {
   pastEvents: number;
 }
 
+export interface OrganizerApplicationInput {
+  organizerType: string;
+  displayName: string;
+  realName: string;
+  contactNumber: string;
+  fbLink: string;
+  pastEventLinks: string[];
+}
+
+export interface AdminCreateOrganizerInput extends OrganizerApplicationInput {
+  email: string;
+  password: string;
+  area: string;
+}
+
+export interface OrganizerVerificationRecord {
+  id: string;
+  ownerUserId: string;
+  ownerEmail: string;
+  ownerName: string;
+  ownerRole: "organizer";
+  status: VerificationStatus;
+  organizerType: string;
+  displayName: string;
+  realName: string;
+  contactNumber: string;
+  fbLink: string;
+  pastEventLinks: string[];
+  pastEvents: number;
+  activeEvents: number;
+  adminNotes?: string;
+}
+
 export interface UserProfile {
   id: string;
   displayName: string;

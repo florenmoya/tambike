@@ -57,7 +57,7 @@ import {
   parseCreateGiveawayInput,
   validateGiveawayUpdateInput,
 } from "@/features/giveaways/validation";
-import { demoEvents, mockUsers, venues } from "@/features/tambike-demo/data";
+import { demoEvents, mockUsers, organizers, venues } from "@/features/tambike-demo/data";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -65,6 +65,7 @@ import {
 } from "@/features/tambike-demo/event-state";
 import type {
   AccountRole,
+  AdminCreateOrganizerInput,
   AttendanceType,
   CheckInConfiguration,
   CheckInMode,
@@ -74,6 +75,8 @@ import type {
   Event,
   EventType,
   OrganizerQrMode,
+  OrganizerApplicationInput,
+  OrganizerVerificationRecord,
   Pass,
   ProfileInput,
   RSVP,
@@ -220,7 +223,10 @@ export type AuditAction =
   | "GIVEAWAY_COMPLETED"
   | "GIVEAWAY_SCHEDULED"
   | "GIVEAWAY_CRON_ADVANCED"
-  | "GIVEAWAY_EXPORT_CREATED";
+  | "GIVEAWAY_EXPORT_CREATED"
+  | "ORGANIZER_APPLICATION_SUBMITTED"
+  | "ORGANIZER_APPLICATION_REVIEWED"
+  | "ORGANIZER_CREATED_BY_ADMIN";
 
 type BackendUser = UserProfile & {
   passwordHash: string;
@@ -652,6 +658,7 @@ type BackendSeed = {
   users: BackendUser[];
   events: Event[];
   rsvps: Array<RSVP & { userId: string; goingAt?: string }>;
+  organizerVerifications: OrganizerVerificationRecord[];
   passes: Array<Pass & { userId: string }>;
   giveaways: GiveawayAggregate[];
   perkRedemptions: PerkRedemptionRecord[];
@@ -687,8 +694,19 @@ function cloneEvent(event: Event): Event {
   };
 }
 
-function cloneUser(user: UserProfile): UserProfile {
-  return { ...user };
+function cloneUser(user: BackendUser): UserProfile {
+  const { passwordHash, ...profile } = user;
+  void passwordHash;
+  return { ...profile };
+}
+
+function cloneOrganizerVerification(
+  organizerVerification: OrganizerVerificationRecord,
+): OrganizerVerificationRecord {
+  return {
+    ...organizerVerification,
+    pastEventLinks: [...organizerVerification.pastEventLinks],
+  };
 }
 
 function makeSessionToken() {
@@ -735,6 +753,36 @@ function passIdForEvent(eventId: string, userId: string) {
   return `pass-${eventId}-${userId}`;
 }
 
+function requiredTrimmedOrganizerField(value: string) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+
+  return trimmed;
+}
+
+function validateOrganizerApplicationInput(input: OrganizerApplicationInput) {
+  const pastEventLinks = Array.isArray(input.pastEventLinks)
+    ? input.pastEventLinks
+        .filter((link): link is string => typeof link === "string")
+        .map((link) => link.trim())
+        .filter(Boolean)
+    : [];
+  if (pastEventLinks.length === 0) {
+    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+  }
+
+  return {
+    organizerType: requiredTrimmedOrganizerField(input.organizerType),
+    displayName: requiredTrimmedOrganizerField(input.displayName),
+    realName: requiredTrimmedOrganizerField(input.realName),
+    contactNumber: requiredTrimmedOrganizerField(input.contactNumber),
+    fbLink: requiredTrimmedOrganizerField(input.fbLink),
+    pastEventLinks,
+  };
+}
+
 function defaultRulesForEvent(type: EventType) {
   const baseRules = ["Helmet required", "No racing", "No stunts", "No revving"];
   if (type === "Track Day" || type === "Race") {
@@ -777,9 +825,40 @@ async function createSeed(options: TambikeTestSeedOptions = {}): Promise<Backend
     }
   }
 
+  const organizerVerifications: OrganizerVerificationRecord[] = [];
+  const seededOrganizer = users.find(
+    (user) => user.role === "organizer" && user.organizerProfileId,
+  );
+  const seededOrganizerProfile = organizers.find(
+    (organizer) => organizer.id === seededOrganizer?.organizerProfileId,
+  );
+  if (seededOrganizer && seededOrganizerProfile) {
+    organizerVerifications.push({
+      id: seededOrganizerProfile.id,
+      ownerUserId: seededOrganizer.id,
+      ownerEmail: seededOrganizer.email,
+      ownerName: seededOrganizer.displayName,
+      ownerRole: "organizer",
+      status: seededOrganizer.verificationStatus,
+      organizerType: seededOrganizerProfile.type,
+      displayName: seededOrganizerProfile.displayName,
+      realName: seededOrganizer.displayName,
+      contactNumber: "09000000000",
+      fbLink: seededOrganizerProfile.fbLink,
+      pastEventLinks: [],
+      pastEvents: seededOrganizerProfile.pastEvents,
+      activeEvents: events.filter(
+        (event) =>
+          event.organizerId === seededOrganizerProfile.id &&
+          !["COMPLETED", "CANCELLED", "REJECTED"].includes(event.status),
+      ).length,
+    });
+  }
+
   return {
     users,
     events,
+    organizerVerifications,
     rsvps: [
       {
         eventId: demoScannerPass.eventId,
@@ -809,6 +888,8 @@ export class TambikeBackend {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
   private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string }>();
+  private readonly organizerVerifications = new Map<string, OrganizerVerificationRecord>();
+  private readonly reservedUserEmails = new Set<string>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
   private readonly checkInSettings = new Map<string, CheckInSettings>();
@@ -849,6 +930,13 @@ export class TambikeBackend {
 
     for (const event of seed.events) {
       this.events.set(event.id, cloneEvent(event));
+    }
+
+    for (const organizerVerification of seed.organizerVerifications) {
+      this.organizerVerifications.set(
+        organizerVerification.id,
+        cloneOrganizerVerification(organizerVerification),
+      );
     }
 
     for (const rsvp of seed.rsvps) {
@@ -900,32 +988,35 @@ export class TambikeBackend {
 
   async signUpRider(input: SignupWithPasswordInput) {
     const email = input.email.trim().toLowerCase();
-    if (!email || this.findUserByEmail(email)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    this.reserveNewUserEmail(email);
+
+    try {
+      validateSignupPassword(input.password);
+
+      const user: BackendUser = {
+        id: `user-${slugify(email || input.displayName)}`,
+        displayName: input.displayName.trim(),
+        email,
+        role: "rider",
+        verificationStatus: "UNVERIFIED",
+        area: input.area.trim(),
+        bikeModel: input.bikeModel?.trim() || undefined,
+        clubName: input.clubName?.trim() || undefined,
+        joinedAt: "July 4, 2026",
+        passwordHash: await bcrypt.hash(input.password, 10),
+      };
+
+      this.users.set(user.id, user);
+      this.audit("USER_CREATED", user.id, user.id);
+      const session = this.createSessionForUser(user.id);
+
+      return {
+        user: cloneUser(user),
+        sessionToken: session.token,
+      };
+    } finally {
+      this.reservedUserEmails.delete(email);
     }
-    validateSignupPassword(input.password);
-
-    const user: BackendUser = {
-      id: `user-${slugify(email || input.displayName)}`,
-      displayName: input.displayName.trim(),
-      email,
-      role: "rider",
-      verificationStatus: "UNVERIFIED",
-      area: input.area.trim(),
-      bikeModel: input.bikeModel?.trim() || undefined,
-      clubName: input.clubName?.trim() || undefined,
-      joinedAt: "July 4, 2026",
-      passwordHash: await bcrypt.hash(input.password, 10),
-    };
-
-    this.users.set(user.id, user);
-    this.audit("USER_CREATED", user.id, user.id);
-    const session = this.createSessionForUser(user.id);
-
-    return {
-      user: cloneUser(user),
-      sessionToken: session.token,
-    };
   }
 
   async loginWithPassword(email: string, password: string) {
@@ -963,6 +1054,115 @@ export class TambikeBackend {
     this.users.set(updated.id, updated);
     this.audit("PROFILE_UPDATED", user.id, user.id);
     return cloneUser(updated);
+  }
+
+  async applyAsOrganizer(sessionToken: string, input: OrganizerApplicationInput) {
+    const user = this.requireRole(sessionToken, "rider");
+    if (
+      user.organizerProfileId ||
+      Array.from(this.organizerVerifications.values()).some(
+        (organizerVerification) => organizerVerification.ownerUserId === user.id,
+      )
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const application = validateOrganizerApplicationInput(input);
+    const record: OrganizerVerificationRecord = {
+      id: `organizer-${user.id}`,
+      ownerUserId: user.id,
+      ownerEmail: user.email,
+      ownerName: user.displayName,
+      ownerRole: "organizer",
+      status: "PENDING",
+      ...application,
+      pastEvents: 0,
+      activeEvents: 0,
+    };
+    this.organizerVerifications.set(record.id, record);
+    this.users.set(user.id, {
+      ...user,
+      role: "organizer",
+      verificationStatus: "PENDING",
+      organizerProfileId: record.id,
+    });
+    this.audit("ORGANIZER_APPLICATION_SUBMITTED", user.id, record.id);
+    return cloneOrganizerVerification(record);
+  }
+
+  async reviewOrganizerApplication(
+    sessionToken: string,
+    organizerId: string,
+    status: "APPROVED" | "REJECTED",
+    adminNotes?: string,
+  ) {
+    if (status !== "APPROVED" && status !== "REJECTED") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const admin = this.requireRole(sessionToken, "admin");
+    const record = this.requireOrganizerVerification(organizerId);
+    const owner = this.requireUserById(record.ownerUserId);
+    const next = { ...record, status, adminNotes: adminNotes?.trim() || undefined };
+    this.organizerVerifications.set(record.id, next);
+    this.users.set(owner.id, {
+      ...owner,
+      role: "organizer",
+      verificationStatus: status,
+      organizerProfileId: record.id,
+    });
+    this.audit("ORGANIZER_APPLICATION_REVIEWED", admin.id, record.id);
+    return cloneOrganizerVerification(next);
+  }
+
+  async createOrganizerForAdmin(
+    sessionToken: string,
+    input: AdminCreateOrganizerInput,
+  ) {
+    const admin = this.requireRole(sessionToken, "admin");
+    const email = requiredTrimmedOrganizerField(input.email).toLowerCase();
+    this.reserveNewUserEmail(email);
+
+    try {
+      validateSignupPassword(input.password);
+      const application = validateOrganizerApplicationInput(input);
+      const area = requiredTrimmedOrganizerField(input.area);
+      const userId = `user-${randomUUID()}`;
+      const organizerId = `organizer-${randomUUID()}`;
+      const user: BackendUser = {
+        id: userId,
+        displayName: application.displayName,
+        email,
+        role: "organizer",
+        verificationStatus: "APPROVED",
+        area,
+        joinedAt: "July 11, 2026",
+        organizerProfileId: organizerId,
+        passwordHash: await bcrypt.hash(input.password, 10),
+      };
+      const record: OrganizerVerificationRecord = {
+        id: organizerId,
+        ownerUserId: user.id,
+        ownerEmail: user.email,
+        ownerName: user.displayName,
+        ownerRole: "organizer",
+        status: "APPROVED",
+        ...application,
+        pastEvents: 0,
+        activeEvents: 0,
+      };
+      this.users.set(user.id, user);
+      this.organizerVerifications.set(record.id, record);
+      this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
+      return cloneOrganizerVerification(record);
+    } finally {
+      this.reservedUserEmails.delete(email);
+    }
+  }
+
+  async listOrganizerVerifications(sessionToken: string) {
+    this.requireRole(sessionToken, "admin");
+    return Array.from(this.organizerVerifications.values()).map(cloneOrganizerVerification);
   }
 
   async createEventDraft(sessionToken: string, input: CreateEventInput) {
@@ -7021,8 +7221,34 @@ export class TambikeBackend {
     );
   }
 
+  private requireUserById(userId: string) {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return user;
+  }
+
+  private requireOrganizerVerification(organizerId: string) {
+    const organizerVerification = this.organizerVerifications.get(organizerId);
+    if (!organizerVerification) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return organizerVerification;
+  }
+
   private findUserByEmail(email: string) {
     return Array.from(this.users.values()).find((user) => user.email === email) ?? null;
+  }
+
+  private reserveNewUserEmail(email: string) {
+    if (!email || this.findUserByEmail(email) || this.reservedUserEmails.has(email)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    this.reservedUserEmails.add(email);
   }
 
   private audit(action: AuditAction, actorUserId?: string, targetId?: string) {
