@@ -95,6 +95,7 @@ export class BackendError extends Error {
       | "GIVEAWAY_CODE_UNAVAILABLE"
       | "GIVEAWAY_PERK_UNAVAILABLE"
       | "GIVEAWAY_DRAW_CONFIGURATION_ERROR"
+      | "GIVEAWAY_IDEMPOTENCY_CONFLICT"
       | "GIVEAWAY_AWARD_INVALID",
     message = code,
   ) {
@@ -149,7 +150,8 @@ export type AuditAction =
   | "GIVEAWAY_AWARD_DECLINED"
   | "GIVEAWAY_AWARD_REDRAWN"
   | "GIVEAWAY_MANUAL_AWARD_SELECTED"
-  | "GIVEAWAY_AWARD_VOIDED";
+  | "GIVEAWAY_AWARD_VOIDED"
+  | "GIVEAWAY_AWARD_DISQUALIFIED";
 
 type BackendUser = UserProfile & {
   passwordHash: string;
@@ -368,6 +370,14 @@ type GiveawayDrawRecord = {
   completedAt: string;
   publishedAt?: string;
   awardIds: string[];
+};
+
+type GiveawayDrawActionInput = {
+  action: "initial_random_draw" | "manual_selection" | "redraw";
+  reasonDigest: string | null;
+  prizePoolId?: string;
+  riderId?: string;
+  predecessorAwardId?: string;
 };
 
 type GiveawayAwardRecord = {
@@ -1298,10 +1308,26 @@ export class TambikeBackend {
     const organizer = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(parsed.giveawayId);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
-    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
-    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
     const snapshot = giveaway.snapshot;
-    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
+    if (!snapshot) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const actionInput: GiveawayDrawActionInput = {
+      action: "initial_random_draw",
+      reasonDigest: parsed.reason ? this.hashGiveawayReason(parsed.reason) : null,
+    };
+    const inputDigest = this.calculateDrawInputDigest(
+      giveaway,
+      snapshot,
+      "hmac-sha256-v1",
+      actionInput,
+    );
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) {
+      this.assertGiveawayDrawReplayInput(replay, inputDigest);
+      return this.toGiveawayDrawResult(giveaway, replay);
+    }
+    if (!["locked", "drawing"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
     if (
@@ -1321,10 +1347,10 @@ export class TambikeBackend {
       status: "completed",
       idempotencyKey: parsed.idempotencyKey,
       algorithmVersion: "hmac-sha256-v1",
-      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "hmac-sha256-v1"),
+      inputDigest,
       resultDigest: "",
       initiatedByUserId: organizer.id,
-      reasonDigest: parsed.reason ? this.hashGiveawayReason(parsed.reason) : undefined,
+      reasonDigest: actionInput.reasonDigest ?? undefined,
       completedAt: now,
       awardIds: [],
     };
@@ -1399,6 +1425,9 @@ export class TambikeBackend {
     if (draw.status === "published") {
       return this.buildGiveawayDrawVerification(giveaway, draw, seed, true);
     }
+    if (draw.status !== "completed") {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
     if (giveaway.state !== "drawing") {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
@@ -1442,6 +1471,22 @@ export class TambikeBackend {
     return this.toRiderGiveawayState(giveaway, rider.id);
   }
 
+  async voidGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    return this.resolveGiveawayAwardByAdministrator(sessionToken, awardId, reason, "voided");
+  }
+
+  async disqualifyGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    return this.resolveGiveawayAwardByAdministrator(sessionToken, awardId, reason, "disqualified");
+  }
+
   async redrawGiveawayAward(sessionToken: string, input: unknown) {
     const parsed = this.parseGiveawayRedrawInput(input);
     const organizer = this.requireUser(sessionToken);
@@ -1449,11 +1494,29 @@ export class TambikeBackend {
     if (!award) throw new BackendError("NOT_FOUND", "NOT_FOUND");
     const giveaway = this.requireGiveawayByAward(award);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const actionInput: GiveawayDrawActionInput = {
+      action: "redraw",
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      predecessorAwardId: parsed.awardId,
+    };
+    const inputDigest = this.calculateDrawInputDigest(
+      giveaway,
+      snapshot,
+      "hmac-sha256-v1",
+      actionInput,
+    );
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) {
+      this.assertGiveawayDrawReplayInput(replay, inputDigest);
+      return this.toGiveawayDrawResult(giveaway, replay);
+    }
     if (giveaway.state === "suspended" || !["drawing", "claims_open"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
-    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
     if (
       !award.isCurrent ||
       !["declined", "disqualified", "expired", "voided"].includes(award.status) ||
@@ -1464,7 +1527,6 @@ export class TambikeBackend {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
     const originalDraw = this.giveaways.drawsById.get(award.drawId);
-    const snapshot = giveaway.snapshot;
     const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
     const prizeItem = pool?.items.find((candidate) => candidate.id === award.prizeItemId);
     if (
@@ -1513,10 +1575,10 @@ export class TambikeBackend {
       status: snapshot.seedRevealedAt ? "published" : "completed",
       idempotencyKey: parsed.idempotencyKey,
       algorithmVersion: "hmac-sha256-v1",
-      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "hmac-sha256-v1"),
+      inputDigest,
       resultDigest: "",
       initiatedByUserId: organizer.id,
-      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      reasonDigest: actionInput.reasonDigest ?? undefined,
       completedAt: now,
       publishedAt: snapshot.seedRevealedAt,
       awardIds: [],
@@ -1551,10 +1613,28 @@ export class TambikeBackend {
     const organizer = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(parsed.giveawayId);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
-    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
-    if (replay) return this.toGiveawayDrawResult(giveaway, replay);
     const snapshot = giveaway.snapshot;
-    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
+    if (!snapshot) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const actionInput: GiveawayDrawActionInput = {
+      action: "manual_selection",
+      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      prizePoolId: parsed.prizePoolId,
+      riderId: parsed.riderId,
+    };
+    const inputDigest = this.calculateDrawInputDigest(
+      giveaway,
+      snapshot,
+      "manual-selection-v1",
+      actionInput,
+    );
+    const replay = giveaway.draws.find((draw) => draw.idempotencyKey === parsed.idempotencyKey);
+    if (replay) {
+      this.assertGiveawayDrawReplayInput(replay, inputDigest);
+      return this.toGiveawayDrawResult(giveaway, replay);
+    }
+    if (!["locked", "drawing"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
     const pool = giveaway.prizePools.find((candidate) => candidate.id === parsed.prizePoolId);
@@ -1583,10 +1663,10 @@ export class TambikeBackend {
       status: "completed",
       idempotencyKey: parsed.idempotencyKey,
       algorithmVersion: "manual-selection-v1",
-      inputDigest: this.calculateDrawInputDigest(giveaway, snapshot, "manual-selection-v1"),
+      inputDigest,
       resultDigest: "",
       initiatedByUserId: organizer.id,
-      reasonDigest: this.hashGiveawayReason(parsed.reason),
+      reasonDigest: actionInput.reasonDigest ?? undefined,
       completedAt: now,
       awardIds: [],
     };
@@ -2313,8 +2393,8 @@ export class TambikeBackend {
     }
     const reason = this.requireGiveawayReason(record.reason);
     return {
-      giveawayId: record.giveawayId,
-      riderId: record.riderId,
+      giveawayId: record.giveawayId.trim(),
+      riderId: record.riderId.trim(),
       reason,
     };
   }
@@ -2336,9 +2416,9 @@ export class TambikeBackend {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return {
-      giveawayId: record.giveawayId,
-      idempotencyKey: record.idempotencyKey,
-      reason: record.reason as string | undefined,
+      giveawayId: record.giveawayId.trim(),
+      idempotencyKey: record.idempotencyKey.trim(),
+      reason: typeof record.reason === "string" ? record.reason.trim() : undefined,
     };
   }
 
@@ -2356,8 +2436,8 @@ export class TambikeBackend {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return {
-      awardId: record.awardId,
-      idempotencyKey: record.idempotencyKey,
+      awardId: record.awardId.trim(),
+      idempotencyKey: record.idempotencyKey.trim(),
       reason: this.requireGiveawayReason(record.reason),
     };
   }
@@ -2373,10 +2453,10 @@ export class TambikeBackend {
       }
     }
     return {
-      giveawayId: record.giveawayId as string,
-      prizePoolId: record.prizePoolId as string,
-      riderId: record.riderId as string,
-      idempotencyKey: record.idempotencyKey as string,
+      giveawayId: (record.giveawayId as string).trim(),
+      prizePoolId: (record.prizePoolId as string).trim(),
+      riderId: (record.riderId as string).trim(),
+      idempotencyKey: (record.idempotencyKey as string).trim(),
       reason: this.requireGiveawayReason(record.reason),
     };
   }
@@ -2512,6 +2592,7 @@ export class TambikeBackend {
     giveaway: GiveawayAggregate,
     snapshot: GiveawaySnapshotRecord,
     algorithmVersion: GiveawayDrawRecord["algorithmVersion"],
+    actionInput: GiveawayDrawActionInput,
   ) {
     return createHash("sha256")
       .update(
@@ -2519,6 +2600,11 @@ export class TambikeBackend {
           giveawayId: giveaway.id,
           snapshotDigest: snapshot.snapshotDigest,
           algorithmVersion,
+          action: actionInput.action,
+          reasonDigest: actionInput.reasonDigest,
+          prizePoolId: actionInput.prizePoolId ?? null,
+          riderId: actionInput.riderId ?? null,
+          predecessorAwardId: actionInput.predecessorAwardId ?? null,
           prizePools: giveaway.prizePools.map((pool) => ({
             id: pool.id,
             awardMode: pool.awardMode,
@@ -2527,6 +2613,15 @@ export class TambikeBackend {
         }),
       )
       .digest("hex");
+  }
+
+  private assertGiveawayDrawReplayInput(
+    draw: Pick<GiveawayDrawRecord, "inputDigest">,
+    expectedInputDigest: string,
+  ) {
+    if (draw.inputDigest !== expectedInputDigest) {
+      throw new BackendError("GIVEAWAY_IDEMPOTENCY_CONFLICT", "GIVEAWAY_IDEMPOTENCY_CONFLICT");
+    }
   }
 
   private calculateGiveawayDrawResultDigest(giveaway: GiveawayAggregate, draw: GiveawayDrawRecord) {
@@ -2590,6 +2685,45 @@ export class TambikeBackend {
     );
     if (!giveaway) throw new BackendError("NOT_FOUND", "NOT_FOUND");
     return giveaway;
+  }
+
+  private resolveGiveawayAwardByAdministrator(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+    status: "voided" | "disqualified",
+  ): RiderGiveawayState {
+    const administrator = this.requireRole(sessionToken, "admin");
+    const normalizedReason = this.requireGiveawayReason(reason);
+    const award = this.giveaways.awardsById.get(awardId);
+    if (
+      !award ||
+      !award.isCurrent ||
+      !award.drawId ||
+      !award.snapshotEntryId ||
+      !["pending_verification", "claimable", "verified"].includes(award.status)
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const giveaway = this.requireGiveawayByAward(award);
+    const reasonDigest = this.hashGiveawayReason(normalizedReason);
+    award.status = status;
+    award.reasonDigest = reasonDigest;
+    award.updatedAt = new Date().toISOString();
+    this.auditGiveaway(
+      giveaway,
+      administrator.id,
+      status === "voided" ? "GIVEAWAY_AWARD_VOIDED" : "GIVEAWAY_AWARD_DISQUALIFIED",
+      "award",
+      award.id,
+      {
+        awardId: award.id,
+        drawId: award.drawId,
+        status,
+        reasonDigest,
+      },
+    );
+    return this.toRiderGiveawayState(giveaway, award.winnerUserId);
   }
 
   private createGiveawayEntryFromPath(

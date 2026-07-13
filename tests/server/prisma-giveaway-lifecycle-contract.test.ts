@@ -114,13 +114,73 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).not.toContain("SKIP LOCKED");
   });
 
-  test("keeps locking, snapshots, and draw/claim fulfillment work deferred", () => {
-    expect(prismaBackendSource).not.toMatch(/async lockGiveaway\(/);
-    expect(prismaBackendSource).not.toMatch(/async runGiveawayDraw\(/);
-    expect(prismaBackendSource).not.toMatch(/async publishGiveawayDraw\(/);
-    expect(prismaBackendSource).not.toMatch(/async redrawGiveawayAward\(/);
+  test("persists locked snapshots and fair draw lifecycle operations", () => {
+    for (const method of [
+      "lockGiveaway",
+      "runGiveawayDraw",
+      "selectManualGiveawayAward",
+      "publishGiveawayDraw",
+      "declineGiveawayAward",
+      "voidGiveawayAward",
+      "disqualifyGiveawayAward",
+      "redrawGiveawayAward",
+    ]) {
+      expect(prismaBackendSource).toMatch(new RegExp(`async ${method}\\(`));
+    }
+    expect(prismaBackendSource).toContain("rankFrozenWeightedEntries");
+    expect(prismaBackendSource).toContain("GIVEAWAY_DRAW_ENCRYPTION_KEY");
+    expect(prismaBackendSource).toContain("buildPublicDrawVerification");
+    expect(prismaBackendSource).not.toContain("Math.random");
     expect(prismaBackendSource).not.toMatch(/async verifyGiveawayClaim\(/);
     expect(prismaBackendSource).not.toMatch(/async fulfillGiveawayAward\(/);
+  });
+
+  test("locks giveaway entries before immediate award allocation during snapshot locking", () => {
+    const lockSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async lockGiveaway"),
+      prismaBackendSource.indexOf("async runGiveawayDraw"),
+    );
+    const initialEntryLockPosition = lockSource.indexOf(
+      "await this.lockGiveawayEntries(tx, giveaway.id);",
+    );
+    const reconciliationPosition = lockSource.indexOf("for (const riderId of riderIds)");
+    const entryLockPosition = lockSource.indexOf(
+      "const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id)",
+    );
+    const immediateAllocationPosition = lockSource.indexOf(
+      "await this.reallocateImmediateGiveawayAwards(tx, giveaway)",
+    );
+
+    expect(initialEntryLockPosition).toBeGreaterThanOrEqual(0);
+    expect(initialEntryLockPosition).toBeLessThan(reconciliationPosition);
+    expect(lockSource).toContain("reconcileDirectAwards: false");
+    expect(entryLockPosition).toBeGreaterThanOrEqual(0);
+    expect(immediateAllocationPosition).toBeGreaterThan(entryLockPosition);
+  });
+
+  test("rejects publication of a non-completed draw before exposing the committed seed", () => {
+    const publishSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async publishGiveawayDraw"),
+      prismaBackendSource.indexOf("async declineGiveawayAward"),
+    );
+
+    expect(publishSource).toContain('if (draw.status !== "completed")');
+  });
+
+  test("binds idempotent draw replays to the exact action inputs", () => {
+    expect(prismaBackendSource).toContain("assertGiveawayDrawReplayInput");
+    expect(prismaBackendSource).toContain('action: "initial_random_draw"');
+    expect(prismaBackendSource).toContain('action: "manual_selection"');
+    expect(prismaBackendSource).toContain('action: "redraw"');
+    const drawDigestSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private calculateGiveawayDrawInputDigest"),
+      prismaBackendSource.indexOf("private calculateGiveawayDrawResultDigest"),
+    );
+
+    expect(drawDigestSource).toContain("reasonDigest: actionInput.reasonDigest");
+    expect(drawDigestSource).toContain("prizePoolId: actionInput.prizePoolId ?? null");
+    expect(drawDigestSource).toContain("riderId: actionInput.riderId ?? null");
+    expect(drawDigestSource).toContain("predecessorAwardId: actionInput.predecessorAwardId ?? null");
   });
 
   test("keeps giveaway candidates, source facts, token hashes, and audit payloads out of the global snapshot", () => {
@@ -184,7 +244,25 @@ describe("Prisma giveaway lifecycle contract", () => {
       ),
     ).toHaveLength(2);
     expect(prismaBackendSource).not.toContain("reconcileAutomaticGiveawayEligibilityAfterEvent");
-    expect(openSource).toContain("reconcileAutomaticGiveawayEntry(tx, opened, riderId)");
+    expect(openSource).toContain("reconcileAutomaticGiveawayEntry(tx, opened, riderId, {");
     expect(openSource).not.toContain("reconcileAutomaticGiveawayEligibility(tx, giveaway.eventId)");
+  });
+
+  test("locks all automatic campaign entries before open-time allocation locks pools", () => {
+    const openSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async openGiveaway"),
+      prismaBackendSource.indexOf("async pauseGiveaway"),
+    );
+    const entryLockPosition = openSource.indexOf("await this.lockGiveawayEntries(tx, opened.id);");
+    const reconciliationPosition = openSource.indexOf("for (const riderId of riderIds)");
+    const allocationPosition = openSource.indexOf(
+      "await this.reallocateImmediateGiveawayAwards(tx, opened)",
+    );
+
+    expect(entryLockPosition).toBeGreaterThanOrEqual(0);
+    expect(entryLockPosition).toBeLessThan(reconciliationPosition);
+    expect(openSource).toContain("reconcileDirectAwards: false");
+    expect(openSource).toContain("revalidateDirectGiveawayAwardsForLockedEntries");
+    expect(allocationPosition).toBeGreaterThan(reconciliationPosition);
   });
 });

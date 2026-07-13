@@ -1541,6 +1541,9 @@ DECLARE
   entry_eligibility_cycle_at TIMESTAMP(3);
   entry_eligibility_group_ids JSONB;
   entry_eligibility_group_timings JSONB;
+  entry_current_weight INTEGER;
+  entry_opaque_public_reference TEXT;
+  entry_qualified_source_fingerprint TEXT;
   earliest_eligibility_at TIMESTAMP(3);
   qualified_group_count INTEGER;
   distinct_qualified_group_count INTEGER;
@@ -1552,8 +1555,10 @@ BEGIN
   FROM "GiveawaySnapshot"
   WHERE "id" = NEW."snapshotId";
 
-  SELECT "giveawayId", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings"
-    INTO entry_giveaway_id, entry_eligibility_cycle_at, entry_eligibility_group_ids, entry_eligibility_group_timings
+  SELECT "giveawayId", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings",
+         "currentWeight", "opaquePublicReference", "qualifiedSourceFingerprint"
+    INTO entry_giveaway_id, entry_eligibility_cycle_at, entry_eligibility_group_ids, entry_eligibility_group_timings,
+         entry_current_weight, entry_opaque_public_reference, entry_qualified_source_fingerprint
   FROM "GiveawayEntry"
   WHERE "id" = NEW."entryId";
 
@@ -1567,6 +1572,12 @@ BEGIN
     OR NEW."qualifiedEligibilityGroupIds" IS DISTINCT FROM entry_eligibility_group_ids
     OR NEW."qualifiedEligibilityGroupTimings" IS DISTINCT FROM entry_eligibility_group_timings THEN
     RAISE EXCEPTION 'GiveawaySnapshotEntry eligibility facts must match its source entry at lock';
+  END IF;
+
+  IF NEW."frozenWeight" IS DISTINCT FROM entry_current_weight
+    OR NEW."opaquePublicReference" IS DISTINCT FROM entry_opaque_public_reference
+    OR NEW."qualifiedSourceFingerprint" IS DISTINCT FROM entry_qualified_source_fingerprint THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry frozen ranking facts must match its source entry at lock';
   END IF;
 
   IF jsonb_typeof(NEW."qualifiedEligibilityGroupIds") <> 'array'
@@ -1666,7 +1677,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawaySnapshotEntry_parentage_guard"
-BEFORE INSERT OR UPDATE OF "snapshotId", "entryId", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings" ON "GiveawaySnapshotEntry"
+BEFORE INSERT OR UPDATE OF "snapshotId", "entryId", "opaquePublicReference", "frozenWeight", "qualifiedSourceFingerprint", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings" ON "GiveawaySnapshotEntry"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_snapshot_entry_parentage"();
 
 CREATE FUNCTION "validate_giveaway_eligibility_condition_parentage"()

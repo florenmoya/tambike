@@ -11,6 +11,7 @@ import type {
   GiveawayPublicVisibility,
   GiveawayState,
   PublicGiveawayCampaignSummary,
+  PublicGiveawayDrawVerification,
   PublicGiveawayPrizePoolSummary,
   RiderGiveawayState,
   UpdateGiveawayInput,
@@ -53,6 +54,14 @@ import {
   type RegistrationInput,
 } from "./backend";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
+import {
+  buildPublicDrawVerification,
+  createDrawSeedCommitment,
+  decryptDrawSeed,
+  encryptDrawSeed,
+  generateDrawSeed,
+  rankFrozenWeightedEntries,
+} from "./giveaways/draw-engine";
 import {
   assertGiveawayEligibilityTimingIntegrity,
   calculateGiveawayEntryWeightDelta,
@@ -142,6 +151,29 @@ const giveawayConfigurationInclude = {
 type GiveawayConfiguration = Prisma.EventGiveawayGetPayload<{
   include: typeof giveawayConfigurationInclude;
 }>;
+
+const giveawaySnapshotInclude = {
+  entries: { orderBy: { opaquePublicReference: "asc" } },
+} satisfies Prisma.GiveawaySnapshotInclude;
+
+type GiveawaySnapshotWithEntries = Prisma.GiveawaySnapshotGetPayload<{
+  include: typeof giveawaySnapshotInclude;
+}>;
+
+type GiveawayDrawRecord = Prisma.GiveawayDrawGetPayload<Record<string, never>>;
+
+type GiveawayDrawActionInput = {
+  action: "initial_random_draw" | "manual_selection" | "redraw";
+  reasonDigest: string | null;
+  prizePoolId?: string;
+  riderId?: string;
+  predecessorAwardId?: string;
+};
+
+type GiveawayDrawResult = {
+  drawId: string;
+  verification: PublicGiveawayDrawVerification;
+};
 
 type GiveawayQualification = {
   qualifiedGroupIds: string[];
@@ -285,6 +317,10 @@ export class PrismaTambikeBackend {
   static create(databaseUrl: string) {
     const adapter = new PrismaPg(databaseUrl);
     return new PrismaTambikeBackend(new PrismaClient({ adapter }));
+  }
+
+  async disconnect() {
+    await this.prisma.$disconnect();
   }
 
   async getSnapshot(sessionToken?: string) {
@@ -788,15 +824,26 @@ export class PrismaTambikeBackend {
       await tx.eventGiveaway.update({ where: { id: giveaway.id }, data: { status: "open" } });
       const opened = await this.lockGiveawayCampaign(tx, giveaway.id);
       if (opened.entryMode === "automatic") {
-        const riderIds = await this.riderIdsWithGiveawayActivity(tx, opened.eventId);
-        let reconciledAnyEntry = false;
+        const [activityRiderIds, entryRiderRows] = await Promise.all([
+          this.riderIdsWithGiveawayActivity(tx, opened.eventId),
+          tx.giveawayEntry.findMany({
+            where: { giveawayId: opened.id },
+            select: { riderId: true },
+            orderBy: { riderId: "asc" },
+          }),
+        ]);
+        const riderIds = [
+          ...new Set([...activityRiderIds, ...entryRiderRows.map((entry) => entry.riderId)]),
+        ].sort();
+        await this.lockGiveawayEntries(tx, opened.id);
         for (const riderId of riderIds) {
-          reconciledAnyEntry =
-            (await this.reconcileAutomaticGiveawayEntry(tx, opened, riderId)) || reconciledAnyEntry;
+          await this.reconcileAutomaticGiveawayEntry(tx, opened, riderId, {
+            reconcileDirectAwards: false,
+          });
         }
-        if (reconciledAnyEntry) {
-          await this.reallocateImmediateGiveawayAwards(tx, opened);
-        }
+        const lockedEntries = await this.lockGiveawayEntries(tx, opened.id);
+        await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, opened, lockedEntries);
+        await this.reallocateImmediateGiveawayAwards(tx, opened);
       }
       const updated = await this.lockGiveawayCampaign(tx, opened.id);
       await this.auditGiveaway(tx, updated.id, user.id, "GIVEAWAY_OPENED", "giveaway", updated.id, {
@@ -1219,6 +1266,683 @@ export class PrismaTambikeBackend {
       await this.reconcileAutomaticGiveawayEligibility(tx, event.id, rider.id);
 
       return { perkId: perk.id, status: "redeemed" };
+    });
+  }
+
+  async lockGiveaway(sessionToken: string, giveawayId: string) {
+    const organizer = await this.requireUser(sessionToken);
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      const existingSnapshot = await tx.giveawaySnapshot.findUnique({
+        where: { giveawayId: giveaway.id },
+      });
+      if (existingSnapshot) {
+        return this.toGiveawayLockResult(giveaway, existingSnapshot);
+      }
+      if (giveaway.status !== "open" || giveaway.complianceStatus !== "approved") {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+
+      // Validate the key before reconciliation can write any source state.
+      const { seed, encryptedSeed, commitment } = this.createEncryptedGiveawayDrawSeed();
+      const [activityRiderIds, entryRiderRows] = await Promise.all([
+        this.riderIdsWithGiveawayActivity(tx, giveaway.eventId),
+        tx.giveawayEntry.findMany({
+          where: { giveawayId: giveaway.id },
+          select: { riderId: true },
+          orderBy: { riderId: "asc" },
+        }),
+      ]);
+      const riderIds = [...new Set([...activityRiderIds, ...entryRiderRows.map((entry) => entry.riderId)])]
+        .sort();
+      // Take the complete entry lock set before candidate reconciliation can
+      // invalidate direct awards. That way any later pool/item work follows
+      // the standalone campaign lock order.
+      await this.lockGiveawayEntries(tx, giveaway.id);
+      for (const riderId of riderIds) {
+        if (giveaway.entryMode === "automatic") {
+          await this.reconcileAutomaticGiveawayEntry(tx, giveaway, riderId, {
+            reconcileDirectAwards: false,
+          });
+        } else {
+          await this.reconcileGiveawayEntryForLock(tx, giveaway, riderId, {
+            reconcileDirectAwards: false,
+          });
+        }
+      }
+      // Lock entries before allocation takes any pool or item lock. This keeps
+      // standalone campaign mutations in the agreed campaign -> entry -> pool
+      // -> item -> award order while the authoritative candidate set freezes.
+      const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id);
+      await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, giveaway, lockedEntries);
+      await this.reallocateImmediateGiveawayAwards(tx, giveaway);
+
+      const eligibleEntries = lockedEntries.filter((entry) => entry.status === "eligible");
+      const mechanics = this.currentGiveawayMechanics(giveaway);
+      const configDigest = this.calculateGiveawayConfigDigest(giveaway, mechanics.id);
+      const frozenEntries = eligibleEntries.map((entry) => {
+        const qualifiedEligibilityGroupIds = this.entryQualifiedGroupIds(entry);
+        const qualifiedEligibilityGroupTimings = this.entryQualifiedGroupTimings(entry);
+        return {
+          id: `giveaway-snapshot-entry-${randomUUID()}`,
+          entryId: entry.id,
+          opaquePublicReference: entry.opaquePublicReference,
+          frozenWeight: entry.currentWeight,
+          eligibilityCycleAt: entry.eligibilityCycleAt,
+          qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+          qualifiedEligibilityGroupIds,
+          qualifiedEligibilityGroupTimings,
+          rankSourceDigest: this.calculateGiveawayRankSourceDigest({
+            entryId: entry.id,
+            opaquePublicReference: entry.opaquePublicReference,
+            frozenWeight: entry.currentWeight,
+            eligibilityCycleAt: entry.eligibilityCycleAt,
+            qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+            qualifiedEligibilityGroupIds,
+            qualifiedEligibilityGroupTimings,
+          }),
+        };
+      });
+      const snapshotDigest = this.calculateGiveawaySnapshotDigest(
+        giveaway.id,
+        mechanics.id,
+        configDigest,
+        frozenEntries,
+      );
+      const snapshot = await tx.giveawaySnapshot.create({
+        data: {
+          id: `giveaway-snapshot-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          mechanicsVersionId: mechanics.id,
+          configDigest,
+          snapshotDigest,
+          candidateCount: frozenEntries.length,
+          seedCommitment: commitment,
+          encryptedSeedCiphertext: encryptedSeed.ciphertext,
+          encryptedSeedIv: encryptedSeed.iv,
+          encryptedSeedAuthTag: encryptedSeed.authTag,
+          encryptionKeyVersion: "env-v1",
+          algorithmVersion: "hmac-sha256-v1",
+          lockedByUserId: organizer.id,
+          entries: {
+            create: frozenEntries.map((entry) => ({
+              id: entry.id,
+              entryId: entry.entryId,
+              opaquePublicReference: entry.opaquePublicReference,
+              frozenWeight: entry.frozenWeight,
+              eligibilityCycleAt: entry.eligibilityCycleAt,
+              qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+              qualifiedEligibilityGroupIds: this.toJsonValue(entry.qualifiedEligibilityGroupIds),
+              qualifiedEligibilityGroupTimings: this.toJsonValue(
+                entry.qualifiedEligibilityGroupTimings,
+              ),
+              rankSourceDigest: entry.rankSourceDigest,
+            })),
+          },
+        },
+      });
+      await tx.giveawayEntry.updateMany({
+        where: { giveawayId: giveaway.id, status: "eligible" },
+        data: { status: "locked" },
+      });
+      await tx.eventGiveaway.update({
+        where: { id: giveaway.id },
+        data: { status: "locked" },
+      });
+      const locked = await this.lockGiveawayCampaign(tx, giveaway.id);
+      await this.auditGiveaway(tx, giveaway.id, organizer.id, "GIVEAWAY_LOCKED", "giveaway", giveaway.id, {
+        candidateCount: snapshot.candidateCount,
+        snapshotId: snapshot.id,
+        snapshotDigest,
+        commitment,
+        seedByteLength: seed.byteLength,
+      });
+      return this.toGiveawayLockResult(locked, snapshot);
+    });
+  }
+
+  async runGiveawayDraw(sessionToken: string, input: unknown): Promise<GiveawayDrawResult> {
+    const parsed = this.parseGiveawayDrawInput(input);
+    const organizer = await this.requireUser(sessionToken);
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, parsed.giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const actionInput: GiveawayDrawActionInput = {
+        action: "initial_random_draw",
+        reasonDigest: parsed.reason ? this.hashGiveawayReason(parsed.reason) : null,
+      };
+      const inputDigest = this.calculateGiveawayDrawInputDigest(
+        giveaway,
+        snapshot,
+        "hmac-sha256-v1",
+        actionInput,
+      );
+      const replay = await tx.giveawayDraw.findUnique({
+        where: {
+          giveawayId_idempotencyKey: {
+            giveawayId: giveaway.id,
+            idempotencyKey: parsed.idempotencyKey,
+          },
+        },
+      });
+      if (replay) {
+        this.assertGiveawayDrawReplayInput(replay, inputDigest);
+        return this.toGiveawayDrawResult(giveaway, snapshot, replay);
+      }
+      if (!snapshot || !["locked", "drawing"].includes(giveaway.status)) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const existingInitialDraw = await tx.giveawayDraw.findFirst({
+        where: {
+          giveawayId: giveaway.id,
+          type: "initial",
+          algorithmVersion: "hmac-sha256-v1",
+        },
+        select: { id: true },
+      });
+      if (existingInitialDraw) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+
+      const seed = this.decryptGiveawayDrawSeed(snapshot);
+      const entriesById = new Map(
+        (await this.lockGiveawayEntries(tx, giveaway.id)).map((entry) => [entry.id, entry]),
+      );
+      const draw = await tx.giveawayDraw.create({
+        data: {
+          id: `giveaway-draw-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          snapshotId: snapshot.id,
+          sequence: await this.nextGiveawayDrawSequence(tx, giveaway.id),
+          type: "initial",
+          status: "completed",
+          idempotencyKey: parsed.idempotencyKey,
+          algorithmVersion: "hmac-sha256-v1",
+          inputDigest,
+          initiatedByUserId: organizer.id,
+          reasonDigest: actionInput.reasonDigest,
+          completedAt: new Date(),
+        },
+      });
+      const rankedUnits = rankFrozenWeightedEntries({
+        giveawayId: giveaway.id,
+        seed,
+        entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
+      });
+      const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
+      const awarded = [] as Array<{
+        prizePoolId: string;
+        prizeItemId: string | null;
+        snapshotEntryId: string | null;
+        rank: number | null;
+        predecessorAwardId: string | null;
+      }>;
+      for (const pool of giveaway.prizePools.filter((candidate) => candidate.awardMode === "random_draw")) {
+        await this.lockGiveawayPrizePool(tx, pool.id);
+        const selectedUnitKeys = new Set<string>();
+        while (true) {
+          let nextUnit:
+            | ReturnType<typeof rankFrozenWeightedEntries>[number]
+            | undefined;
+          for (const unit of rankedUnits) {
+            const unitKey = `${unit.entryId}:${unit.unitOrdinal}`;
+            const snapshotEntry = snapshotEntryById.get(unit.entryId);
+            const entry = snapshotEntry ? entriesById.get(snapshotEntry.entryId) : undefined;
+            if (
+              selectedUnitKeys.has(unitKey) ||
+              !snapshotEntry ||
+              !entry ||
+              !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+              !(await this.canCreateDrawGiveawayAward(tx, giveaway, pool, entry.riderId))
+            ) {
+              continue;
+            }
+            nextUnit = unit;
+            break;
+          }
+          if (!nextUnit) break;
+          const prizeItemId = await this.lockNextAvailablePrizeItem(tx, pool.id);
+          if (!prizeItemId) break;
+          const snapshotEntry = snapshotEntryById.get(nextUnit.entryId);
+          const entry = snapshotEntry ? entriesById.get(snapshotEntry.entryId) : undefined;
+          if (!snapshotEntry || !entry) {
+            throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+          }
+          selectedUnitKeys.add(`${nextUnit.entryId}:${nextUnit.unitOrdinal}`);
+          const award = await this.createDrawGiveawayAward(tx, giveaway, pool, {
+            entry,
+            draw,
+            snapshotEntry,
+            prizeItemId,
+            rank: rankedUnits.indexOf(nextUnit) + 1,
+            reservePrizeItem: true,
+          });
+          awarded.push({
+            prizePoolId: award.prizePoolId,
+            prizeItemId: award.prizeItemId,
+            snapshotEntryId: award.snapshotEntryId,
+            rank: award.rank,
+            predecessorAwardId: award.predecessorAwardId,
+          });
+        }
+      }
+      const resultDigest = this.calculateGiveawayDrawResultDigest(giveaway.id, draw, awarded);
+      const completedDraw = await tx.giveawayDraw.update({
+        where: { id: draw.id },
+        data: { resultDigest },
+      });
+      if (giveaway.status === "locked") {
+        await tx.eventGiveaway.update({ where: { id: giveaway.id }, data: { status: "drawing" } });
+      }
+      await this.auditGiveaway(tx, giveaway.id, organizer.id, "GIVEAWAY_DRAW_COMPLETED", "draw", draw.id, {
+        drawId: draw.id,
+        sequence: draw.sequence,
+        resultDigest,
+        awardCount: awarded.length,
+      });
+      return this.toGiveawayDrawResult(giveaway, snapshot, completedDraw);
+    });
+  }
+
+  async selectManualGiveawayAward(
+    sessionToken: string,
+    input: unknown,
+  ): Promise<GiveawayDrawResult> {
+    const parsed = this.parseManualGiveawayAwardInput(input);
+    const organizer = await this.requireUser(sessionToken);
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, parsed.giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const actionInput: GiveawayDrawActionInput = {
+        action: "manual_selection",
+        reasonDigest: this.hashGiveawayReason(parsed.reason),
+        prizePoolId: parsed.prizePoolId,
+        riderId: parsed.riderId,
+      };
+      const inputDigest = this.calculateGiveawayDrawInputDigest(
+        giveaway,
+        snapshot,
+        "manual-selection-v1",
+        actionInput,
+      );
+      const replay = await tx.giveawayDraw.findUnique({
+        where: {
+          giveawayId_idempotencyKey: {
+            giveawayId: giveaway.id,
+            idempotencyKey: parsed.idempotencyKey,
+          },
+        },
+      });
+      if (replay) {
+        this.assertGiveawayDrawReplayInput(replay, inputDigest);
+        return this.toGiveawayDrawResult(giveaway, snapshot, replay);
+      }
+      if (!snapshot || !["locked", "drawing"].includes(giveaway.status)) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === parsed.prizePoolId);
+      if (!pool || pool.awardMode !== "manual_selection") {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const entriesById = new Map(
+        (await this.lockGiveawayEntries(tx, giveaway.id)).map((entry) => [entry.id, entry]),
+      );
+      const snapshotEntry = snapshot.entries.find(
+        (entry) => entriesById.get(entry.entryId)?.riderId === parsed.riderId,
+      );
+      const entry = snapshotEntry ? entriesById.get(snapshotEntry.entryId) : undefined;
+      if (
+        !snapshotEntry ||
+        !entry ||
+        !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+        !(await this.canCreateDrawGiveawayAward(tx, giveaway, pool, entry.riderId))
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      await this.lockGiveawayPrizePool(tx, pool.id);
+      const prizeItemId = await this.lockNextAvailablePrizeItem(tx, pool.id);
+      if (!prizeItemId) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const draw = await tx.giveawayDraw.create({
+        data: {
+          id: `giveaway-draw-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          snapshotId: snapshot.id,
+          sequence: await this.nextGiveawayDrawSequence(tx, giveaway.id),
+          type: "initial",
+          status: "completed",
+          idempotencyKey: parsed.idempotencyKey,
+          algorithmVersion: "manual-selection-v1",
+          inputDigest,
+          initiatedByUserId: organizer.id,
+          reasonDigest: actionInput.reasonDigest,
+          completedAt: new Date(),
+        },
+      });
+      const award = await this.createDrawGiveawayAward(tx, giveaway, pool, {
+        entry,
+        draw,
+        snapshotEntry,
+        prizeItemId,
+        rank: 1,
+        reservePrizeItem: true,
+      });
+      const resultDigest = this.calculateGiveawayDrawResultDigest(giveaway.id, draw, [
+        {
+          prizePoolId: award.prizePoolId,
+          prizeItemId: award.prizeItemId,
+          snapshotEntryId: award.snapshotEntryId,
+          rank: award.rank,
+          predecessorAwardId: award.predecessorAwardId,
+        },
+      ]);
+      const completedDraw = await tx.giveawayDraw.update({
+        where: { id: draw.id },
+        data: { resultDigest },
+      });
+      if (giveaway.status === "locked") {
+        await tx.eventGiveaway.update({ where: { id: giveaway.id }, data: { status: "drawing" } });
+      }
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        organizer.id,
+        "GIVEAWAY_MANUAL_AWARD_SELECTED",
+        "award",
+        award.id,
+        {
+          awardId: award.id,
+          drawId: draw.id,
+          reasonDigest: draw.reasonDigest,
+        },
+      );
+      return this.toGiveawayDrawResult(giveaway, snapshot, completedDraw);
+    });
+  }
+
+  async publishGiveawayDraw(
+    sessionToken: string,
+    giveawayId: string,
+    drawId: string,
+  ): Promise<PublicGiveawayDrawVerification> {
+    const organizer = await this.requireUser(sessionToken);
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      if (giveaway.status === "suspended") {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const draw = await tx.giveawayDraw.findUnique({ where: { id: drawId } });
+      if (!draw) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      if (draw.giveawayId !== giveaway.id || draw.snapshotId !== snapshot.id) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const seed = this.decryptGiveawayDrawSeed(snapshot);
+      if (draw.status === "published") {
+        return this.buildGiveawayDrawVerification(giveaway, snapshot, draw, seed, true);
+      }
+      if (draw.status !== "completed") {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      if (giveaway.status !== "drawing") {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const publishedAt = snapshot.seedRevealedAt ?? new Date();
+      if (!snapshot.seedRevealedAt) {
+        await tx.giveawaySnapshot.update({
+          where: { id: snapshot.id },
+          data: { seedRevealedAt: publishedAt },
+        });
+      }
+      await tx.giveawayDraw.updateMany({
+        where: { snapshotId: snapshot.id, status: "completed" },
+        data: { status: "published", publishedAt },
+      });
+      await tx.eventGiveaway.update({ where: { id: giveaway.id }, data: { status: "claims_open" } });
+      const publishedDraw = await tx.giveawayDraw.findUnique({ where: { id: draw.id } });
+      if (!publishedDraw) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      await this.auditGiveaway(tx, giveaway.id, organizer.id, "GIVEAWAY_DRAW_PUBLISHED", "draw", draw.id, {
+        drawId: draw.id,
+        resultDigest: publishedDraw.resultDigest,
+      });
+      return this.buildGiveawayDrawVerification(
+        giveaway,
+        snapshot,
+        publishedDraw,
+        seed,
+        true,
+      );
+    });
+  }
+
+  async declineGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    const rider = await this.requireGiveawayRider(sessionToken);
+    const normalizedReason = this.requireGiveawayReason(reason);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: awardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      const award = await this.lockGiveawayAward(tx, awardId);
+      if (
+        !award ||
+        award.giveawayId !== giveaway.id ||
+        award.winnerUserId !== rider.id ||
+        !award.isCurrent ||
+        !["pending_verification", "claimable", "verified"].includes(award.status)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const reasonDigest = this.hashGiveawayReason(normalizedReason);
+      await tx.giveawayAward.update({
+        where: { id: award.id },
+        data: { status: "declined", reasonDigest },
+      });
+      await this.auditGiveaway(tx, giveaway.id, rider.id, "GIVEAWAY_AWARD_DECLINED", "award", award.id, {
+        awardId: award.id,
+        reasonDigest,
+      });
+      return this.toRiderGiveawayState(giveaway, rider.id, tx);
+    });
+  }
+
+  async voidGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    return this.resolveGiveawayAwardByAdministrator(sessionToken, awardId, reason, "voided");
+  }
+
+  async disqualifyGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+  ): Promise<RiderGiveawayState> {
+    return this.resolveGiveawayAwardByAdministrator(sessionToken, awardId, reason, "disqualified");
+  }
+
+  async redrawGiveawayAward(sessionToken: string, input: unknown): Promise<GiveawayDrawResult> {
+    const parsed = this.parseGiveawayRedrawInput(input);
+    const organizer = await this.requireUser(sessionToken);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: parsed.awardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const actionInput: GiveawayDrawActionInput = {
+        action: "redraw",
+        reasonDigest: this.hashGiveawayReason(parsed.reason),
+        predecessorAwardId: parsed.awardId,
+      };
+      const inputDigest = this.calculateGiveawayDrawInputDigest(
+        giveaway,
+        snapshot,
+        "hmac-sha256-v1",
+        actionInput,
+      );
+      const replay = await tx.giveawayDraw.findUnique({
+        where: {
+          giveawayId_idempotencyKey: {
+            giveawayId: giveaway.id,
+            idempotencyKey: parsed.idempotencyKey,
+          },
+        },
+      });
+      if (replay) {
+        this.assertGiveawayDrawReplayInput(replay, inputDigest);
+        return this.toGiveawayDrawResult(giveaway, snapshot, replay);
+      }
+      if (giveaway.status === "suspended" || !["drawing", "claims_open"].includes(giveaway.status)) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const award = await tx.giveawayAward.findUnique({ where: { id: parsed.awardId } });
+      if (
+        !award ||
+        award.giveawayId !== giveaway.id ||
+        !award.isCurrent ||
+        !["declined", "disqualified", "expired", "voided"].includes(award.status) ||
+        !award.drawId ||
+        !award.snapshotEntryId ||
+        !award.prizeItemId
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const originalDraw = await tx.giveawayDraw.findUnique({ where: { id: award.drawId } });
+      const entries = await this.lockGiveawayEntries(tx, giveaway.id);
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+      if (
+        !originalDraw ||
+        originalDraw.algorithmVersion !== "hmac-sha256-v1" ||
+        originalDraw.snapshotId !== snapshot.id ||
+        !pool ||
+        pool.awardMode !== "random_draw"
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+      const seed = this.decryptGiveawayDrawSeed(snapshot);
+      const rankedUnits = rankFrozenWeightedEntries({
+        giveawayId: giveaway.id,
+        seed,
+        entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
+      });
+      const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
+      const selectedSnapshotEntryRows = await tx.giveawayAward.findMany({
+        where: {
+          giveawayId: giveaway.id,
+          prizePoolId: pool.id,
+          snapshotEntryId: { not: null },
+        },
+        select: { snapshotEntryId: true },
+      });
+      const selectedSnapshotEntryIds = new Set(
+        selectedSnapshotEntryRows.flatMap((candidate) =>
+          candidate.snapshotEntryId ? [candidate.snapshotEntryId] : [],
+        ),
+      );
+      let nextUnit: ReturnType<typeof rankFrozenWeightedEntries>[number] | undefined;
+      for (const unit of rankedUnits) {
+        const snapshotEntry = snapshotEntryById.get(unit.entryId);
+        const entry = snapshotEntry ? entriesById.get(snapshotEntry.entryId) : undefined;
+        if (
+          !snapshotEntry ||
+          !entry ||
+          selectedSnapshotEntryIds.has(snapshotEntry.id) ||
+          !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+          !(await this.canCreateDrawGiveawayAward(tx, giveaway, pool, entry.riderId, award.id))
+        ) {
+          continue;
+        }
+        nextUnit = unit;
+        break;
+      }
+      if (!nextUnit) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      const nextSnapshotEntry = snapshotEntryById.get(nextUnit.entryId);
+      const nextEntry = nextSnapshotEntry ? entriesById.get(nextSnapshotEntry.entryId) : undefined;
+      if (!nextSnapshotEntry || !nextEntry) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      await this.lockGiveawayPrizePool(tx, pool.id);
+      const prizeItem = await this.lockGiveawayPrizeItem(tx, award.prizeItemId);
+      if (!prizeItem || prizeItem.prizePoolId !== pool.id || prizeItem.status !== "reserved") {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const currentAward = await this.lockGiveawayAward(tx, award.id);
+      if (
+        !currentAward ||
+        !currentAward.isCurrent ||
+        !["declined", "disqualified", "expired", "voided"].includes(currentAward.status)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const draw = await tx.giveawayDraw.create({
+        data: {
+          id: `giveaway-draw-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          snapshotId: snapshot.id,
+          sequence: await this.nextGiveawayDrawSequence(tx, giveaway.id),
+          type: "redraw",
+          status: snapshot.seedRevealedAt ? "published" : "completed",
+          idempotencyKey: parsed.idempotencyKey,
+          algorithmVersion: "hmac-sha256-v1",
+          inputDigest,
+          initiatedByUserId: organizer.id,
+          reasonDigest: actionInput.reasonDigest,
+          completedAt: new Date(),
+          publishedAt: snapshot.seedRevealedAt,
+        },
+      });
+      // The partial current-prize-item index requires this transition before
+      // inserting the replacement. The transaction rolls it back if insertion fails.
+      await tx.giveawayAward.update({
+        where: { id: currentAward.id },
+        data: { isCurrent: false, status: "superseded" },
+      });
+      const replacement = await this.createDrawGiveawayAward(tx, giveaway, pool, {
+        entry: nextEntry,
+        draw,
+        snapshotEntry: nextSnapshotEntry,
+        prizeItemId: prizeItem.id,
+        rank: rankedUnits.indexOf(nextUnit) + 1,
+        predecessorAwardId: currentAward.id,
+        reservePrizeItem: false,
+      });
+      const resultDigest = this.calculateGiveawayDrawResultDigest(giveaway.id, draw, [
+        {
+          prizePoolId: replacement.prizePoolId,
+          prizeItemId: replacement.prizeItemId,
+          snapshotEntryId: replacement.snapshotEntryId,
+          rank: replacement.rank,
+          predecessorAwardId: replacement.predecessorAwardId,
+        },
+      ]);
+      const completedDraw = await tx.giveawayDraw.update({
+        where: { id: draw.id },
+        data: { resultDigest },
+      });
+      await this.auditGiveaway(tx, giveaway.id, organizer.id, "GIVEAWAY_AWARD_REDRAWN", "award", replacement.id, {
+        awardId: replacement.id,
+        predecessorAwardId: currentAward.id,
+        drawId: draw.id,
+        reasonDigest: draw.reasonDigest,
+      });
+      return this.toGiveawayDrawResult(giveaway, snapshot, completedDraw);
     });
   }
 
@@ -1925,11 +2649,332 @@ export class PrismaTambikeBackend {
     };
   }
 
+  private parseGiveawayDrawInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      typeof record.giveawayId !== "string" ||
+      !record.giveawayId.trim() ||
+      typeof record.idempotencyKey !== "string" ||
+      !record.idempotencyKey.trim() ||
+      (record.reason !== undefined && (typeof record.reason !== "string" || !record.reason.trim()))
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return {
+      giveawayId: record.giveawayId.trim(),
+      idempotencyKey: record.idempotencyKey.trim(),
+      reason: typeof record.reason === "string" ? record.reason.trim() : undefined,
+    };
+  }
+
+  private parseGiveawayRedrawInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      typeof record.awardId !== "string" ||
+      !record.awardId.trim() ||
+      typeof record.idempotencyKey !== "string" ||
+      !record.idempotencyKey.trim()
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return {
+      awardId: record.awardId.trim(),
+      idempotencyKey: record.idempotencyKey.trim(),
+      reason: this.requireGiveawayReason(record.reason),
+    };
+  }
+
+  private parseManualGiveawayAwardInput(input: unknown) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    for (const field of ["giveawayId", "prizePoolId", "riderId", "idempotencyKey"] as const) {
+      if (typeof record[field] !== "string" || !record[field].trim()) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+    }
+    return {
+      giveawayId: (record.giveawayId as string).trim(),
+      prizePoolId: (record.prizePoolId as string).trim(),
+      riderId: (record.riderId as string).trim(),
+      idempotencyKey: (record.idempotencyKey as string).trim(),
+      reason: this.requireGiveawayReason(record.reason),
+    };
+  }
+
   private requireGiveawayReason(reason: unknown) {
     if (typeof reason !== "string" || !reason.trim()) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return reason.trim();
+  }
+
+  private createEncryptedGiveawayDrawSeed() {
+    const encryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+    try {
+      const seed = generateDrawSeed();
+      return {
+        seed,
+        encryptedSeed: encryptDrawSeed(seed, encryptionKey),
+        commitment: createDrawSeedCommitment(seed),
+      };
+    } catch {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+  }
+
+  private decryptGiveawayDrawSeed(
+    snapshot: Pick<
+      GiveawaySnapshotWithEntries,
+      "encryptedSeedCiphertext" | "encryptedSeedIv" | "encryptedSeedAuthTag"
+    >,
+  ) {
+    const encryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+    try {
+      return decryptDrawSeed(
+        {
+          algorithm: "aes-256-gcm",
+          ciphertext: snapshot.encryptedSeedCiphertext,
+          iv: snapshot.encryptedSeedIv,
+          authTag: snapshot.encryptedSeedAuthTag,
+        },
+        encryptionKey,
+      );
+    } catch {
+      throw new BackendError(
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+        "GIVEAWAY_DRAW_CONFIGURATION_ERROR",
+      );
+    }
+  }
+
+  private toGiveawayLockResult(
+    giveaway: GiveawayConfiguration,
+    snapshot: Pick<
+      GiveawaySnapshotWithEntries,
+      "id" | "candidateCount" | "snapshotDigest" | "seedCommitment" | "algorithmVersion"
+    >,
+  ) {
+    return {
+      ...this.toGiveawayCampaignView(giveaway),
+      snapshot: {
+        id: snapshot.id,
+        candidateCount: snapshot.candidateCount,
+        snapshotDigest: snapshot.snapshotDigest,
+        commitment: snapshot.seedCommitment,
+        algorithmVersion: snapshot.algorithmVersion,
+      },
+    };
+  }
+
+  private buildGiveawayDrawVerification(
+    giveaway: GiveawayConfiguration,
+    snapshot: Pick<
+      GiveawaySnapshotWithEntries,
+      "seedCommitment" | "snapshotDigest" | "candidateCount"
+    >,
+    draw: Pick<GiveawayDrawRecord, "algorithmVersion" | "resultDigest">,
+    seed: Uint8Array,
+    published: boolean,
+  ) {
+    if (!draw.resultDigest) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    return buildPublicDrawVerification({
+      giveawayId: giveaway.id,
+      published,
+      seed: published ? seed : undefined,
+      commitment: snapshot.seedCommitment,
+      snapshotDigest: snapshot.snapshotDigest,
+      snapshotCount: snapshot.candidateCount,
+      algorithmVersion: draw.algorithmVersion,
+      drawDigest: draw.resultDigest,
+    });
+  }
+
+  private toGiveawayDrawResult(
+    giveaway: GiveawayConfiguration,
+    snapshot: GiveawaySnapshotWithEntries,
+    draw: GiveawayDrawRecord,
+  ): GiveawayDrawResult {
+    const published = Boolean(snapshot.seedRevealedAt);
+    const seed = published ? this.decryptGiveawayDrawSeed(snapshot) : new Uint8Array();
+    return {
+      drawId: draw.id,
+      verification: this.buildGiveawayDrawVerification(giveaway, snapshot, draw, seed, published),
+    };
+  }
+
+  private calculateGiveawayConfigDigest(giveaway: GiveawayConfiguration, mechanicsVersionId: string) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          mechanicsVersionId,
+          entryMode: giveaway.entryMode,
+          maxEntriesPerRider: giveaway.maxEntriesPerRider,
+          maxWinsPerRider: giveaway.maxWinsPerRider,
+          maxWinsTotal: giveaway.maxWinsTotal,
+          eligibilityGroups: giveaway.eligibilityGroups.map((group) => ({
+            id: group.id,
+            position: group.position,
+            entryWeight: group.entryWeight,
+            enabled: group.enabled,
+            conditions: group.conditions.map((condition) => condition.config),
+          })),
+          prizePools: giveaway.prizePools.map((pool) => ({
+            id: pool.id,
+            position: pool.position,
+            awardMode: pool.awardMode,
+            inventoryKind: pool.inventoryLimit === null ? "unlimited" : "finite",
+            inventoryLimit: pool.inventoryLimit,
+            perRiderLimit: pool.maxWinsPerRider,
+            eligibilityGroupIds: pool.eligibilityGroups.map((link) => link.eligibilityGroupId),
+            itemIds: pool.prizeItems.map((item) => item.id),
+          })),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private calculateGiveawayRankSourceDigest(input: {
+    entryId: string;
+    opaquePublicReference: string;
+    frozenWeight: number;
+    eligibilityCycleAt: Date;
+    qualifiedSourceFingerprint: string;
+    qualifiedEligibilityGroupIds: string[];
+    qualifiedEligibilityGroupTimings: GiveawayEligibilityGroupTiming[];
+  }) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          entryId: input.entryId,
+          opaquePublicReference: input.opaquePublicReference,
+          eligibilityCycleAt: input.eligibilityCycleAt.toISOString(),
+          qualifiedSourceFingerprint: input.qualifiedSourceFingerprint,
+          qualifiedGroupIds: input.qualifiedEligibilityGroupIds,
+          qualifiedEligibilityGroupTimings: input.qualifiedEligibilityGroupTimings,
+          weight: input.frozenWeight,
+        }),
+      )
+      .digest("hex");
+  }
+
+  private calculateGiveawaySnapshotDigest(
+    giveawayId: string,
+    mechanicsVersionId: string,
+    configDigest: string,
+    entries: Array<{
+      entryId: string;
+      opaquePublicReference: string;
+      frozenWeight: number;
+      eligibilityCycleAt: Date;
+      qualifiedSourceFingerprint: string;
+      qualifiedEligibilityGroupIds: string[];
+      qualifiedEligibilityGroupTimings: GiveawayEligibilityGroupTiming[];
+      rankSourceDigest: string;
+    }>,
+  ) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId,
+          mechanicsVersionId,
+          configDigest,
+          entries: entries.map((entry) => ({
+            entryId: entry.entryId,
+            opaquePublicReference: entry.opaquePublicReference,
+            frozenWeight: entry.frozenWeight,
+            eligibilityCycleAt: entry.eligibilityCycleAt.toISOString(),
+            qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
+            qualifiedGroupIds: entry.qualifiedEligibilityGroupIds,
+            qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
+            rankSourceDigest: entry.rankSourceDigest,
+          })),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private calculateGiveawayDrawInputDigest(
+    giveaway: GiveawayConfiguration,
+    snapshot: Pick<GiveawaySnapshotWithEntries, "snapshotDigest">,
+    algorithmVersion: string,
+    actionInput: GiveawayDrawActionInput,
+  ) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId: giveaway.id,
+          snapshotDigest: snapshot.snapshotDigest,
+          algorithmVersion,
+          action: actionInput.action,
+          reasonDigest: actionInput.reasonDigest,
+          prizePoolId: actionInput.prizePoolId ?? null,
+          riderId: actionInput.riderId ?? null,
+          predecessorAwardId: actionInput.predecessorAwardId ?? null,
+          prizePools: giveaway.prizePools.map((pool) => ({
+            id: pool.id,
+            awardMode: pool.awardMode,
+            itemIds: pool.prizeItems.map((item) => item.id),
+          })),
+        }),
+      )
+      .digest("hex");
+  }
+
+  private assertGiveawayDrawReplayInput(
+    draw: Pick<GiveawayDrawRecord, "inputDigest">,
+    expectedInputDigest: string,
+  ) {
+    if (draw.inputDigest !== expectedInputDigest) {
+      throw new BackendError("GIVEAWAY_IDEMPOTENCY_CONFLICT", "GIVEAWAY_IDEMPOTENCY_CONFLICT");
+    }
+  }
+
+  private calculateGiveawayDrawResultDigest(
+    giveawayId: string,
+    draw: Pick<GiveawayDrawRecord, "id" | "snapshotId" | "algorithmVersion">,
+    awards: Array<{
+      prizePoolId: string;
+      prizeItemId: string | null;
+      snapshotEntryId: string | null;
+      rank: number | null;
+      predecessorAwardId: string | null;
+    }>,
+  ) {
+    return createHash("sha256")
+      .update(
+        canonicalizeJson({
+          giveawayId,
+          drawId: draw.id,
+          snapshotId: draw.snapshotId,
+          algorithmVersion: draw.algorithmVersion,
+          awards,
+        }),
+      )
+      .digest("hex");
   }
 
   private async requireGiveawayRider(sessionToken: string) {
@@ -2045,6 +3090,59 @@ export class PrismaTambikeBackend {
     return tx.giveawayEntry.findUnique({
       where: { giveawayId_riderId: { giveawayId, riderId } },
     });
+  }
+
+  private async lockGiveawayEntries(tx: Prisma.TransactionClient, giveawayId: string) {
+    await tx.$queryRaw(
+      Prisma.sql`
+        SELECT "id"
+        FROM "GiveawayEntry"
+        WHERE "giveawayId" = ${giveawayId}
+        ORDER BY "id" ASC
+        FOR UPDATE
+      `,
+    );
+    return tx.giveawayEntry.findMany({
+      where: { giveawayId },
+      orderBy: [{ opaquePublicReference: "asc" }, { id: "asc" }],
+    });
+  }
+
+  private async lockGiveawayPrizeItem(tx: Prisma.TransactionClient, prizeItemId: string) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "GiveawayPrizeItem" WHERE "id" = ${prizeItemId} FOR UPDATE`,
+    );
+    if (rows.length === 0) return null;
+    return tx.giveawayPrizeItem.findUnique({ where: { id: prizeItemId } });
+  }
+
+  private async lockGiveawayAward(tx: Prisma.TransactionClient, awardId: string) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "GiveawayAward" WHERE "id" = ${awardId} FOR UPDATE`,
+    );
+    if (rows.length === 0) return null;
+    return tx.giveawayAward.findUnique({ where: { id: awardId } });
+  }
+
+  private async requireGiveawaySnapshot(
+    tx: Prisma.TransactionClient,
+    giveawayId: string,
+  ): Promise<GiveawaySnapshotWithEntries> {
+    const snapshot = await tx.giveawaySnapshot.findUnique({
+      where: { giveawayId },
+      include: giveawaySnapshotInclude,
+    });
+    if (!snapshot) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    return snapshot;
+  }
+
+  private async nextGiveawayDrawSequence(tx: Prisma.TransactionClient, giveawayId: string) {
+    const previous = await tx.giveawayDraw.findFirst({
+      where: { giveawayId },
+      orderBy: { sequence: "desc" },
+      select: { sequence: true },
+    });
+    return (previous?.sequence ?? 0) + 1;
   }
 
   private assertGiveawayEligibilityPerks(
@@ -2234,6 +3332,55 @@ export class PrismaTambikeBackend {
         fulfilmentMode: award.prizePool.fulfillmentType as GiveawayFulfilmentMode,
       },
     };
+  }
+
+  private async resolveGiveawayAwardByAdministrator(
+    sessionToken: string,
+    awardId: string,
+    reason: unknown,
+    status: "voided" | "disqualified",
+  ): Promise<RiderGiveawayState> {
+    const administrator = await this.requireRole(sessionToken, "admin");
+    const normalizedReason = this.requireGiveawayReason(reason);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: awardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      const award = await this.lockGiveawayAward(tx, awardId);
+      if (
+        !award ||
+        award.giveawayId !== giveaway.id ||
+        !award.isCurrent ||
+        !award.drawId ||
+        !award.snapshotEntryId ||
+        !["pending_verification", "claimable", "verified"].includes(award.status)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const reasonDigest = this.hashGiveawayReason(normalizedReason);
+      await tx.giveawayAward.update({
+        where: { id: award.id },
+        data: { status, reasonDigest },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        administrator.id,
+        status === "voided" ? "GIVEAWAY_AWARD_VOIDED" : "GIVEAWAY_AWARD_DISQUALIFIED",
+        "award",
+        award.id,
+        {
+          awardId: award.id,
+          drawId: award.drawId,
+          status,
+          reasonDigest,
+        },
+      );
+      return this.toRiderGiveawayState(giveaway, award.winnerUserId, tx);
+    });
   }
 
   private calculateMechanicsChecksum(mechanics: string, terms: string, sponsorDisclosure?: string | null) {
@@ -2613,6 +3760,87 @@ export class PrismaTambikeBackend {
     );
   }
 
+  private isSnapshotEntryEligibleForPool(
+    entry: GiveawaySnapshotWithEntries["entries"][number],
+    pool: GiveawayConfiguration["prizePools"][number],
+  ) {
+    const allowedGroupIds = pool.eligibilityGroups.map((link) => link.eligibilityGroupId);
+    const qualifiedGroupIds = this.entryQualifiedGroupIds(entry);
+    return (
+      allowedGroupIds.length === 0 ||
+      allowedGroupIds.some((groupId) => qualifiedGroupIds.includes(groupId))
+    );
+  }
+
+  private async canCreateDrawGiveawayAward(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    pool: GiveawayConfiguration["prizePools"][number],
+    riderId: string,
+    ignoredAwardId?: string,
+  ) {
+    const currentAwardWhere = {
+      giveawayId: giveaway.id,
+      isCurrent: true,
+      ...(ignoredAwardId ? { id: { not: ignoredAwardId } } : {}),
+    };
+    const [totalAwards, riderAwards, poolAwards] = await Promise.all([
+      tx.giveawayAward.count({ where: currentAwardWhere }),
+      tx.giveawayAward.count({ where: { ...currentAwardWhere, winnerUserId: riderId } }),
+      tx.giveawayAward.count({
+        where: { ...currentAwardWhere, prizePoolId: pool.id, winnerUserId: riderId },
+      }),
+    ]);
+    return (
+      totalAwards < giveaway.maxWinsTotal &&
+      riderAwards < giveaway.maxWinsPerRider &&
+      poolAwards < pool.maxWinsPerRider
+    );
+  }
+
+  private async createDrawGiveawayAward(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    pool: GiveawayConfiguration["prizePools"][number],
+    input: {
+      entry: GiveawayEntryWrite["entry"];
+      draw: GiveawayDrawRecord;
+      snapshotEntry: GiveawaySnapshotWithEntries["entries"][number];
+      prizeItemId: string;
+      rank: number;
+      predecessorAwardId?: string;
+      reservePrizeItem: boolean;
+    },
+  ) {
+    if (input.reservePrizeItem) {
+      const reservation = await tx.giveawayPrizeItem.updateMany({
+        where: { id: input.prizeItemId, prizePoolId: pool.id, status: "available" },
+        data: { status: "reserved" },
+      });
+      if (reservation.count !== 1) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+    }
+    return tx.giveawayAward.create({
+      data: {
+        id: `giveaway-award-${randomUUID()}`,
+        giveawayId: giveaway.id,
+        entryId: input.entry.id,
+        drawId: input.draw.id,
+        prizePoolId: pool.id,
+        prizeItemId: input.prizeItemId,
+        snapshotEntryId: input.snapshotEntry.id,
+        winnerUserId: input.entry.riderId,
+        status: pool.presenceVerificationRequired ? "pending_verification" : "claimable",
+        isCurrent: true,
+        rank: input.rank,
+        opaqueClaimReference: `claim_${randomBytes(16).toString("base64url")}`,
+        claimDeadlineAt: giveaway.claimDeadlineAt,
+        predecessorAwardId: input.predecessorAwardId ?? null,
+      },
+    });
+  }
+
   private async canCreateDirectGiveawayAward(
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
@@ -2794,6 +4022,38 @@ export class PrismaTambikeBackend {
     );
   }
 
+  /**
+   * Lock-time reconciliation defers pool/item work until every entry row is
+   * already locked. This preserves the campaign -> entry -> pool -> item ->
+   * award ordering while still removing stale direct allocations before the
+   * snapshot becomes immutable.
+   */
+  private async revalidateDirectGiveawayAwardsForLockedEntries(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    entries: GiveawayEntryWrite["entry"][],
+  ) {
+    for (const entry of entries) {
+      if (entry.status === "eligible") {
+        await this.voidIneligibleDirectGiveawayAwards(
+          tx,
+          giveaway,
+          entry,
+          undefined,
+          "lock_pool_revalidation",
+        );
+      } else {
+        await this.voidDirectGiveawayAwards(
+          tx,
+          giveaway,
+          entry,
+          undefined,
+          "lock_revalidation",
+        );
+      }
+    }
+  }
+
   private async reallocateImmediateGiveawayAwards(
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
@@ -2868,11 +4128,168 @@ export class PrismaTambikeBackend {
     return [...new Set([...rsvps, ...passes, ...checkIns].map((record) => record.userId))].sort();
   }
 
+  private async reconcileGiveawayEntryForLock(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    riderId: string,
+    options: { reconcileDirectAwards?: boolean } = {},
+  ) {
+    const reconcileDirectAwards = options.reconcileDirectAwards ?? true;
+    const entry = await this.lockGiveawayEntry(tx, giveaway.id, riderId);
+    if (!entry || (entry.entryPath === "manual" && !entry.manualGrantActive)) return false;
+    const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, riderId, {
+      campaignCode: entry.entryPath === "campaign_code",
+      manual: entry.entryPath === "manual" && entry.manualGrantActive,
+      actionAt: entry.createdAt,
+    });
+    if (qualification.weight <= 0) {
+      if (entry.status !== "eligible") return false;
+      if (reconcileDirectAwards) {
+        await this.voidDirectGiveawayAwards(tx, giveaway, entry, undefined, "lock_revalidation");
+      }
+      const withdrawn = await tx.giveawayEntry.update({
+        where: { id: entry.id },
+        data: {
+          status: "withdrawn",
+          qualifiedSourceFingerprint: qualification.sourceFingerprint,
+          qualifiedEligibilityGroupIds: this.toJsonValue([]),
+          qualifiedEligibilityGroupTimings: this.toJsonValue([]),
+        },
+      });
+      await tx.giveawayEntryEvent.create({
+        data: {
+          id: `giveaway-entry-event-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          entryId: withdrawn.id,
+          type: "source_revalidated",
+          sourceKey: `lock-revalidation:${giveaway.id}:${withdrawn.id}:${randomUUID()}`,
+          sourceSnapshot: this.toJsonValue({
+            qualifiedGroupIds: [],
+            qualifiedEligibilityGroupTimings: [],
+            eligibilityCycleAt: entry.eligibilityCycleAt.toISOString(),
+            sourceFingerprint: qualification.sourceFingerprint,
+          }),
+          weightDelta: -entry.currentWeight,
+          idempotencyKey: `lock-revalidation:${giveaway.id}:${withdrawn.id}:${randomUUID()}`,
+        },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        undefined,
+        "GIVEAWAY_ENTRY_RECONCILED",
+        "entry",
+        withdrawn.id,
+        {
+          entryId: withdrawn.id,
+          type: "source_revalidated",
+          weightDelta: -entry.currentWeight,
+          sourceFingerprint: qualification.sourceFingerprint,
+        },
+      );
+      return true;
+    }
+
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: this.entryQualifiedGroupTimings(entry),
+      qualifiedGroups: qualification.qualifiedGroups.map((group) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt: group.derivedEligibleAt,
+      })),
+      actionAt: entry.entryPath === "automatic" ? undefined : entry.createdAt.toISOString(),
+    });
+    if (!timing.eligibilityCycleAt) {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    assertGiveawayEligibilityTimingIntegrity(
+      qualification.qualifiedGroupIds,
+      timing.qualifiedEligibilityGroupTimings,
+    );
+    const sameGroups =
+      this.entryQualifiedGroupIds(entry).length === qualification.qualifiedGroupIds.length &&
+      this.entryQualifiedGroupIds(entry).every(
+        (groupId, index) => groupId === qualification.qualifiedGroupIds[index],
+      );
+    const sameTiming =
+      JSON.stringify(this.entryQualifiedGroupTimings(entry)) ===
+      JSON.stringify(timing.qualifiedEligibilityGroupTimings);
+    const status = entry.status === "withdrawn" && entry.entryPath !== "manual" ? "eligible" : entry.status;
+    if (status !== "eligible") return false;
+    const changed =
+      entry.status !== status ||
+      entry.currentWeight !== qualification.weight ||
+      entry.qualifiedSourceFingerprint !== qualification.sourceFingerprint ||
+      !sameGroups ||
+      entry.eligibilityCycleAt.toISOString() !== timing.eligibilityCycleAt ||
+      !sameTiming;
+    const updated = changed
+      ? await tx.giveawayEntry.update({
+          where: { id: entry.id },
+          data: {
+            status,
+            currentWeight: qualification.weight,
+            eligibilityCycleAt: new Date(timing.eligibilityCycleAt),
+            qualifiedSourceFingerprint: qualification.sourceFingerprint,
+            qualifiedEligibilityGroupIds: this.toJsonValue(qualification.qualifiedGroupIds),
+            qualifiedEligibilityGroupTimings: this.toJsonValue(
+              timing.qualifiedEligibilityGroupTimings,
+            ),
+          },
+        })
+      : entry;
+    const voidedPoolIds = reconcileDirectAwards
+      ? await this.voidIneligibleDirectGiveawayAwards(
+          tx,
+          giveaway,
+          updated,
+          undefined,
+          "lock_pool_revalidation",
+        )
+      : new Set<string>();
+    if (changed) {
+      await tx.giveawayEntryEvent.create({
+        data: {
+          id: `giveaway-entry-event-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          entryId: updated.id,
+          type: "source_revalidated",
+          sourceKey: `lock-revalidation:${giveaway.id}:${updated.id}:${randomUUID()}`,
+          sourceSnapshot: this.toJsonValue({
+            qualifiedGroupIds: qualification.qualifiedGroupIds,
+            qualifiedEligibilityGroupTimings: timing.qualifiedEligibilityGroupTimings,
+            eligibilityCycleAt: timing.eligibilityCycleAt,
+            sourceFingerprint: qualification.sourceFingerprint,
+          }),
+          weightDelta: qualification.weight - entry.currentWeight,
+          idempotencyKey: `lock-revalidation:${giveaway.id}:${updated.id}:${randomUUID()}`,
+        },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        undefined,
+        "GIVEAWAY_ENTRY_RECONCILED",
+        "entry",
+        updated.id,
+        {
+          entryId: updated.id,
+          type: "source_revalidated",
+          weightDelta: qualification.weight - entry.currentWeight,
+          sourceFingerprint: qualification.sourceFingerprint,
+        },
+      );
+    }
+    return changed || voidedPoolIds.size > 0;
+  }
+
   private async reconcileAutomaticGiveawayEntry(
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
     riderId: string,
+    options: { reconcileDirectAwards?: boolean } = {},
   ) {
+    const reconcileDirectAwards = options.reconcileDirectAwards ?? true;
     const existing = await this.lockGiveawayEntry(tx, giveaway.id, riderId);
     const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, riderId);
     if (qualification.weight <= 0) {
@@ -2886,13 +4303,15 @@ export class PrismaTambikeBackend {
           qualifiedEligibilityGroupTimings: this.toJsonValue([]),
         },
       });
-      await this.voidDirectGiveawayAwards(
-        tx,
-        giveaway,
-        withdrawn,
-        undefined,
-        "automatic_withdrawal",
-      );
+      if (reconcileDirectAwards) {
+        await this.voidDirectGiveawayAwards(
+          tx,
+          giveaway,
+          withdrawn,
+          undefined,
+          "automatic_withdrawal",
+        );
+      }
       await tx.giveawayEntryEvent.create({
         data: {
           id: `giveaway-entry-event-${randomUUID()}`,
@@ -2978,13 +4397,15 @@ export class PrismaTambikeBackend {
       entryPath: "automatic",
       entryEventType: "source_revalidated",
     });
-    await this.voidIneligibleDirectGiveawayAwards(
-      tx,
-      giveaway,
-      write.entry,
-      undefined,
-      "automatic_pool_revalidation",
-    );
+    if (reconcileDirectAwards) {
+      await this.voidIneligibleDirectGiveawayAwards(
+        tx,
+        giveaway,
+        write.entry,
+        undefined,
+        "automatic_pool_revalidation",
+      );
+    }
     await this.auditGiveaway(
       tx,
       giveaway.id,

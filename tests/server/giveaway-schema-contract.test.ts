@@ -263,6 +263,17 @@ describe("giveaway Prisma schema contract", () => {
     expect(prismaSchema).toMatch(/qualifiedEligibilityGroupIds\s+Json\s*\n/);
     expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
     expect(giveawayMigrationSql).toContain('"qualifiedEligibilityGroupIds" JSONB NOT NULL');
+    const snapshotEntryGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_snapshot_entry_parentage"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawaySnapshotEntry_parentage_guard"'),
+    );
+    expect(snapshotEntryGuard).toContain('NEW."frozenWeight" IS DISTINCT FROM entry_current_weight');
+    expect(snapshotEntryGuard).toContain(
+      'NEW."opaquePublicReference" IS DISTINCT FROM entry_opaque_public_reference',
+    );
+    expect(snapshotEntryGuard).toContain(
+      'NEW."qualifiedSourceFingerprint" IS DISTINCT FROM entry_qualified_source_fingerprint',
+    );
   });
 
   test("keeps snapshots immutable except for a single seed revelation and blocks snapshot-entry mutation", () => {

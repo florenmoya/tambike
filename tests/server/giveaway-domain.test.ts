@@ -94,6 +94,16 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
     awardId: string,
     reason: string,
   ): Promise<RiderGiveawayState>;
+  voidGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: string,
+  ): Promise<RiderGiveawayState>;
+  disqualifyGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: string,
+  ): Promise<RiderGiveawayState>;
   redrawGiveawayAward(
     sessionToken: string,
     input: { awardId: string; idempotencyKey: string; reason: string },
@@ -155,6 +165,24 @@ function internalGiveawayEntry(
   const entry = store.giveaways.campaignsById.get(giveawayId)?.entriesByRider.get(riderId);
   if (!entry) throw new Error("TEST_GIVEAWAY_ENTRY_MISSING");
   return entry;
+}
+
+function setInternalGiveawayDrawStatus(
+  backend: GiveawayBackend,
+  giveawayId: string,
+  drawId: string,
+  status: string,
+) {
+  const store = backend as unknown as {
+    giveaways: {
+      campaignsById: Map<string, { draws: Array<{ id: string; status: string }> }>;
+    };
+  };
+  const draw = store.giveaways.campaignsById
+    .get(giveawayId)
+    ?.draws.find((candidate) => candidate.id === drawId);
+  if (!draw) throw new Error("TEST_GIVEAWAY_DRAW_MISSING");
+  draw.status = status;
 }
 
 function automaticGiveawayInput(
@@ -1249,6 +1277,13 @@ describe("in-memory event giveaway lifecycle", () => {
         reason: "Winner declined",
       });
       expect(replay).toEqual(redrawn);
+      await expect(
+        backend.redrawGiveawayAward(context.organizer.sessionToken, {
+          awardId: selected.state.award.awardId,
+          idempotencyKey: "redraw-after-decline",
+          reason: "A different redraw reason must not replay",
+        }),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_IDEMPOTENCY_CONFLICT" });
       expect(redrawn.drawId).not.toBe(initial.drawId);
       expect(redrawn.verification).toMatchObject({
         commitment: published.commitment,
@@ -1257,6 +1292,140 @@ describe("in-memory event giveaway lifecycle", () => {
       await expect(
         backend.getRiderGiveawayState(notSelected.sessionToken, context.giveaway.id),
       ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    });
+  });
+
+  test("does not reveal a committed seed for a non-completed draw", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenGiveaway(backend);
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const draw = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "non-completed-publication",
+      });
+      setInternalGiveawayDrawStatus(backend, context.giveaway.id, draw.drawId, "voided");
+
+      await expect(
+        backend.publishGiveawayDraw(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+          draw.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    });
+  });
+
+  test("allows only an admin to void or disqualify a drawn award before a same-seed redraw", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenGiveaway(backend);
+    const secondRider = await createExtraRider(backend, "admin-void-redraw");
+    await Promise.all([
+      backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+      backend.registerForEvent(secondRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+    ]);
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const initial = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "admin-void-initial",
+      });
+      await backend.publishGiveawayDraw(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        initial.drawId,
+      );
+      const selected = await Promise.all([
+        backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
+        backend.getRiderGiveawayState(secondRider.sessionToken, context.giveaway.id),
+      ]);
+      const awardId = selected.find((state) => state.award)?.award?.awardId;
+      if (!awardId) throw new Error("TEST_DRAW_SELECTION_MISSING");
+
+      await expect(
+        backend.voidGiveawayAward(context.organizer.sessionToken, awardId, "Organizer cannot void"),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        backend.voidGiveawayAward(context.admin.sessionToken, awardId, " "),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(
+        backend.voidGiveawayAward(context.admin.sessionToken, awardId, "Incorrect allocation"),
+      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered" });
+      expect(await backend.auditCount("GIVEAWAY_AWARD_VOIDED")).toBe(1);
+
+      const replacement = await backend.redrawGiveawayAward(context.organizer.sessionToken, {
+        awardId,
+        idempotencyKey: "admin-void-redraw",
+        reason: "Admin voided the original allocation",
+      });
+      expect(replacement.verification).toMatchObject({
+        commitment: initial.verification.commitment,
+        snapshotDigest: initial.verification.snapshotDigest,
+      });
+    });
+  });
+
+  test("keeps a disqualified drawn award current until its deterministic replacement succeeds", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenGiveaway(backend);
+    const secondRider = await createExtraRider(backend, "admin-disqualify-redraw");
+    await Promise.all([
+      backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+      backend.registerForEvent(secondRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+    ]);
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const initial = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "admin-disqualify-initial",
+      });
+      await backend.publishGiveawayDraw(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        initial.drawId,
+      );
+      const selected = await Promise.all([
+        backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
+        backend.getRiderGiveawayState(secondRider.sessionToken, context.giveaway.id),
+      ]);
+      const awardId = selected.find((state) => state.award)?.award?.awardId;
+      if (!awardId) throw new Error("TEST_DRAW_SELECTION_MISSING");
+
+      await expect(
+        backend.disqualifyGiveawayAward(context.admin.sessionToken, awardId, "Ineligible winner"),
+      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered" });
+      expect(await backend.auditCount("GIVEAWAY_AWARD_DISQUALIFIED")).toBe(1);
+      await expect(
+        backend.redrawGiveawayAward(context.organizer.sessionToken, {
+          awardId,
+          idempotencyKey: "admin-disqualify-redraw",
+          reason: "Administrator disqualified the winner",
+        }),
+      ).resolves.toMatchObject({
+        verification: {
+          commitment: initial.verification.commitment,
+          snapshotDigest: initial.verification.snapshotDigest,
+        },
+      });
     });
   });
 
@@ -1318,6 +1487,15 @@ describe("in-memory event giveaway lifecycle", () => {
         reason: "First manual award before random draw",
         idempotencyKey: "mixed-manual-before-random",
       });
+      await expect(
+        backend.selectManualGiveawayAward(context.organizer.sessionToken, {
+          giveawayId: context.giveaway.id,
+          prizePoolId: manualPool.id,
+          riderId: secondRider.user.id,
+          reason: "A different manual selection must not replay",
+          idempotencyKey: "mixed-manual-before-random",
+        }),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_IDEMPOTENCY_CONFLICT" });
       const random = await backend.runGiveawayDraw(context.organizer.sessionToken, {
         giveawayId: context.giveaway.id,
         idempotencyKey: "mixed-random-draw",
