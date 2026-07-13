@@ -51,6 +51,9 @@ import {
   venueApproval,
 } from "./data";
 import { useDemo } from "./demo-provider";
+import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
+import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
+import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -688,6 +691,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           )}
           {currentUser ? (
             <>
+              <GiveawayNotificationBell recipientId={currentUser.id} />
               {panelLink && PanelIcon ? (
                 <Link className="panel-link" href={panelLink.href}>
                   <PanelIcon aria-hidden={true} />
@@ -1338,6 +1342,7 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 ))}
               </div>
             </InfoPanel>
+            <PublicGiveawayPanel eventId={event.id} />
           </div>
           <aside className="event-detail-pass-panel" aria-label="Event summary">
             <div className="event-detail-pass-heading">
@@ -1703,6 +1708,7 @@ function PassDetail({ passId }: { passId?: string }) {
           {event.perks.map((perk) => (
             <PassStrip key={perk.id} title={perk.type} body={perk.description} />
           ))}
+          <RiderGiveawayStatusPanel eventId={event.id} enabled={currentUser.role === "rider"} />
         </aside>
       </section>
     </LightView>
