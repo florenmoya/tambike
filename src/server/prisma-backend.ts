@@ -1080,6 +1080,86 @@ export class PrismaTambikeBackend {
     });
   }
 
+  async redeemGiveawayPerk(
+    sessionToken: string,
+    perkId: string,
+  ): Promise<{ perkId: string; status: "redeemed" }> {
+    const rider = await this.requireGiveawayRider(sessionToken);
+    const normalizedPerkId = perkId.trim();
+    const perkLocation = normalizedPerkId
+      ? await this.prisma.perk.findUnique({
+          where: { id: normalizedPerkId },
+          select: { eventId: true },
+        })
+      : null;
+    if (!perkLocation) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Keep the Event lock first, matching registration/check-in and the
+      // giveaway reconciliation order. The Perk lock then serializes finite
+      // inventory redemptions before any EventGiveaway rows are acquired.
+      const event = await this.lockGiveawayEvent(tx, perkLocation.eventId);
+      const perk = await this.lockGiveawayPerk(tx, event.id, normalizedPerkId);
+      if (!perk) {
+        throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
+
+      const pass = await tx.pass.findFirst({
+        where: {
+          eventId: event.id,
+          userId: rider.id,
+          status: { not: "cancelled" },
+        },
+        orderBy: { generatedAt: "asc" },
+      });
+      if (!pass) {
+        throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+      }
+
+      const existing = await tx.perkRedemption.findFirst({
+        where: { perkId: perk.id, userId: rider.id, status: "redeemed" },
+        orderBy: { id: "asc" },
+      });
+      if (existing) {
+        return { perkId: perk.id, status: "redeemed" };
+      }
+
+      if (perk.quantity !== null) {
+        const redeemedCount = await tx.perkRedemption.count({
+          where: { perkId: perk.id, status: "redeemed" },
+        });
+        if (redeemedCount >= perk.quantity) {
+          throw new BackendError("GIVEAWAY_PERK_UNAVAILABLE", "GIVEAWAY_PERK_UNAVAILABLE");
+        }
+      }
+
+      const redemption = await tx.perkRedemption.create({
+        data: {
+          id: `perk-redemption-${randomUUID()}`,
+          perkId: perk.id,
+          userId: rider.id,
+          status: "redeemed",
+          redeemedBy: rider.id,
+          redeemedAt: new Date(),
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "GIVEAWAY_PERK_REDEEMED",
+          actorUserId: rider.id,
+          targetType: "PerkRedemption",
+          targetId: redemption.id,
+          metadata: this.toJsonValue({ perkId: perk.id, eventId: event.id }),
+        },
+      });
+      await this.reconcileAutomaticGiveawayEligibility(tx, event.id, rider.id);
+
+      return { perkId: perk.id, status: "redeemed" };
+    });
+  }
+
   async createEventDraft(sessionToken: string, input: CreateEventInput) {
     const user = await this.requireUser(sessionToken);
     if (user.role !== "organizer" || user.verificationStatus !== "APPROVED") {
@@ -1825,6 +1905,18 @@ export class PrismaTambikeBackend {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
     return event;
+  }
+
+  private async lockGiveawayPerk(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+    perkId: string,
+  ) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "Perk" WHERE "id" = ${perkId} AND "eventId" = ${eventId} FOR UPDATE`,
+    );
+    if (rows.length === 0) return null;
+    return tx.perk.findUnique({ where: { id: perkId } });
   }
 
   private async lockGiveawayCampaign(
