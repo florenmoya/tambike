@@ -49,6 +49,19 @@ type RiderGiveawayEntryActions = {
   claimCode: typeof claimGiveawayCampaignCodeAction;
 };
 
+/** Applies a fresh rider-scoped campaign response, or removes a campaign no longer visible to that rider. */
+export function reconcileRiderGiveawayCampaigns(
+  campaigns: RiderEventGiveawayState[],
+  giveawayId: string,
+  refreshed?: RiderEventGiveawayState,
+) {
+  const replacement = refreshed?.giveawayId === giveawayId ? refreshed : undefined;
+
+  return replacement
+    ? campaigns.map((campaign) => (campaign.giveawayId === giveawayId ? replacement : campaign))
+    : campaigns.filter((campaign) => campaign.giveawayId !== giveawayId);
+}
+
 /** Keeps mode-specific input handling out of the status-panel state update. */
 export async function submitRiderGiveawayEntry(
   input: { giveawayId: string; entryMode: "opt_in" | "claim_code"; code?: string },
@@ -219,9 +232,13 @@ export function RiderGiveawayStatusPanel({
       const next = await listRiderGiveawayStatesForEventAction(eventId);
       if (!next.ok) return;
       const refreshed = next.data.find((giveaway) => giveaway.giveawayId === giveawayId);
-      if (refreshed) {
-        updateRiderGiveawayState(giveawayId, refreshed.riderState);
-      }
+      setResult((previous) => {
+        if (!previous || previous.eventId !== eventId) return previous;
+        return {
+          ...previous,
+          giveaways: reconcileRiderGiveawayCampaigns(previous.giveaways, giveawayId, refreshed),
+        };
+      });
     } catch {
       // The generic entry failure remains visible if the scoped reconciliation also fails.
     }

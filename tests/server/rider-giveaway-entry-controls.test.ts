@@ -4,6 +4,8 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
 
+import type { RiderEventGiveawayState } from "../../src/features/giveaways/types";
+
 vi.mock("../../src/server/giveaway-actions", () => ({
   claimGiveawayCampaignCodeAction: vi.fn(),
   listRiderGiveawayStatesForEventAction: vi.fn(),
@@ -122,6 +124,104 @@ describe("rider giveaway entry controls", () => {
     expect(predicate({ state: "open", entryMode: "manual_only", viewerRole: "guest" })).toBe(false);
     expect(predicate({ state: "locked", entryMode: "opt_in", viewerRole: "guest" })).toBe(false);
     expect(predicate({ state: "open", entryMode: "opt_in", viewerRole: "rider" })).toBe(false);
+  });
+
+  test("hides self-entry after a rejected action refreshes a paused, locked, automatic, or omitted campaign", async () => {
+    const [riderPanelModule, surfaceStateModule] = await Promise.all([
+      import("../../src/features/giveaways/rider-giveaway-status-panel") as Promise<Record<string, unknown>>,
+      import("../../src/features/giveaways/giveaway-surface-state") as Promise<Record<string, unknown>>,
+    ]);
+    const submitEntry = riderPanelModule.submitRiderGiveawayEntry;
+    const reconcileCampaigns = riderPanelModule.reconcileRiderGiveawayCampaigns;
+    const entryControl = riderPanelModule.RiderGiveawayEntryControl;
+    const canEnter = surfaceStateModule.canRiderSubmitGiveawayEntry;
+
+    expect(submitEntry).toBeTypeOf("function");
+    expect(reconcileCampaigns).toBeTypeOf("function");
+    expect(entryControl).toBeTypeOf("function");
+    expect(canEnter).toBeTypeOf("function");
+    if (
+      typeof submitEntry !== "function" ||
+      typeof reconcileCampaigns !== "function" ||
+      typeof entryControl !== "function" ||
+      typeof canEnter !== "function"
+    ) {
+      return;
+    }
+
+    const submit = submitEntry as (
+      input: { giveawayId: string; entryMode: "opt_in" | "claim_code"; code?: string },
+      actions: {
+        optIn: (giveawayId: string) => Promise<unknown>;
+        claimCode: (giveawayId: string, code: string) => Promise<unknown>;
+      },
+    ) => Promise<unknown>;
+    const reconcile = reconcileCampaigns as (
+      campaigns: RiderEventGiveawayState[],
+      giveawayId: string,
+      refreshed?: RiderEventGiveawayState,
+    ) => RiderEventGiveawayState[];
+    const Control = entryControl as React.ComponentType<{
+      giveawayId: string;
+      giveawayState: RiderEventGiveawayState["giveawayState"];
+      entryMode: RiderEventGiveawayState["entryMode"];
+      riderStatus: RiderEventGiveawayState["riderState"]["status"];
+      onEntryRecorded: () => void;
+      onRefresh: () => Promise<void>;
+    }>;
+    const shouldOfferEntry = canEnter as (input: {
+      state: RiderEventGiveawayState["giveawayState"];
+      entryMode: RiderEventGiveawayState["entryMode"];
+      riderStatus: RiderEventGiveawayState["riderState"]["status"];
+    }) => boolean;
+    const openCampaign: RiderEventGiveawayState = {
+      giveawayId: "giveaway-1",
+      giveawayTitle: "Rider helmet draw",
+      giveawayState: "open",
+      entryMode: "opt_in",
+      riderState: { giveawayId: "giveaway-1", status: "not_eligible", entryCount: 0 },
+    };
+
+    await expect(
+      submit(
+        { giveawayId: openCampaign.giveawayId, entryMode: "opt_in" },
+        {
+          optIn: vi.fn().mockResolvedValue({ ok: false, code: "ERROR" }),
+          claimCode: vi.fn(),
+        },
+      ),
+    ).resolves.toEqual({ ok: false, code: "ERROR" });
+
+    for (const refreshed of [
+      { ...openCampaign, giveawayState: "paused" as const },
+      { ...openCampaign, giveawayState: "locked" as const },
+      { ...openCampaign, entryMode: "automatic" as const },
+    ]) {
+      const reconciled = reconcile([openCampaign], openCampaign.giveawayId, refreshed);
+
+      expect(reconciled).toEqual([refreshed]);
+      expect(
+        shouldOfferEntry({
+          state: reconciled[0].giveawayState,
+          entryMode: reconciled[0].entryMode,
+          riderStatus: reconciled[0].riderState.status,
+        }),
+      ).toBe(false);
+      expect(
+        renderToStaticMarkup(
+          React.createElement(Control, {
+            giveawayId: reconciled[0].giveawayId,
+            giveawayState: reconciled[0].giveawayState,
+            entryMode: reconciled[0].entryMode,
+            riderStatus: reconciled[0].riderState.status,
+            onEntryRecorded: () => undefined,
+            onRefresh: async () => undefined,
+          }),
+        ),
+      ).toBe("");
+    }
+
+    expect(reconcile([openCampaign], openCampaign.giveawayId)).toEqual([]);
   });
 
   test("renders self-entry controls only for the right open modes and keeps a campaign code transient", async () => {
