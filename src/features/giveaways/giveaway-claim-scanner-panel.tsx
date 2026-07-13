@@ -33,6 +33,7 @@ import type {
 } from "@/features/giveaways/types";
 import {
   fulfillGiveawayAwardAction,
+  readGiveawayDeliveryDetailsAction,
   resolveGiveawayClaimAction,
   verifyGiveawayClaimAction,
 } from "@/server/giveaway-actions";
@@ -43,6 +44,23 @@ type ScannerNotice = {
   title: string;
   body: string;
 };
+
+type ActiveDeliveryDetails = {
+  awardId: string;
+  consentVersion: string;
+  retentionExpiresAt: string;
+  details: Record<string, unknown>;
+};
+
+export function canFulfillGiveawayClaim(
+  claim: Pick<OperatorGiveawayClaimView, "awardId" | "status" | "fulfilmentMode"> | null,
+  deliveryDetails: Pick<ActiveDeliveryDetails, "awardId"> | null,
+) {
+  return (
+    claim?.status === "verified" &&
+    (claim.fulfilmentMode !== "delivery" || deliveryDetails?.awardId === claim.awardId)
+  );
+}
 
 const idleNotice: ScannerNotice = {
   tone: "idle",
@@ -58,6 +76,7 @@ const idleNotice: ScannerNotice = {
 export function GiveawayClaimScannerPanel() {
   const [notice, setNotice] = React.useState<ScannerNotice>(idleNotice);
   const [claim, setClaim] = React.useState<OperatorGiveawayClaimView | null>(null);
+  const [deliveryDetails, setDeliveryDetails] = React.useState<ActiveDeliveryDetails | null>(null);
   const [manualPayload, setManualPayload] = React.useState("");
   const [presenceObserved, setPresenceObserved] = React.useState(false);
   const [cameraActive, setCameraActive] = React.useState(false);
@@ -73,6 +92,16 @@ export function GiveawayClaimScannerPanel() {
   const resolvedMethodRef = React.useRef<GiveawayClaimScannerMethod>("manual");
   const verificationKeyRef = React.useRef<string | null>(null);
   const fulfilmentKeyRef = React.useRef<string | null>(null);
+
+  const clearActiveClaim = React.useCallback(() => {
+    setClaim(null);
+    setDeliveryDetails(null);
+    setPresenceObserved(false);
+    resolvedPayloadRef.current = null;
+    resolvedMethodRef.current = "manual";
+    verificationKeyRef.current = null;
+    fulfilmentKeyRef.current = null;
+  }, []);
 
   const stopCamera = React.useCallback(() => {
     if (frameRef.current !== null) {
@@ -104,9 +133,11 @@ export function GiveawayClaimScannerPanel() {
   const resolveClaim = React.useCallback(
     async (value: string, method: GiveawayClaimScannerMethod) => {
       const payload = normalizeGiveawayClaimPayload(value);
-      if (!payload || pendingRef.current) {
-        setClaim(null);
-        resolvedPayloadRef.current = null;
+      if (pendingRef.current) {
+        return;
+      }
+      if (!payload) {
+        clearActiveClaim();
         setNotice({
           tone: "error",
           title: "This is not a giveaway claim QR",
@@ -114,6 +145,8 @@ export function GiveawayClaimScannerPanel() {
         });
         return;
       }
+
+      clearActiveClaim();
 
       pendingRef.current = true;
       setPending(true);
@@ -127,8 +160,7 @@ export function GiveawayClaimScannerPanel() {
       try {
         const result = await resolveGiveawayClaimAction(payload);
         if (!result.ok) {
-          setClaim(null);
-          resolvedPayloadRef.current = null;
+          clearActiveClaim();
           setNotice({
             tone: "error",
             title: result.code === "UNAUTHENTICATED" ? "Operator login required" : "Claim could not be resolved",
@@ -145,6 +177,7 @@ export function GiveawayClaimScannerPanel() {
         verificationKeyRef.current = null;
         fulfilmentKeyRef.current = null;
         setClaim(result.data);
+        setDeliveryDetails(null);
         setPresenceObserved(false);
         setNotice({
           tone: "success",
@@ -157,7 +190,7 @@ export function GiveawayClaimScannerPanel() {
         setPending(false);
       }
     },
-    [stopCamera],
+    [clearActiveClaim, stopCamera],
   );
 
   React.useEffect(() => {
@@ -228,7 +261,7 @@ export function GiveawayClaimScannerPanel() {
         setPending(false);
 
         if (!payload) {
-          setClaim(null);
+          clearActiveClaim();
           setNotice({
             tone: "error",
             title: "No QR code found",
@@ -240,7 +273,7 @@ export function GiveawayClaimScannerPanel() {
       } catch {
         pendingRef.current = false;
         setPending(false);
-        setClaim(null);
+        clearActiveClaim();
         setNotice({
           tone: "error",
           title: "Could not read image",
@@ -248,7 +281,7 @@ export function GiveawayClaimScannerPanel() {
         });
       }
     },
-    [decodeFromCanvas, resolveClaim],
+    [clearActiveClaim, decodeFromCanvas, resolveClaim],
   );
 
   const verifyClaim = React.useCallback(async () => {
@@ -284,6 +317,7 @@ export function GiveawayClaimScannerPanel() {
         return;
       }
       setClaim(result.data);
+      setDeliveryDetails(null);
       resolvedPayloadRef.current = null;
       setNotice({
         tone: "success",
@@ -296,11 +330,53 @@ export function GiveawayClaimScannerPanel() {
     }
   }, [claim, presenceObserved]);
 
-  const fulfillClaim = React.useCallback(async () => {
-    if (!claim || claim.status !== "verified" || pendingRef.current) {
+  const viewDeliveryDetails = React.useCallback(async () => {
+    if (!claim || claim.status !== "verified" || claim.fulfilmentMode !== "delivery" || pendingRef.current) {
       return;
     }
 
+    pendingRef.current = true;
+    setPending(true);
+    setDeliveryDetails(null);
+    try {
+      const result = await readGiveawayDeliveryDetailsAction(claim.awardId);
+      if (!result.ok || result.data.awardId !== claim.awardId) {
+        setNotice({
+          tone: "error",
+          title: result.code === "UNAUTHENTICATED" ? "Operator login required" : "Delivery details unavailable",
+          body: "Delivery details are unavailable, withdrawn, expired, or not available to this operator. Do not fulfil this prize.",
+        });
+        return;
+      }
+      setDeliveryDetails(result.data);
+      setNotice({
+        tone: "success",
+        title: "Delivery details viewed",
+        body: "Keep these private and arrange delivery only as consented. Hide them when you are finished.",
+      });
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }, [claim]);
+
+  const fulfillClaim = React.useCallback(async () => {
+    if (!claim || pendingRef.current) {
+      return;
+    }
+    if (!canFulfillGiveawayClaim(claim, deliveryDetails)) {
+      if (claim.status !== "verified" || claim.fulfilmentMode !== "delivery") {
+        return;
+      }
+      setNotice({
+        tone: "error",
+        title: "View delivery details first",
+        body: "Delivery details must be viewed before fulfilment.",
+      });
+      return;
+    }
+
+    setDeliveryDetails(null);
     pendingRef.current = true;
     setPending(true);
     fulfilmentKeyRef.current ??= createIdempotencyKey("fulfil");
@@ -318,6 +394,7 @@ export function GiveawayClaimScannerPanel() {
         return;
       }
       setClaim(result.data);
+      setDeliveryDetails(null);
       setNotice({
         tone: "success",
         title: "Prize fulfilled",
@@ -327,7 +404,7 @@ export function GiveawayClaimScannerPanel() {
       pendingRef.current = false;
       setPending(false);
     }
-  }, [claim]);
+  }, [claim, deliveryDetails]);
 
   React.useEffect(() => stopCamera, [stopCamera]);
 
@@ -441,7 +518,12 @@ export function GiveawayClaimScannerPanel() {
             <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-medium">{claim.prizePoolTitle}</div>
-                <Badge variant="outline">{formatClaimStatus(claim.status)}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{formatClaimStatus(claim.status)}</Badge>
+                  <Button type="button" variant="ghost" size="sm" onClick={clearActiveClaim} disabled={pending}>
+                    Clear claim
+                  </Button>
+                </div>
               </div>
               <dl className="grid gap-2 text-sm text-muted-foreground">
                 <div className="flex justify-between gap-3"><dt>Fulfilment</dt><dd className="text-right text-foreground">{formatFulfilmentMode(claim.fulfilmentMode)}</dd></div>
@@ -465,8 +547,47 @@ export function GiveawayClaimScannerPanel() {
 
               {claim.status === "verified" ? (
                 <div className="grid gap-2 border-t pt-3">
+                  {claim.fulfilmentMode === "delivery" ? (
+                    <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 text-sm text-amber-950">
+                      {deliveryDetails?.awardId === claim.awardId ? (
+                        <>
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="font-medium">Private delivery details</p>
+                              <p className="mt-1 text-amber-900/80">Visible only for this active claim. Hide them when you are finished.</p>
+                            </div>
+                            <Button type="button" size="sm" variant="outline" onClick={() => setDeliveryDetails(null)} disabled={pending}>
+                              Hide details
+                            </Button>
+                          </div>
+                          <p className="text-xs text-amber-900/80">Consent expires {formatDateTime(deliveryDetails.retentionExpiresAt)}.</p>
+                          <dl className="grid gap-2 rounded-md bg-background/70 p-3 text-sm text-foreground">
+                            {formatPrivateDeliveryDetails(deliveryDetails.details).map(({ label, value }) => (
+                              <div key={label} className="grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">
+                                <dt className="font-medium text-muted-foreground">{label}</dt>
+                                <dd className="break-words">{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-medium">Delivery requires the rider’s consented details.</p>
+                          <p className="text-amber-900/80">Request them only when you are ready to arrange this delivery. They are not kept in the claim queue.</p>
+                          <Button type="button" variant="outline" onClick={viewDeliveryDetails} disabled={pending}>
+                            View consented delivery details
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
                   <p className="text-sm text-muted-foreground">Complete this only when the prize has actually been handed over or its approved fulfilment has been arranged.</p>
-                  <Button type="button" onClick={fulfillClaim} disabled={pending} className="w-full">
+                  <Button
+                    type="button"
+                    onClick={fulfillClaim}
+                    disabled={pending || !canFulfillGiveawayClaim(claim, deliveryDetails)}
+                    className="w-full"
+                  >
                     {pending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <PackageCheckIcon data-icon="inline-start" />}
                     Mark prize fulfilled
                   </Button>
@@ -543,6 +664,43 @@ function formatClaimStatus(status: OperatorGiveawayClaimView["status"]) {
 
 function formatFulfilmentMode(mode: OperatorGiveawayClaimView["fulfilmentMode"]) {
   return mode.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatPrivateDeliveryDetails(details: Record<string, unknown>) {
+  const formatted = Object.entries(details).flatMap(([key, value]) => {
+    const displayValue = formatPrivateDeliveryValue(value);
+    if (!displayValue) {
+      return [];
+    }
+    return [{ label: formatDeliveryDetailLabel(key), value: displayValue }];
+  });
+
+  return formatted.length > 0 ? formatted : [{ label: "Details", value: "No displayable delivery details were provided." }];
+}
+
+function formatPrivateDeliveryValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  try {
+    return JSON.stringify(value) ?? "Details are available but cannot be displayed.";
+  } catch {
+    return "Details are available but cannot be displayed.";
+  }
+}
+
+function formatDeliveryDetailLabel(value: string) {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replaceAll(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function formatDateTime(value: string) {
