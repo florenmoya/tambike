@@ -3195,10 +3195,16 @@ export class TambikeBackend {
     if (!sourceAward) throw new BackendError("NOT_FOUND", "NOT_FOUND");
     const giveaway = this.requireGiveawayByAward(sourceAward);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
-    const { snapshot, originalDraw, pool, prizeItem } = this.requireManualGiveawayReplacementSource(
+    // Build the immutable replay digest before consulting mutable allocation
+    // state. A later fulfilment changes the prize item from reserved to
+    // fulfilled, but must not invalidate an already successful idempotent
+    // replacement request.
+    const replayLineage = this.requireManualGiveawayReplacementSource(
       giveaway,
       sourceAward,
+      { requireReservedPrizeItem: false },
     );
+    const { snapshot, pool } = replayLineage;
     const snapshotEntry = snapshot.entries.find(
       (candidate) => candidate.id === parsed.snapshotEntryId,
     );
@@ -3225,6 +3231,10 @@ export class TambikeBackend {
       this.assertGiveawayDrawReplayInput(replay, inputDigest);
       return this.toGiveawayDrawResult(giveaway, replay);
     }
+    const { originalDraw, prizeItem } = this.requireManualGiveawayReplacementSource(
+      giveaway,
+      sourceAward,
+    );
     if (giveaway.state !== "claims_open" || !sourceAward.isCurrent) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
@@ -5263,7 +5273,9 @@ export class TambikeBackend {
   private requireManualGiveawayReplacementSource(
     giveaway: GiveawayAggregate,
     sourceAward: GiveawayAwardRecord,
+    options: { requireReservedPrizeItem?: boolean } = {},
   ) {
+    const requireReservedPrizeItem = options.requireReservedPrizeItem ?? true;
     const snapshot = giveaway.snapshot;
     const originalDraw = sourceAward.drawId
       ? this.giveaways.drawsById.get(sourceAward.drawId)
@@ -5287,7 +5299,7 @@ export class TambikeBackend {
       !pool ||
       pool.awardMode !== "manual_selection" ||
       !prizeItem ||
-      prizeItem.status !== "reserved"
+      (requireReservedPrizeItem && prizeItem.status !== "reserved")
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }

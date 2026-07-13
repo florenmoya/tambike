@@ -145,6 +145,18 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
       claimDeadlineAt?: string;
     },
   ): Promise<GiveawayDrawResult>;
+  issueGiveawayClaimToken(
+    sessionToken: string,
+    awardId: string,
+  ): Promise<{ qrPayload: string }>;
+  verifyGiveawayClaim(
+    sessionToken: string,
+    input: { payload: string; method: "camera" | "upload" | "manual"; idempotencyKey: string },
+  ): Promise<{ awardId: string; status: string }>;
+  fulfillGiveawayAward(
+    sessionToken: string,
+    input: { awardId: string; idempotencyKey: string; reference?: string },
+  ): Promise<{ awardId: string; status: string }>;
   cancelGiveaway(
     sessionToken: string,
     giveawayId: string,
@@ -1831,6 +1843,112 @@ describe("in-memory event giveaway lifecycle", () => {
           idempotencyKey: "manual-replacement-second-successor",
         }),
       ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    });
+  });
+
+  test("replays a manual replacement after its successor is fulfilled", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        prizePools: [
+          {
+            id: "manual-fulfilled-replay-pool",
+            title: "Manual fulfilled replay prize",
+            awardMode: "manual_selection",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Manual replay helmet" }],
+          },
+        ],
+      }),
+    );
+    const secondRider = await createExtraRider(backend, "manual-fulfilled-replay-second");
+    await Promise.all([
+      backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+      backend.registerForEvent(secondRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+    ]);
+    const pool = (await backend.getPublicGiveaway(context.giveaway.id)).prizePools[0];
+    if (!pool) throw new Error("TEST_MANUAL_FULFILLED_REPLAY_POOL_MISSING");
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const candidates = await backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        pool.id,
+      );
+      const initialCandidate = candidates[0];
+      if (!initialCandidate) throw new Error("TEST_MANUAL_FULFILLED_REPLAY_INITIAL_CANDIDATE_MISSING");
+      const initial = await backend.selectManualGiveawayAward(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        prizePoolId: pool.id,
+        snapshotEntryId: initialCandidate.snapshotEntryId,
+        reason: "Initial manual recognition before retry",
+        idempotencyKey: "manual-fulfilled-replay-original",
+      });
+      await backend.publishGiveawayDraw(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        initial.drawId,
+      );
+
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const source = campaign.awards.find(
+        (award) => award.drawId === initial.drawId && award.isCurrent,
+      );
+      if (!source) throw new Error("TEST_MANUAL_FULFILLED_REPLAY_SOURCE_MISSING");
+      const sourceWinner = source.winnerUserId === context.rider.user.id ? context.rider : secondRider;
+      await backend.declineGiveawayAward(
+        sourceWinner.sessionToken,
+        source.id,
+        "The original manual recipient declined",
+      );
+      const options = await backend.listManualGiveawayReplacementCandidates(
+        context.organizer.sessionToken,
+        source.id,
+      );
+      const replacementCandidate = options.candidates.find(
+        (candidate) => candidate.snapshotEntryId !== source.snapshotEntryId,
+      );
+      if (!replacementCandidate) throw new Error("TEST_MANUAL_FULFILLED_REPLAY_SUCCESSOR_CANDIDATE_MISSING");
+      const replacementInput = {
+        sourceAwardId: source.id,
+        snapshotEntryId: replacementCandidate.snapshotEntryId,
+        reason: "Replace the declined manual recipient",
+        idempotencyKey: "manual-fulfilled-replay-successor",
+      };
+      const replacement = await backend.replaceManualGiveawayAward(
+        context.organizer.sessionToken,
+        replacementInput,
+      );
+      const successor = campaign.awards.find(
+        (award) => award.predecessorAwardId === source.id,
+      );
+      if (!successor) throw new Error("TEST_MANUAL_FULFILLED_REPLAY_SUCCESSOR_MISSING");
+      const successorWinner = successor.winnerUserId === context.rider.user.id
+        ? context.rider
+        : secondRider;
+      const claim = await backend.issueGiveawayClaimToken(successorWinner.sessionToken, successor.id);
+      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+        payload: claim.qrPayload,
+        method: "manual",
+        idempotencyKey: "manual-fulfilled-replay-verify",
+      });
+      await backend.fulfillGiveawayAward(context.venue.sessionToken, {
+        awardId: successor.id,
+        idempotencyKey: "manual-fulfilled-replay-fulfill",
+        reference: "desk:manual-replay",
+      });
+
+      await expect(
+        backend.replaceManualGiveawayAward(context.organizer.sessionToken, replacementInput),
+      ).resolves.toEqual(replacement);
     });
   });
 
