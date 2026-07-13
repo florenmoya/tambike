@@ -6,15 +6,21 @@ import { TooltipProvider } from "../../src/components/ui/tooltip";
 import { OrganizerConsole } from "../../src/features/organizer/organizer-console";
 import { DemoProvider } from "../../src/features/tambike-demo/demo-provider";
 import { createTambikeTestBackend } from "../../src/server/testing";
-import type { OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData } from "../../src/features/giveaways/types";
+import type {
+  OrganizerGiveawayOperations,
+  OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
+} from "../../src/features/giveaways/types";
 import {
   buildGiveawayLifecycleRoute,
   CampaignCancellationPanel,
   CampaignEntryOperations,
   CampaignManualSelectionOperations,
   CampaignOperationalHeader,
-  canCancelGiveawayBeforeAwards,
   OrganizerGiveawayWorkspace,
+  RecoveryQueuePanel,
+  resolveGiveawaySubmission,
+  resolveInitialDrawSubmission,
+  resolveManualSelectionSubmission,
   submitCampaignCode,
   toOrganizerGiveawayEditorDraft,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
@@ -251,37 +257,33 @@ describe("organizer giveaway lifecycle route", () => {
     expect(onCreateCode).toHaveBeenCalledWith({ maxUses: 3 });
   });
 
-  test("exposes a reasoned cancellation control only before awards can exist", () => {
-    const preAwardMarkup = renderToStaticMarkup(
+  test("renders cancellation only when the server grants the current campaign capability", () => {
+    const serverAllowedMarkup = renderToStaticMarkup(
       React.createElement(CampaignCancellationPanel, {
-        state: "paused",
+        state: "locked",
+        canCancel: true,
         reason: "",
         isPending: false,
         onReasonChange: () => undefined,
         onCancel: () => undefined,
-      }),
+      } as unknown as React.ComponentProps<typeof CampaignCancellationPanel>),
     );
-    const lockedMarkup = renderToStaticMarkup(
+    const serverHiddenMarkup = renderToStaticMarkup(
       React.createElement(CampaignCancellationPanel, {
-        state: "locked",
+        state: "paused",
+        canCancel: false,
         reason: "No longer needed",
         isPending: false,
         onReasonChange: () => undefined,
         onCancel: () => undefined,
-      }),
+      } as unknown as React.ComponentProps<typeof CampaignCancellationPanel>),
     );
 
-    expect(canCancelGiveawayBeforeAwards("draft")).toBe(true);
-    expect(canCancelGiveawayBeforeAwards("scheduled")).toBe(true);
-    expect(canCancelGiveawayBeforeAwards("open")).toBe(true);
-    expect(canCancelGiveawayBeforeAwards("paused")).toBe(true);
-    expect(canCancelGiveawayBeforeAwards("locked")).toBe(false);
-    expect(canCancelGiveawayBeforeAwards("drawing")).toBe(false);
-    expect(preAwardMarkup).toContain("Cancel campaign before awards exist");
-    expect(preAwardMarkup).toContain("Cancellation reason");
-    expect(preAwardMarkup).toContain("Cancel campaign");
-    expect(preAwardMarkup).toMatch(/disabled/);
-    expect(lockedMarkup).toBe("");
+    expect(serverAllowedMarkup).toContain("Cancel campaign before awards exist");
+    expect(serverAllowedMarkup).toContain("Cancellation reason");
+    expect(serverAllowedMarkup).toContain("Cancel campaign");
+    expect(serverAllowedMarkup).toMatch(/disabled/);
+    expect(serverHiddenMarkup).toBe("");
   });
 
   test("uses locked snapshot manual selection without offering a random-draw substitute", () => {
@@ -296,7 +298,7 @@ describe("organizer giveaway lifecycle route", () => {
         },
         inventoryStatusByPool: { "manual-pool": "ready" },
         isPending: false,
-        onSelect: () => undefined,
+        onSelect: async () => false,
       }),
     );
     const preLockMarkup = renderToStaticMarkup(
@@ -307,7 +309,7 @@ describe("organizer giveaway lifecycle route", () => {
         candidatesByPool: {},
         inventoryStatusByPool: {},
         isPending: false,
-        onSelect: () => undefined,
+        onSelect: async () => false,
       }),
     );
     const lockedManualHeader = renderToStaticMarkup(
@@ -321,7 +323,13 @@ describe("organizer giveaway lifecycle route", () => {
           mechanicsVersion: 1,
         },
         isPending: false,
-        canRunInitialRandomDraw: false,
+        operations: {
+          giveawayId: "giveaway-manual",
+          canCancel: false,
+          canRunInitialRandomDraw: false,
+          publishableDrawId: null,
+          recoverableAwards: [],
+        },
         onSubmit: () => undefined,
         onSchedule: () => undefined,
         onOpen: () => undefined,
@@ -341,7 +349,14 @@ describe("organizer giveaway lifecycle route", () => {
     expect(lockedManualHeader).not.toContain("Run draw");
   });
 
-  test("holds the publish control while loaded manual candidate data still has awardable choices", () => {
+  test("keeps initial random draw and reload-safe publication controls server-owned", () => {
+    const operations: OrganizerGiveawayOperations = {
+      giveawayId: "giveaway-manual",
+      canCancel: false,
+      canRunInitialRandomDraw: true,
+      publishableDrawId: "draw-opaque",
+      recoverableAwards: [],
+    };
     const publishBlockedProps = {
       campaign: {
         id: "giveaway-manual",
@@ -352,8 +367,7 @@ describe("organizer giveaway lifecycle route", () => {
         mechanicsVersion: 1,
       },
       isPending: false,
-      drawId: "draw-1",
-      canRunInitialRandomDraw: false,
+      operations,
       hasAwardableManualSelections: true,
       onSubmit: () => undefined,
       onSchedule: () => undefined,
@@ -368,7 +382,92 @@ describe("organizer giveaway lifecycle route", () => {
       React.createElement(CampaignOperationalHeader, publishBlockedProps),
     );
 
+    expect(markup).toContain("Run draw");
+    expect(markup).toContain("Publish result");
     expect(markup).toContain("Complete the remaining manual selections before publishing.");
     expect(markup).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?Publish result/);
+  });
+
+  test("uses a server-owned recovery queue without rendering raw terminal award IDs", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(RecoveryQueuePanel, {
+        recoverableAwards: [
+          {
+            awardId: "award-opaque-never-display",
+            label: "Random redraw for Helmet pool",
+            status: "voided",
+            recoveryKind: "random_redraw",
+            claimDeadlineRequired: true,
+          },
+        ],
+        isPending: false,
+        reason: "",
+        claimDeadlineAt: "",
+        onReasonChange: () => undefined,
+        onClaimDeadlineAtChange: () => undefined,
+        onRandomRedraw: async () => false,
+        onDirectReoffer: () => undefined,
+        onLoadManualReplacementOptions: async () => null,
+        onReplaceManualAward: async () => false,
+      }),
+    );
+
+    expect(markup).toContain("Random redraw for Helmet pool");
+    expect(markup).toContain("New claim deadline");
+    expect(markup).not.toContain("award-opaque-never-display");
+    expect(markup).not.toContain("Terminal award ID");
+
+    const manualMarkup = renderToStaticMarkup(
+      React.createElement(RecoveryQueuePanel, {
+        recoverableAwards: [
+          {
+            awardId: "manual-award-opaque-never-display",
+            label: "Manual replacement for Sponsor pool",
+            status: "voided",
+            recoveryKind: "manual_replacement",
+            claimDeadlineRequired: true,
+          },
+        ],
+        isPending: false,
+        reason: "",
+        claimDeadlineAt: "",
+        onReasonChange: () => undefined,
+        onClaimDeadlineAtChange: () => undefined,
+        onRandomRedraw: async () => false,
+        onDirectReoffer: () => undefined,
+        onLoadManualReplacementOptions: async () => null,
+        onReplaceManualAward: async () => false,
+      }),
+    );
+    expect(manualMarkup).toContain("Manual replacement");
+    expect(manualMarkup).toContain("fresh future claim deadline is required");
+    expect(manualMarkup).not.toContain("manual-award-opaque-never-display");
+  });
+
+  test("reuses idempotency keys only for identical manual and recovery submissions", () => {
+    const manualInput = {
+      giveawayId: "giveaway-1",
+      prizePoolId: "pool-1",
+      snapshotEntryId: "entry-1",
+      reason: "Community contribution",
+    };
+    const firstManual = resolveManualSelectionSubmission(null, manualInput, () => "manual-key-1");
+
+    expect(resolveManualSelectionSubmission(firstManual, manualInput, () => "manual-key-2")).toBe(firstManual);
+    expect(
+      resolveManualSelectionSubmission(firstManual, { ...manualInput, reason: "Updated reason" }, () => "manual-key-3"),
+    ).toMatchObject({ idempotencyKey: "manual-key-3" });
+
+    const firstRecovery = resolveGiveawaySubmission(null, "award|entry|reason|deadline", () => "recovery-key-1");
+    expect(resolveGiveawaySubmission(firstRecovery, "award|entry|reason|deadline", () => "recovery-key-2")).toBe(firstRecovery);
+    expect(resolveGiveawaySubmission(firstRecovery, "award|entry|new-reason|deadline", () => "recovery-key-3")).toMatchObject({
+      idempotencyKey: "recovery-key-3",
+    });
+
+    const firstInitialDraw = resolveInitialDrawSubmission(null, "giveaway-1", () => "initial-key-1");
+    expect(resolveInitialDrawSubmission(firstInitialDraw, "giveaway-1", () => "initial-key-2")).toBe(firstInitialDraw);
+    expect(resolveInitialDrawSubmission(firstInitialDraw, "giveaway-2", () => "initial-key-3")).toMatchObject({
+      idempotencyKey: "initial-key-3",
+    });
   });
 });

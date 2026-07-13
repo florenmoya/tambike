@@ -360,6 +360,47 @@ export interface OrganizerGiveawayWorkspace {
   prizePools: GiveawayPrizePoolInput[];
 }
 
+/** Terminal status values that an organizer can act on only through a server-approved queue item. */
+export type OrganizerGiveawayRecoverableAwardStatus =
+  | "declined"
+  | "voided"
+  | "disqualified"
+  | "expired";
+
+/** The server chooses the only valid recovery path for an opaque award reference. */
+export type OrganizerGiveawayRecoveryKind =
+  | "random_redraw"
+  | "manual_replacement"
+  | "direct_reoffer";
+
+/**
+ * Organizer-safe terminal award queue item. `awardId` is an opaque transport
+ * reference only and must never be rendered as a user-entered or displayed ID.
+ */
+export interface OrganizerGiveawayRecoverableAward {
+  awardId: string;
+  label: string;
+  status: OrganizerGiveawayRecoverableAwardStatus;
+  recoveryKind: OrganizerGiveawayRecoveryKind;
+  /** The server has determined that this recovery needs a new future deadline. */
+  claimDeadlineRequired: boolean;
+}
+
+/**
+ * Server-owned operational controls for one campaign. This is deliberately
+ * separate from editable mechanics and excludes entrants, claims, secrets,
+ * audit payloads, draw seeds, and raw candidate facts.
+ */
+export interface OrganizerGiveawayOperations {
+  giveawayId: string;
+  canCancel: boolean;
+  canRunInitialRandomDraw: boolean;
+  /** A server-selected completed draw that may be published after reload. */
+  publishableDrawId: string | null;
+  /** Only current, authorized, actionable awards are included. */
+  recoverableAwards: OrganizerGiveawayRecoverableAward[];
+}
+
 /** Safe organizer/admin code inventory; raw codes and token hashes never leave creation. */
 export type GiveawayCampaignCodeStatus = "active" | "expired" | "exhausted" | "revoked";
 
@@ -420,6 +461,27 @@ export interface SelectManualGiveawayAwardInput {
   snapshotEntryId: string;
   reason: string;
   idempotencyKey: string;
+}
+
+/** Explicit, history-preserving replacement for a terminal manual award. */
+export interface ReplaceManualGiveawayAwardInput {
+  sourceAwardId: string;
+  snapshotEntryId: string;
+  reason: string;
+  idempotencyKey: string;
+  claimDeadlineAt?: string;
+}
+
+/**
+ * Safe options for a manual replacement. Candidate labels remain opaque
+ * frozen references; no rider profile, source fact, or claim secret appears.
+ */
+export interface GiveawayManualAwardReplacementOptions {
+  sourceAwardId: string;
+  label: string;
+  status: OrganizerGiveawayRecoverableAwardStatus;
+  claimDeadlineRequired: boolean;
+  candidates: GiveawayManualSelectionCandidate[];
 }
 
 /** A winner must make an explicit, revocable choice before any alias is public. */

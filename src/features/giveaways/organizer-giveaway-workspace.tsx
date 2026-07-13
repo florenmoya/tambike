@@ -34,22 +34,26 @@ import {
   cancelGiveawayAction,
   createGiveawayAction,
   createGiveawayCampaignCodeAction,
+  getOrganizerGiveawayOperationsAction,
   getOrganizerGiveawayWorkspaceAction,
   getOrganizerGiveawayReportAction,
   grantManualGiveawayEntryAction,
   listGiveawayCampaignCodesAction,
   listGiveawayManualEntryCandidatesAction,
   listGiveawayManualSelectionCandidatesAction,
+  listManualGiveawayReplacementCandidatesAction,
   listOrganizerGiveawaysAction,
   lockGiveawayAction,
   openGiveawayAction,
   pauseGiveawayAction,
   publishGiveawayDrawAction,
   redrawGiveawayAwardAction,
+  recoverExpiredDirectGiveawayAwardAction,
   revokeManualGiveawayEntryAction,
   runGiveawayDrawAction,
   scheduleGiveawayAction,
   selectManualGiveawayAwardAction,
+  replaceManualGiveawayAwardAction,
   submitGiveawayForReviewAction,
   updateGiveawayAction,
 } from "@/server/giveaway-actions";
@@ -66,13 +70,17 @@ import type {
   GiveawayFulfilmentMode,
   GiveawayKind,
   GiveawayManualEntryCandidate,
+  GiveawayManualAwardReplacementOptions,
   GiveawayManualSelectionCandidate,
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
   IssuedGiveawayCampaignCode,
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
+  OrganizerGiveawayOperations,
   OrganizerGiveawayReport,
+  ReplaceManualGiveawayAwardInput,
+  SelectManualGiveawayAwardInput,
   UpdateGiveawayInput,
 } from "./types";
 
@@ -173,8 +181,6 @@ type GiveawayEditorDraft = {
   prizePools: GiveawayPrizePoolInput[];
 };
 
-type DrawState = Record<string, string | undefined>;
-
 type EntryOperationsInventoryStatus = "idle" | "loading" | "ready" | "error";
 
 type IssuedCampaignCodeState = {
@@ -239,9 +245,11 @@ export function OrganizerGiveawayWorkspace({
     campaignId: string;
     value: OrganizerGiveawayReport;
   } | null>(null);
-  const [draws, setDraws] = React.useState<DrawState>({});
-  const [redrawAwardId, setRedrawAwardId] = React.useState("");
-  const [redrawReason, setRedrawReason] = React.useState("");
+  const [operationsByCampaignId, setOperationsByCampaignId] = React.useState<
+    Record<string, OrganizerGiveawayOperations>
+  >({});
+  const [recoveryReason, setRecoveryReason] = React.useState("");
+  const [recoveryClaimDeadlineAt, setRecoveryClaimDeadlineAt] = React.useState("");
   const [cancellationReason, setCancellationReason] = React.useState("");
   const [notice, setNotice] = React.useState<{ tone: "error" | "success"; text: string } | null>(null);
   const [operationalEntryModes, setOperationalEntryModes] = React.useState<Record<string, GiveawayEntryMode>>({});
@@ -258,18 +266,19 @@ export function OrganizerGiveawayWorkspace({
   >({});
   const [issuedCampaignCode, setIssuedCampaignCode] = React.useState<IssuedCampaignCodeState | null>(null);
   const [isPending, startTransition] = React.useTransition();
+  const initialDrawSubmissionRef = React.useRef<ManualSelectionSubmission | null>(null);
 
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null;
   const selectedDraft = selectedCampaign ? draftsByCampaignId[selectedCampaign.id] : undefined;
+  const selectedOperations = selectedCampaign
+    ? operationsByCampaignId[selectedCampaign.id]
+    : undefined;
   const selectedOperationalEntryMode = selectedCampaign
     ? operationalEntryModes[selectedCampaign.id]
     : undefined;
   const selectedManualSelectionPools = selectedDraft?.prizePools.filter(
     (pool) => pool.awardMode === "manual_selection",
   ) ?? [];
-  const canRunInitialRandomDraw = selectedDraft?.prizePools.some(
-    (pool) => pool.awardMode === "random_draw",
-  ) ?? false;
   const selectedManualSelectionPoolIds = selectedManualSelectionPools.map((pool) => pool.id).join("|");
   const hasAwardableManualSelections = selectedManualSelectionPools.some(
     (pool) =>
@@ -364,6 +373,62 @@ export function OrganizerGiveawayWorkspace({
       cancelled = true;
     };
   }, [configurationFailures, selectedCampaignIdForConfiguration, selectedDraft]);
+
+  const loadCampaignOperations = React.useCallback(async (giveawayId: string) => {
+    const result = await getOrganizerGiveawayOperationsAction(giveawayId);
+    if (!result.ok) throw new Error("GIVEAWAY_OPERATIONS_UNAVAILABLE");
+    return result.data as OrganizerGiveawayOperations;
+  }, []);
+
+  const refreshCampaignOperations = React.useCallback(
+    async (giveawayId: string) => {
+      const value = await loadCampaignOperations(giveawayId);
+      setOperationsByCampaignId((current) => ({ ...current, [giveawayId]: value }));
+      return value;
+    },
+    [loadCampaignOperations],
+  );
+
+  const refreshWorkspace = React.useCallback(async () => {
+    try {
+      const nextCampaigns = await refreshCampaigns();
+      const nextSelectedCampaignId =
+        selectedCampaignId && nextCampaigns.some((campaign) => campaign.id === selectedCampaignId)
+          ? selectedCampaignId
+          : nextCampaigns[0]?.id;
+      if (nextSelectedCampaignId) {
+        await refreshCampaignOperations(nextSelectedCampaignId);
+      }
+    } catch {
+      setNotice({
+        tone: "error",
+        text: "Campaign controls could not be refreshed. Confirm organizer access and try again.",
+      });
+    }
+  }, [refreshCampaignOperations, refreshCampaigns, selectedCampaignId]);
+
+  const selectedCampaignIdForOperations = selectedCampaign?.id;
+  React.useEffect(() => {
+    if (!selectedCampaignIdForOperations) return;
+    let cancelled = false;
+    const loadOperations = async () => {
+      try {
+        const value = await loadCampaignOperations(selectedCampaignIdForOperations);
+        if (!cancelled) {
+          setOperationsByCampaignId((current) => ({
+            ...current,
+            [selectedCampaignIdForOperations]: value,
+          }));
+        }
+      } catch {
+        // Do not invent local capabilities when the server-owned controls cannot be loaded.
+      }
+    };
+    void Promise.resolve().then(loadOperations);
+    return () => {
+      cancelled = true;
+    };
+  }, [loadCampaignOperations, selectedCampaignIdForOperations]);
 
   const loadCampaignReport = React.useCallback(async (giveawayId: string) => {
     const result = await getOrganizerGiveawayReportAction(giveawayId);
@@ -500,13 +565,20 @@ export function OrganizerGiveawayWorkspace({
   ]);
 
   const runWorkspaceAction = React.useCallback(
-    (successText: string, action: () => Promise<{ ok: boolean }>) => {
+    (
+      successText: string,
+      action: () => Promise<{ ok: boolean }>,
+      giveawayId?: string,
+    ) => {
       setNotice(null);
       startTransition(async () => {
         try {
           const result = await action();
           if (!result.ok) throw new Error("GIVEAWAY_ACTION_UNAVAILABLE");
           await refreshCampaigns();
+          if (giveawayId) {
+            await refreshCampaignOperations(giveawayId).catch(() => undefined);
+          }
           setNotice({ tone: "success", text: successText });
         } catch {
           setNotice({
@@ -516,7 +588,7 @@ export function OrganizerGiveawayWorkspace({
         }
       });
     },
-    [refreshCampaigns, startTransition],
+    [refreshCampaignOperations, refreshCampaigns, startTransition],
   );
 
   const createCampaignCode = React.useCallback(
@@ -605,6 +677,7 @@ export function OrganizerGiveawayWorkspace({
           setOperationalEntryModes((current) => ({ ...current, [campaign.id]: editorDraft.entryMode }));
           setSelectedCampaignId(campaign.id);
           await refreshCampaigns();
+          await refreshCampaignOperations(campaign.id).catch(() => undefined);
           setNotice({ tone: "success", text: "Campaign saved as a draft. Submit it for compliance review when the policy is final." });
           return;
         }
@@ -627,6 +700,7 @@ export function OrganizerGiveawayWorkspace({
         }));
         if (selectedDraft.entryMode !== "claim_code") setIssuedCampaignCode(null);
         await refreshCampaigns();
+        await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
         setNotice({ tone: "success", text: "Campaign policy and terms were saved. Compliance review is required again after policy changes." });
       } catch (error) {
         setNotice({
@@ -637,124 +711,204 @@ export function OrganizerGiveawayWorkspace({
         });
       }
     });
-  }, [editorDraft, eventId, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
+  }, [editorDraft, eventId, refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
 
   const runInitialDraw = React.useCallback(() => {
-    if (!selectedCampaign || !canRunInitialRandomDraw) return;
+    if (!selectedCampaign || !selectedOperations?.canRunInitialRandomDraw) return;
+    const submission = resolveInitialDrawSubmission(
+      initialDrawSubmissionRef.current,
+      selectedCampaign.id,
+    );
+    initialDrawSubmissionRef.current = submission;
     setNotice(null);
     startTransition(async () => {
       try {
         const result = await runGiveawayDrawAction({
           giveawayId: selectedCampaign.id,
-          idempotencyKey: makeIdempotencyKey("initial-draw"),
+          idempotencyKey: submission.idempotencyKey,
           reason: "Organizer initiated initial draw",
         });
         if (!result.ok) throw new Error("GIVEAWAY_DRAW_UNAVAILABLE");
-        const drawId = (result.data as { drawId?: string }).drawId;
-        if (!drawId) throw new Error("GIVEAWAY_DRAW_UNAVAILABLE");
-        setDraws((current) => ({ ...current, [selectedCampaign.id]: drawId }));
         await refreshCampaigns();
+        await refreshCampaignOperations(selectedCampaign.id);
+        if (
+          initialDrawSubmissionRef.current?.inputFingerprint === submission.inputFingerprint
+        ) {
+          initialDrawSubmissionRef.current = null;
+        }
         setNotice({ tone: "success", text: "The initial draw is ready for review. Publish only after you have checked the result." });
       } catch {
         setNotice({ tone: "error", text: "The draw could not run. Lock the campaign first and try again." });
       }
     });
-  }, [canRunInitialRandomDraw, refreshCampaigns, selectedCampaign, startTransition]);
+  }, [refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedOperations, startTransition]);
 
   const selectManualAward = React.useCallback(
-    (prizePoolId: string, snapshotEntryId: string, reason: string) => {
-      if (
-        !selectedCampaign ||
-        !selectedDraft ||
-        !["locked", "drawing"].includes(selectedCampaign.state) ||
-        !selectedDraft.prizePools.some(
-          (pool) => pool.id === prizePoolId && pool.awardMode === "manual_selection",
-        )
-      ) {
-        return;
-      }
+    (input: SelectManualGiveawayAwardInput): Promise<boolean> => {
+      if (!selectedCampaign || input.giveawayId !== selectedCampaign.id) return Promise.resolve(false);
       setNotice(null);
-      startTransition(async () => {
-        try {
-          const result = await selectManualGiveawayAwardAction({
-            giveawayId: selectedCampaign.id,
-            prizePoolId,
-            snapshotEntryId,
-            reason,
-            idempotencyKey: makeIdempotencyKey("manual-selection"),
-          });
-          if (!result.ok) throw new Error("GIVEAWAY_MANUAL_SELECTION_UNAVAILABLE");
-          const drawId = (result.data as { drawId?: string }).drawId;
-          if (!drawId) throw new Error("GIVEAWAY_MANUAL_SELECTION_UNAVAILABLE");
-          setDraws((current) => ({ ...current, [selectedCampaign.id]: drawId }));
-          await refreshCampaigns();
-          await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
-          await refreshManualSelectionCandidatePools(
-            selectedCampaign.id,
-            selectedManualSelectionPoolIds
-              ? selectedManualSelectionPoolIds.split("|")
-              : [],
-          ).catch(() => undefined);
-          setNotice({
-            tone: "success",
-            text: "Manual selection recorded from the locked candidate snapshot. Review the result before publishing.",
-          });
-        } catch {
-          setNotice({
-            tone: "error",
-            text: "The manual selection was not recorded. Choose a current locked entry, include a reason, and try again.",
-          });
-        }
+      return new Promise((resolve) => {
+        startTransition(async () => {
+          try {
+            const result = await selectManualGiveawayAwardAction(input);
+            if (!result.ok) throw new Error("GIVEAWAY_MANUAL_SELECTION_UNAVAILABLE");
+            await refreshCampaigns();
+            await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
+            await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
+            await refreshManualSelectionCandidatePools(
+              selectedCampaign.id,
+              selectedManualSelectionPoolIds
+                ? selectedManualSelectionPoolIds.split("|")
+                : [],
+            ).catch(() => undefined);
+            setNotice({
+              tone: "success",
+              text: "Manual selection recorded from the locked candidate snapshot. Review the result before publishing.",
+            });
+            resolve(true);
+          } catch {
+            setNotice({
+              tone: "error",
+              text: "The manual selection was not recorded. Choose a current locked entry, include a reason, and try again.",
+            });
+            resolve(false);
+          }
+        });
       });
     },
     [
       refreshCampaignReport,
+      refreshCampaignOperations,
       refreshCampaigns,
       refreshManualSelectionCandidatePools,
       selectedCampaign,
-      selectedDraft,
       selectedManualSelectionPoolIds,
       startTransition,
     ],
   );
 
-  const publishInitialDraw = React.useCallback(() => {
-    if (!selectedCampaign || !draws[selectedCampaign.id]) return;
-    runWorkspaceAction("Draw published. Winners can now see their claim status.", () =>
-      publishGiveawayDrawAction(selectedCampaign.id, draws[selectedCampaign.id]!),
-    );
-  }, [draws, runWorkspaceAction, selectedCampaign]);
+  const loadManualReplacementOptions = React.useCallback(async (sourceAwardId: string) => {
+    try {
+      const result = await listManualGiveawayReplacementCandidatesAction(sourceAwardId);
+      if (!result.ok) throw new Error("GIVEAWAY_MANUAL_REPLACEMENT_OPTIONS_UNAVAILABLE");
+      return result.data as GiveawayManualAwardReplacementOptions;
+    } catch {
+      setNotice({
+        tone: "error",
+        text: "Replacement candidates could not be loaded. Choose a current server-listed manual award and try again.",
+      });
+      return null;
+    }
+  }, []);
 
-  const redrawAward = React.useCallback(() => {
-    if (!selectedCampaign || !redrawAwardId.trim() || !redrawReason.trim()) return;
+  const replaceManualAward = React.useCallback(
+    (input: ReplaceManualGiveawayAwardInput): Promise<boolean> => {
+      if (!selectedCampaign) return Promise.resolve(false);
+      setNotice(null);
+      return new Promise((resolve) => {
+        startTransition(async () => {
+          try {
+            const result = await replaceManualGiveawayAwardAction(input);
+            if (!result.ok) throw new Error("GIVEAWAY_MANUAL_REPLACEMENT_UNAVAILABLE");
+            await refreshCampaigns();
+            await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
+            await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
+            setRecoveryReason("");
+            setRecoveryClaimDeadlineAt("");
+            setNotice({
+              tone: "success",
+              text: "Manual replacement recorded from the frozen candidate set. The original terminal award remains in the audit history.",
+            });
+            resolve(true);
+          } catch {
+            setNotice({
+              tone: "error",
+              text: "The manual replacement was not accepted. Choose a current frozen candidate, provide the required deadline, and try again.",
+            });
+            resolve(false);
+          }
+        });
+      });
+    },
+    [refreshCampaignOperations, refreshCampaignReport, refreshCampaigns, selectedCampaign, startTransition],
+  );
+
+  const publishCurrentDraw = React.useCallback(() => {
+    const drawId = selectedOperations?.publishableDrawId;
+    if (!selectedCampaign || !drawId) return;
+    runWorkspaceAction(
+      "Draw published. Winners can now see their claim status.",
+      () => publishGiveawayDrawAction(selectedCampaign.id, drawId),
+      selectedCampaign.id,
+    );
+  }, [runWorkspaceAction, selectedCampaign, selectedOperations]);
+
+  const recoverRandomAward = React.useCallback((input: {
+    awardId: string;
+    reason: string;
+    idempotencyKey: string;
+    claimDeadlineAt?: string;
+  }): Promise<boolean> => {
+    if (!selectedCampaign || !input.reason.trim()) return Promise.resolve(false);
+    setNotice(null);
+    return new Promise((resolve) => {
+      startTransition(async () => {
+        try {
+          const result = await redrawGiveawayAwardAction(input);
+          if (!result.ok) throw new Error("GIVEAWAY_REDRAW_UNAVAILABLE");
+          await refreshCampaigns();
+          await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
+          await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
+          setRecoveryReason("");
+          setRecoveryClaimDeadlineAt("");
+          setNotice({ tone: "success", text: "Redraw recorded from the original locked snapshot." });
+          resolve(true);
+        } catch {
+          setNotice({ tone: "error", text: "The redraw was not accepted. Choose a server-listed recovery item and include a reason." });
+          resolve(false);
+        }
+      });
+    });
+  }, [refreshCampaignOperations, refreshCampaignReport, refreshCampaigns, selectedCampaign, startTransition]);
+
+  const recoverDirectAward = React.useCallback((awardId: string, reason: string, claimDeadlineAt: string) => {
+    if (!selectedCampaign || !reason.trim()) return;
+    const deadline = optionalLocalDateTimeToIso(claimDeadlineAt);
+    if (!isFutureIsoDate(deadline)) {
+      setNotice({ tone: "error", text: "Choose a valid future claim deadline before re-offering this prize." });
+      return;
+    }
     setNotice(null);
     startTransition(async () => {
       try {
-        const result = await redrawGiveawayAwardAction({
-          awardId: redrawAwardId.trim(),
-          idempotencyKey: makeIdempotencyKey("redraw"),
-          reason: redrawReason.trim(),
+        const result = await recoverExpiredDirectGiveawayAwardAction({
+          awardId,
+          reason: reason.trim(),
+          claimDeadlineAt: deadline,
         });
-        if (!result.ok) throw new Error("GIVEAWAY_REDRAW_UNAVAILABLE");
+        if (!result.ok) throw new Error("GIVEAWAY_DIRECT_RECOVERY_UNAVAILABLE");
         await refreshCampaigns();
-        setRedrawAwardId("");
-        setRedrawReason("");
-        setNotice({ tone: "success", text: "Redraw recorded from the original locked snapshot." });
+        await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
+        await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
+        setRecoveryReason("");
+        setRecoveryClaimDeadlineAt("");
+        setNotice({ tone: "success", text: "The direct prize has been re-offered from the frozen candidate set." });
       } catch {
-        setNotice({ tone: "error", text: "The redraw was not accepted. Use a current, terminal award and a new idempotency key." });
+        setNotice({ tone: "error", text: "The direct re-offer was not accepted. Choose a server-listed expired award and a future deadline." });
       }
     });
-  }, [redrawAwardId, redrawReason, refreshCampaigns, selectedCampaign, startTransition]);
+  }, [refreshCampaignOperations, refreshCampaignReport, refreshCampaigns, selectedCampaign, startTransition]);
 
   const cancelCampaign = React.useCallback(() => {
     const reason = cancellationReason.trim();
-    if (!selectedCampaign || !canCancelGiveawayBeforeAwards(selectedCampaign.state) || !reason) return;
+    if (!selectedCampaign || !selectedOperations?.canCancel || !reason) return;
     setNotice(null);
     startTransition(async () => {
       try {
         const result = await cancelGiveawayAction(selectedCampaign.id, reason);
         if (!result.ok) throw new Error("GIVEAWAY_CANCEL_UNAVAILABLE");
         await refreshCampaigns();
+        await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
         setCancellationReason("");
         setNotice({
           tone: "success",
@@ -767,7 +921,7 @@ export function OrganizerGiveawayWorkspace({
         });
       }
     });
-  }, [cancellationReason, refreshCampaigns, selectedCampaign, startTransition]);
+  }, [cancellationReason, refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedOperations, startTransition]);
 
   return (
     <div className="grid gap-4 px-4 pb-8 lg:px-6">
@@ -782,7 +936,7 @@ export function OrganizerGiveawayWorkspace({
             Configure mechanics before entries exist, then use the route below to make each policy, draw, and claim step deliberate.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void refreshCampaigns()} disabled={isPending}>
+        <Button type="button" variant="outline" onClick={() => void refreshWorkspace()} disabled={isPending}>
           <RefreshCwIcon data-icon="inline-start" className={cn(isPending && "animate-spin")} />
           Refresh
         </Button>
@@ -810,16 +964,15 @@ export function OrganizerGiveawayWorkspace({
             <CampaignOperationalHeader
               campaign={selectedCampaign}
               isPending={isPending}
-              drawId={draws[selectedCampaign.id]}
-              canRunInitialRandomDraw={canRunInitialRandomDraw}
+              operations={selectedOperations}
               hasAwardableManualSelections={hasAwardableManualSelections}
-              onSubmit={() => runWorkspaceAction("Campaign sent for compliance review.", () => submitGiveawayForReviewAction(selectedCampaign.id))}
-              onSchedule={() => runWorkspaceAction("Campaign scheduled. Automatic lifecycle work remains server-controlled.", () => scheduleGiveawayAction(selectedCampaign.id))}
-              onOpen={() => runWorkspaceAction("Campaign is open for qualifying entries.", () => openGiveawayAction(selectedCampaign.id))}
-              onPause={() => runWorkspaceAction("Campaign paused. Staff and organizer recovery controls remain available.", () => pauseGiveawayAction(selectedCampaign.id))}
-              onLock={() => runWorkspaceAction("Candidate snapshot locked. Configuration is now frozen.", () => lockGiveawayAction(selectedCampaign.id))}
+              onSubmit={() => runWorkspaceAction("Campaign sent for compliance review.", () => submitGiveawayForReviewAction(selectedCampaign.id), selectedCampaign.id)}
+              onSchedule={() => runWorkspaceAction("Campaign scheduled. Automatic lifecycle work remains server-controlled.", () => scheduleGiveawayAction(selectedCampaign.id), selectedCampaign.id)}
+              onOpen={() => runWorkspaceAction("Campaign is open for qualifying entries.", () => openGiveawayAction(selectedCampaign.id), selectedCampaign.id)}
+              onPause={() => runWorkspaceAction("Campaign paused. Staff and organizer recovery controls remain available.", () => pauseGiveawayAction(selectedCampaign.id), selectedCampaign.id)}
+              onLock={() => runWorkspaceAction("Candidate snapshot locked. Configuration is now frozen.", () => lockGiveawayAction(selectedCampaign.id), selectedCampaign.id)}
               onDraw={runInitialDraw}
-              onPublish={publishInitialDraw}
+              onPublish={publishCurrentDraw}
             />
           ) : (
             <NewCampaignHeader />
@@ -876,7 +1029,7 @@ export function OrganizerGiveawayWorkspace({
 
           {selectedCampaign ? (
             <CampaignCancellationPanel
-              state={selectedCampaign.state}
+              canCancel={Boolean(selectedOperations?.canCancel)}
               reason={cancellationReason}
               isPending={isPending}
               onReasonChange={setCancellationReason}
@@ -889,13 +1042,17 @@ export function OrganizerGiveawayWorkspace({
               <CampaignReport
                 report={report?.campaignId === selectedCampaign.id ? report.value : null}
               />
-              <RedrawPanel
-                disabled={isPending || selectedCampaign.state !== "claims_open"}
-                awardId={redrawAwardId}
-                reason={redrawReason}
-                onAwardIdChange={setRedrawAwardId}
-                onReasonChange={setRedrawReason}
-                onRedraw={redrawAward}
+              <RecoveryQueuePanel
+                recoverableAwards={selectedOperations?.recoverableAwards ?? []}
+                isPending={isPending}
+                reason={recoveryReason}
+                claimDeadlineAt={recoveryClaimDeadlineAt}
+                onReasonChange={setRecoveryReason}
+                onClaimDeadlineAtChange={setRecoveryClaimDeadlineAt}
+                onRandomRedraw={recoverRandomAward}
+                onDirectReoffer={recoverDirectAward}
+                onLoadManualReplacementOptions={loadManualReplacementOptions}
+                onReplaceManualAward={replaceManualAward}
               />
             </div>
           ) : null}
@@ -958,24 +1115,20 @@ function CampaignRail({
   );
 }
 
-export function canCancelGiveawayBeforeAwards(state: GiveawayState) {
-  return state === "draft" || state === "scheduled" || state === "open" || state === "paused";
-}
-
 export function CampaignCancellationPanel({
-  state,
+  canCancel,
   reason,
   isPending,
   onReasonChange,
   onCancel,
 }: {
-  state: GiveawayState;
+  canCancel: boolean;
   reason: string;
   isPending: boolean;
   onReasonChange: (reason: string) => void;
   onCancel: () => void;
 }) {
-  if (!canCancelGiveawayBeforeAwards(state)) return null;
+  if (!canCancel) return null;
 
   return (
     <Card className="border-destructive/30 bg-destructive/[0.02]">
@@ -1015,6 +1168,50 @@ export function CampaignCancellationPanel({
  * candidate snapshot. This component receives only opaque labels and never
  * has access to rider profiles, current activity, or qualification facts.
  */
+export type ManualSelectionSubmission = {
+  inputFingerprint: string;
+  idempotencyKey: string;
+};
+
+export function resolveGiveawaySubmission(
+  previous: ManualSelectionSubmission | null,
+  inputFingerprint: string,
+  createKey: () => string,
+): ManualSelectionSubmission {
+  if (previous?.inputFingerprint === inputFingerprint) return previous;
+  return { inputFingerprint, idempotencyKey: createKey() };
+}
+
+export function resolveInitialDrawSubmission(
+  previous: ManualSelectionSubmission | null,
+  giveawayId: string,
+  createKey: () => string = () => makeIdempotencyKey("initial-draw"),
+): ManualSelectionSubmission {
+  return resolveGiveawaySubmission(previous, `initial-random-draw:${giveawayId}`, createKey);
+}
+
+/**
+ * A repeat click or lost response must replay the exact same selection. A
+ * changed candidate, reason, or campaign/pool scope deliberately starts a new
+ * submission identity.
+ */
+export function resolveManualSelectionSubmission(
+  previous: ManualSelectionSubmission | null,
+  input: Pick<
+    SelectManualGiveawayAwardInput,
+    "giveawayId" | "prizePoolId" | "snapshotEntryId" | "reason"
+  >,
+  createKey: () => string = () => makeIdempotencyKey("manual-selection"),
+): ManualSelectionSubmission {
+  const inputFingerprint = JSON.stringify([
+    input.giveawayId,
+    input.prizePoolId,
+    input.snapshotEntryId,
+    input.reason.trim(),
+  ]);
+  return resolveGiveawaySubmission(previous, inputFingerprint, createKey);
+}
+
 export function CampaignManualSelectionOperations({
   campaignId,
   state,
@@ -1030,7 +1227,7 @@ export function CampaignManualSelectionOperations({
   candidatesByPool: Record<string, GiveawayManualSelectionCandidate[]>;
   inventoryStatusByPool: Record<string, EntryOperationsInventoryStatus>;
   isPending: boolean;
-  onSelect: (prizePoolId: string, snapshotEntryId: string, reason: string) => void;
+  onSelect: (input: SelectManualGiveawayAwardInput) => Promise<boolean>;
 }) {
   const manualPools = prizePools.filter((pool) => pool.awardMode === "manual_selection");
   if (manualPools.length === 0 || !["locked", "drawing"].includes(state)) return null;
@@ -1076,10 +1273,11 @@ function ManualSelectionPoolControls({
   candidates: GiveawayManualSelectionCandidate[];
   inventoryStatus: EntryOperationsInventoryStatus;
   isPending: boolean;
-  onSelect: (prizePoolId: string, snapshotEntryId: string, reason: string) => void;
+  onSelect: (input: SelectManualGiveawayAwardInput) => Promise<boolean>;
 }) {
   const [snapshotEntryId, setSnapshotEntryId] = React.useState("");
   const [reason, setReason] = React.useState("");
+  const manualSelectionSubmissionRef = React.useRef<ManualSelectionSubmission | null>(null);
   const selectedEntryIsCurrent = candidates.some((candidate) => candidate.snapshotEntryId === snapshotEntryId);
   const currentSnapshotEntryId = selectedEntryIsCurrent ? snapshotEntryId : "";
   const canSubmit =
@@ -1087,6 +1285,32 @@ function ManualSelectionPoolControls({
     !isPending &&
     selectedEntryIsCurrent &&
     Boolean(reason.trim());
+
+  const submitSelection = () => {
+    if (!canSubmit) return;
+    const input = {
+      giveawayId: campaignId,
+      prizePoolId,
+      snapshotEntryId: currentSnapshotEntryId,
+      reason: reason.trim(),
+    };
+    const submission = resolveManualSelectionSubmission(
+      manualSelectionSubmissionRef.current,
+      input,
+    );
+    manualSelectionSubmissionRef.current = submission;
+    void onSelect({ ...input, idempotencyKey: submission.idempotencyKey }).then(
+      (succeeded) => {
+        if (
+          succeeded &&
+          manualSelectionSubmissionRef.current?.inputFingerprint === submission.inputFingerprint
+        ) {
+          manualSelectionSubmissionRef.current = null;
+        }
+      },
+      () => undefined,
+    );
+  };
 
   return (
     <section className="grid gap-3 rounded-lg border bg-muted/20 p-3">
@@ -1114,7 +1338,10 @@ function ManualSelectionPoolControls({
             id={`${campaignId}-${prizePoolId}-manual-selection-entry`}
             className={selectClassName}
             value={currentSnapshotEntryId}
-            onChange={(event) => setSnapshotEntryId(event.target.value)}
+            onChange={(event) => {
+              manualSelectionSubmissionRef.current = null;
+              setSnapshotEntryId(event.target.value);
+            }}
           >
             <option value="">Choose a locked entry</option>
             {candidates.map((candidate) => (
@@ -1126,14 +1353,17 @@ function ManualSelectionPoolControls({
           <textarea
             className={textareaClassName}
             value={reason}
-            onChange={(event) => setReason(event.target.value)}
+            onChange={(event) => {
+              manualSelectionSubmissionRef.current = null;
+              setReason(event.target.value);
+            }}
             placeholder="Explain why this frozen entry should receive this prize."
           />
         </Field>
         <p className="text-xs text-muted-foreground">A non-empty reason is recorded in the audit trail. Random draw is not used for this pool.</p>
         <Button
           type="button"
-          onClick={() => onSelect(prizePoolId, currentSnapshotEntryId, reason.trim())}
+          onClick={submitSelection}
           disabled={!canSubmit}
         >
           {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <CheckCircle2Icon data-icon="inline-start" />}
@@ -1147,8 +1377,7 @@ function ManualSelectionPoolControls({
 export function CampaignOperationalHeader({
   campaign,
   isPending,
-  drawId,
-  canRunInitialRandomDraw,
+  operations,
   hasAwardableManualSelections = false,
   onSubmit,
   onSchedule,
@@ -1160,8 +1389,7 @@ export function CampaignOperationalHeader({
 }: {
   campaign: OrganizerGiveawayCampaign;
   isPending: boolean;
-  drawId?: string;
-  canRunInitialRandomDraw: boolean;
+  operations?: OrganizerGiveawayOperations;
   hasAwardableManualSelections?: boolean;
   onSubmit: () => void;
   onSchedule: () => void;
@@ -1215,13 +1443,13 @@ export function CampaignOperationalHeader({
                 Lock candidates
               </Button>
             ) : null}
-            {campaign.state === "locked" && canRunInitialRandomDraw ? (
+            {operations?.canRunInitialRandomDraw ? (
               <Button type="button" size="sm" onClick={onDraw} disabled={isPending}>
                 <SparklesIcon data-icon="inline-start" />
                 Run draw
               </Button>
             ) : null}
-            {campaign.state === "drawing" && drawId ? (
+            {operations?.publishableDrawId ? (
               <>
                 <Button
                   type="button"
@@ -1847,19 +2075,373 @@ function CampaignReport({ report }: { report: OrganizerGiveawayReport | null }) 
   );
 }
 
-function RedrawPanel({ disabled, awardId, reason, onAwardIdChange, onReasonChange, onRedraw }: { disabled: boolean; awardId: string; reason: string; onAwardIdChange: (value: string) => void; onReasonChange: (value: string) => void; onRedraw: () => void }) {
+/**
+ * Recovery starts from a server-owned, safe queue. The browser only keeps an
+ * opaque award reference in memory long enough to submit the chosen action;
+ * it never asks organizers to type, view, or verify a raw award ID.
+ */
+export function RecoveryQueuePanel({
+  recoverableAwards,
+  isPending,
+  reason,
+  claimDeadlineAt,
+  onReasonChange,
+  onClaimDeadlineAtChange,
+  onRandomRedraw,
+  onDirectReoffer,
+  onLoadManualReplacementOptions,
+  onReplaceManualAward,
+}: {
+  recoverableAwards: OrganizerGiveawayOperations["recoverableAwards"];
+  isPending: boolean;
+  reason: string;
+  claimDeadlineAt: string;
+  onReasonChange: (value: string) => void;
+  onClaimDeadlineAtChange: (value: string) => void;
+  onRandomRedraw: (input: {
+    awardId: string;
+    reason: string;
+    idempotencyKey: string;
+    claimDeadlineAt?: string;
+  }) => Promise<boolean>;
+  onDirectReoffer: (awardId: string, reason: string, claimDeadlineAt: string) => void;
+  onLoadManualReplacementOptions: (
+    sourceAwardId: string,
+  ) => Promise<GiveawayManualAwardReplacementOptions | null>;
+  onReplaceManualAward: (input: ReplaceManualGiveawayAwardInput) => Promise<boolean>;
+}) {
+  const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [inputError, setInputError] = React.useState<string | null>(null);
+  const recoverySubmissionRef = React.useRef<ManualSelectionSubmission | null>(null);
+  const selectedAward = recoverableAwards[selectedIndex] ?? recoverableAwards[0] ?? null;
+  const normalizedSelectedIndex = selectedAward
+    ? Math.max(0, recoverableAwards.indexOf(selectedAward))
+    : 0;
+  const isRandomRedraw = selectedAward?.recoveryKind === "random_redraw";
+  const isDirectReoffer = selectedAward?.recoveryKind === "direct_reoffer";
+  const isManualReplacement = selectedAward?.recoveryKind === "manual_replacement";
+  const requiresFreshClaimDeadline = Boolean(
+    selectedAward && !isManualReplacement && selectedAward.claimDeadlineRequired,
+  );
+  const normalizedClaimDeadline = claimDeadlineAt
+    ? optionalLocalDateTimeToIso(claimDeadlineAt)
+    : undefined;
+  const hasValidFreshClaimDeadline = isFutureIsoDate(normalizedClaimDeadline);
+
+  const resetRecoverySubmission = () => {
+    recoverySubmissionRef.current = null;
+    setInputError(null);
+  };
+
+  const submitRandomRedraw = () => {
+    if (!selectedAward || !reason.trim()) return;
+    const deadline = normalizedClaimDeadline;
+    if (requiresFreshClaimDeadline && !hasValidFreshClaimDeadline) {
+      setInputError("Choose a valid future claim deadline for this recovery.");
+      return;
+    }
+    if (claimDeadlineAt && !hasValidFreshClaimDeadline) {
+      setInputError("Choose a valid claim deadline or leave it blank when it is optional.");
+      return;
+    }
+    const fingerprint = JSON.stringify([
+      selectedAward.awardId,
+      reason.trim(),
+      deadline ?? "",
+    ]);
+    const submission = resolveGiveawaySubmission(
+      recoverySubmissionRef.current,
+      fingerprint,
+      () => makeIdempotencyKey("redraw"),
+    );
+    recoverySubmissionRef.current = submission;
+    void onRandomRedraw({
+      awardId: selectedAward.awardId,
+      reason: reason.trim(),
+      idempotencyKey: submission.idempotencyKey,
+      ...(deadline ? { claimDeadlineAt: deadline } : {}),
+    }).then(
+      (succeeded) => {
+        if (
+          succeeded &&
+          recoverySubmissionRef.current?.inputFingerprint === submission.inputFingerprint
+        ) {
+          recoverySubmissionRef.current = null;
+        }
+      },
+      () => undefined,
+    );
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Redraw from the frozen order</CardTitle>
-        <CardDescription>A redraw never rerolls. It takes the next valid candidate from the original snapshot and seed.</CardDescription>
+        <CardTitle>Server-approved recovery queue</CardTitle>
+        <CardDescription>
+          Only current, terminal awards that the server authorizes for recovery appear here. A random redraw never rerolls; it takes the next valid frozen candidate.
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <Field label="Terminal award ID"><Input value={awardId} onChange={(event) => onAwardIdChange(event.target.value)} disabled={disabled} placeholder="giveaway-award-…" /></Field>
-        <Field label="Reason"><Input value={reason} onChange={(event) => onReasonChange(event.target.value)} disabled={disabled} placeholder="Winner declined" /></Field>
-        <Button type="button" variant="outline" onClick={onRedraw} disabled={disabled || !awardId.trim() || !reason.trim()}><RotateCcwIcon data-icon="inline-start" /> Redraw next candidate</Button>
+        {recoverableAwards.length === 0 || !selectedAward ? (
+          <p className="text-sm text-muted-foreground">No recovery action is currently available for this campaign.</p>
+        ) : (
+          <>
+            <Field label="Recovery item">
+              <select
+                className={selectClassName}
+                value={String(normalizedSelectedIndex)}
+                onChange={(event) => {
+                  resetRecoverySubmission();
+                  setSelectedIndex(Number(event.target.value));
+                }}
+                disabled={isPending}
+              >
+                {recoverableAwards.map((award, index) => (
+                  <option key={award.awardId} value={String(index)}>
+                    {award.label} · {formatState(award.status)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="text-xs text-muted-foreground">
+              Recovery path: {isRandomRedraw
+                ? "deterministic next-candidate redraw"
+                : isDirectReoffer
+                  ? "direct prize re-offer"
+                  : "manual replacement from the frozen candidate set"}.
+            </p>
+            {!isManualReplacement ? (
+              <Field label="Recovery reason">
+                <Input
+                  value={reason}
+                  onChange={(event) => {
+                    resetRecoverySubmission();
+                    onReasonChange(event.target.value);
+                  }}
+                  disabled={isPending}
+                  placeholder="Explain this recovery action"
+                />
+              </Field>
+            ) : null}
+            {requiresFreshClaimDeadline || (isRandomRedraw && claimDeadlineAt) ? (
+              <Field label={requiresFreshClaimDeadline ? "New claim deadline" : "Claim deadline (optional)"}>
+                <Input
+                  type="datetime-local"
+                  value={claimDeadlineAt}
+                  onChange={(event) => {
+                    resetRecoverySubmission();
+                    onClaimDeadlineAtChange(event.target.value);
+                  }}
+                  disabled={isPending}
+                />
+              </Field>
+            ) : null}
+            {inputError ? <p role="alert" className="text-sm text-destructive">{inputError}</p> : null}
+            {isManualReplacement ? (
+              <ManualReplacementControls
+                key={selectedAward.awardId}
+                awardId={selectedAward.awardId}
+                claimDeadlineRequired={selectedAward.claimDeadlineRequired}
+                isPending={isPending}
+                onLoadOptions={onLoadManualReplacementOptions}
+                onReplace={onReplaceManualAward}
+              />
+            ) : null}
+            {isRandomRedraw ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={submitRandomRedraw}
+                disabled={isPending || !reason.trim() || (requiresFreshClaimDeadline && !hasValidFreshClaimDeadline)}
+              >
+                <RotateCcwIcon data-icon="inline-start" />
+                Redraw next candidate
+              </Button>
+            ) : null}
+            {isDirectReoffer ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onDirectReoffer(selectedAward.awardId, reason, claimDeadlineAt)}
+                disabled={isPending || !reason.trim() || !hasValidFreshClaimDeadline}
+              >
+                <RotateCcwIcon data-icon="inline-start" />
+                Re-offer prize
+              </Button>
+            ) : null}
+          </>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+function ManualReplacementControls({
+  awardId,
+  claimDeadlineRequired,
+  isPending,
+  onLoadOptions,
+  onReplace,
+}: {
+  awardId: string;
+  claimDeadlineRequired: boolean;
+  isPending: boolean;
+  onLoadOptions: (sourceAwardId: string) => Promise<GiveawayManualAwardReplacementOptions | null>;
+  onReplace: (input: ReplaceManualGiveawayAwardInput) => Promise<boolean>;
+}) {
+  const [options, setOptions] = React.useState<GiveawayManualAwardReplacementOptions | null>(null);
+  const [loadState, setLoadState] = React.useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [snapshotEntryId, setSnapshotEntryId] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [claimDeadlineAt, setClaimDeadlineAt] = React.useState("");
+  const [inputError, setInputError] = React.useState<string | null>(null);
+  const submissionRef = React.useRef<ManualSelectionSubmission | null>(null);
+  const selectedCandidateIsCurrent = Boolean(
+    options?.candidates.some((candidate) => candidate.snapshotEntryId === snapshotEntryId),
+  );
+  const requiresClaimDeadline = options?.claimDeadlineRequired ?? claimDeadlineRequired;
+  const canReplace =
+    loadState === "ready" &&
+    !isPending &&
+    selectedCandidateIsCurrent &&
+    Boolean(reason.trim()) &&
+    (!requiresClaimDeadline || isFutureIsoDate(optionalLocalDateTimeToIso(claimDeadlineAt)));
+
+  const resetSubmission = () => {
+    submissionRef.current = null;
+    setInputError(null);
+  };
+
+  const loadOptions = () => {
+    setLoadState("loading");
+    setInputError(null);
+    void onLoadOptions(awardId).then(
+      (nextOptions) => {
+        if (!nextOptions || nextOptions.sourceAwardId !== awardId) {
+          setLoadState("error");
+          return;
+        }
+        setOptions(nextOptions);
+        setSnapshotEntryId("");
+        setClaimDeadlineAt("");
+        submissionRef.current = null;
+        setLoadState("ready");
+      },
+      () => setLoadState("error"),
+    );
+  };
+
+  const submitReplacement = () => {
+    if (!options || !selectedCandidateIsCurrent || !reason.trim()) return;
+    const deadline = claimDeadlineAt ? optionalLocalDateTimeToIso(claimDeadlineAt) : undefined;
+    if (requiresClaimDeadline && !isFutureIsoDate(deadline)) {
+      setInputError("Choose a valid future claim deadline for this manual recovery.");
+      return;
+    }
+    if (claimDeadlineAt && !isFutureIsoDate(deadline)) {
+      setInputError("Choose a valid claim deadline or leave it blank when it is optional.");
+      return;
+    }
+    const fingerprint = JSON.stringify([
+      options.sourceAwardId,
+      snapshotEntryId,
+      reason.trim(),
+      deadline ?? "",
+    ]);
+    const submission = resolveGiveawaySubmission(
+      submissionRef.current,
+      fingerprint,
+      () => makeIdempotencyKey("manual-replacement"),
+    );
+    submissionRef.current = submission;
+    void onReplace({
+      sourceAwardId: options.sourceAwardId,
+      snapshotEntryId,
+      reason: reason.trim(),
+      idempotencyKey: submission.idempotencyKey,
+      ...(deadline ? { claimDeadlineAt: deadline } : {}),
+    }).then(
+      (succeeded) => {
+        if (succeeded && submissionRef.current?.inputFingerprint === submission.inputFingerprint) {
+          submissionRef.current = null;
+        }
+      },
+      () => undefined,
+    );
+  };
+
+  return (
+    <section className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+      <div className="grid gap-1">
+        <h3 className="font-medium">Manual replacement</h3>
+        <p className="text-sm text-muted-foreground">
+          Load the frozen eligible candidates, select a successor, and preserve this terminal award in history.
+          {claimDeadlineRequired ? " A fresh future claim deadline is required." : ""}
+        </p>
+      </div>
+      {loadState === "idle" || loadState === "error" ? (
+        <Button type="button" variant="outline" className="w-fit" onClick={loadOptions} disabled={isPending}>
+          {loadState === "error" ? "Retry frozen candidates" : "Load frozen candidates"}
+        </Button>
+      ) : null}
+      {loadState === "loading" ? <p className="text-sm text-muted-foreground">Loading frozen candidate labels…</p> : null}
+      {loadState === "error" ? <p role="alert" className="text-sm text-destructive">Frozen replacement candidates could not be loaded.</p> : null}
+      {loadState === "ready" && options ? (
+        <>
+          <p className="text-xs text-muted-foreground">{options.label} · {formatState(options.status)}</p>
+          {options.candidates.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No eligible frozen candidate remains for this replacement.</p>
+          ) : (
+            <fieldset className="grid gap-3" disabled={isPending}>
+              <Field label="Frozen replacement candidate">
+                <select
+                  className={selectClassName}
+                  value={selectedCandidateIsCurrent ? snapshotEntryId : ""}
+                  onChange={(event) => {
+                    resetSubmission();
+                    setSnapshotEntryId(event.target.value);
+                  }}
+                >
+                  <option value="">Choose a frozen candidate</option>
+                  {options.candidates.map((candidate) => (
+                    <option key={candidate.snapshotEntryId} value={candidate.snapshotEntryId}>
+                      {candidate.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Replacement reason">
+                <Input
+                  value={reason}
+                  onChange={(event) => {
+                    resetSubmission();
+                    setReason(event.target.value);
+                  }}
+                  placeholder="Explain this manual successor"
+                />
+              </Field>
+              {requiresClaimDeadline ? (
+                <Field label="New claim deadline">
+                  <Input
+                    type="datetime-local"
+                    value={claimDeadlineAt}
+                    onChange={(event) => {
+                      resetSubmission();
+                      setClaimDeadlineAt(event.target.value);
+                    }}
+                  />
+                </Field>
+              ) : null}
+              {inputError ? <p role="alert" className="text-sm text-destructive">{inputError}</p> : null}
+              <Button type="button" onClick={submitReplacement} disabled={!canReplace}>
+                {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <CheckCircle2Icon data-icon="inline-start" />}
+                Record manual replacement
+              </Button>
+            </fieldset>
+          )}
+        </>
+      ) : null}
+    </section>
   );
 }
 
@@ -2119,6 +2701,12 @@ function optionalLocalDateTimeToIso(value: string) {
   if (!value) return undefined;
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function isFutureIsoDate(value: string | undefined) {
+  if (!value) return false;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
 function formatEntryOperationsDateTime(value: string) {

@@ -4,6 +4,7 @@ import type {
   CreateGiveawayCampaignCodeInput,
   CreateGiveawayInput,
   FulfillGiveawayAwardInput,
+  ReplaceManualGiveawayAwardInput,
   GrantManualGiveawayEntryInput,
   SelectManualGiveawayAwardInput,
   GiveawayWinnerPublicationInput,
@@ -70,6 +71,14 @@ export async function getOrganizerGiveawayWorkspaceAction(giveawayId: string) {
   });
 }
 
+/** Safe operational controls are server-owned so a reload cannot trust stale local state. */
+export async function getOrganizerGiveawayOperationsAction(giveawayId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.getOrganizerGiveawayOperations(sessionToken, giveawayId);
+  });
+}
+
 export async function listGiveawayCampaignCodesAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
@@ -91,6 +100,13 @@ export async function listGiveawayManualSelectionCandidatesAction(
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayManualSelectionCandidates(sessionToken, giveawayId, prizePoolId);
+  });
+}
+
+export async function listManualGiveawayReplacementCandidatesAction(sourceAwardId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listManualGiveawayReplacementCandidates(sessionToken, sourceAwardId);
   });
 }
 
@@ -256,6 +272,13 @@ export async function selectManualGiveawayAwardAction(input: SelectManualGiveawa
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.selectManualGiveawayAward(sessionToken, input);
+  });
+}
+
+export async function replaceManualGiveawayAwardAction(input: ReplaceManualGiveawayAwardInput) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.replaceManualGiveawayAward(sessionToken, input);
   });
 }
 
