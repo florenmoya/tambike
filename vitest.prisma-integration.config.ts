@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -8,6 +8,9 @@ export default defineConfig({
     },
   },
   test: {
-    exclude: [...configDefaults.exclude, "tests/prisma-integration/**"],
+    include: ["tests/prisma-integration/**/*.integration.test.ts"],
+    setupFiles: ["./tests/prisma-integration/setup.ts"],
+    fileParallelism: false,
+    maxConcurrency: 1,
   },
 });
