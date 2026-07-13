@@ -1,9 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { Gift, LoaderCircle, ShieldCheck, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { PublicEventGiveaway } from "@/features/giveaways/types";
+import type {
+  GiveawayEntryMode,
+  GiveawayState,
+  PublicEventGiveaway,
+} from "@/features/giveaways/types";
 import { listPublicGiveawaysForEventAction } from "@/server/giveaway-actions";
 
 import {
@@ -14,7 +19,10 @@ import {
 
 type PublicGiveawayPanelProps = {
   eventId: string;
+  viewerRole?: PublicGiveawayViewerRole;
 };
+
+type PublicGiveawayViewerRole = "guest" | "rider" | "organizer" | "venue" | "admin";
 
 type PublicGiveawayLoadState = "loading" | "ready" | "unavailable";
 
@@ -31,7 +39,24 @@ const awardModeLabels = {
   manual_selection: "Organizer selection",
 } as const;
 
-export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
+export function giveawayEntryLoginHref(eventId: string) {
+  return `/login?next=${encodeURIComponent(`/events/${encodeURIComponent(eventId)}`)}`;
+}
+
+/** Guests only receive a route back to this event; eligibility stays rider-scoped. */
+export function canOfferPublicGiveawayEntryLogin(input: {
+  state: GiveawayState;
+  entryMode: GiveawayEntryMode;
+  viewerRole: PublicGiveawayViewerRole;
+}) {
+  return (
+    input.viewerRole === "guest" &&
+    input.state === "open" &&
+    (input.entryMode === "opt_in" || input.entryMode === "claim_code")
+  );
+}
+
+export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiveawayPanelProps) {
   const [result, setResult] = useState<PublicGiveawayLoadResult | null>(null);
 
   useEffect(() => {
@@ -120,6 +145,24 @@ export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
                       {entryClose ? <ScheduleMoment label="Entry closes" value={entryClose} /> : null}
                       {drawAt ? <ScheduleMoment label="Draw" value={drawAt} /> : null}
                     </dl>
+                  ) : null}
+
+                  {canOfferPublicGiveawayEntryLogin({
+                    state: giveaway.state,
+                    entryMode: giveaway.entryMode,
+                    viewerRole,
+                  }) ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#ffbe45]/30 bg-[#ffbe45]/[0.06] px-3 py-3">
+                      <p className="m-0 text-sm text-white/72">
+                        Log in with your rider account to enter while this giveaway is open.
+                      </p>
+                      <Link
+                        className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#ffbe45]/45 bg-[#ffbe45]/10 px-3 text-sm font-bold text-[#ffdc97] transition hover:bg-[#ffbe45]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffbe45]"
+                        href={giveawayEntryLoginHref(eventId)}
+                      >
+                        Log in to enter
+                      </Link>
+                    </div>
                   ) : null}
 
                   <div className="grid gap-2">

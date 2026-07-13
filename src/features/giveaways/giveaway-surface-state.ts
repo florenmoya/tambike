@@ -52,6 +52,19 @@ export function riderGiveawayStatusLabel(status: RiderGiveawayEntryStatus) {
   return riderGiveawayStatusLabels[status];
 }
 
+/** Only a currently open self-entry campaign can expose a rider entry action. */
+export function canRiderSubmitGiveawayEntry(input: {
+  state: GiveawayState;
+  entryMode: GiveawayEntryMode;
+  riderStatus: RiderGiveawayEntryStatus;
+}) {
+  return (
+    input.state === "open" &&
+    (input.entryMode === "opt_in" || input.entryMode === "claim_code") &&
+    (input.riderStatus === "not_eligible" || input.riderStatus === "eligible")
+  );
+}
+
 /** A credential can only be issued or presented while the claim is active. */
 export function isGiveawayClaimActionable(status: RiderGiveawayEntryStatus) {
   return status === "pending_verification" || status === "claimable";

@@ -1210,7 +1210,7 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
 }
 
 function EventDetail({ eventId }: { eventId?: string }) {
-  const { authNotice, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
+  const { authNotice, currentUser, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
   const event = findEvent(events, eventId);
   const venue = getVenue(event.venueId);
   const organizer = getOrganizer(event.organizerId);
@@ -1342,7 +1342,7 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 ))}
               </div>
             </InfoPanel>
-            <PublicGiveawayPanel eventId={event.id} />
+            <PublicGiveawayPanel eventId={event.id} viewerRole={currentUser?.role ?? "guest"} />
           </div>
           <aside className="event-detail-pass-panel" aria-label="Event summary">
             <div className="event-detail-pass-heading">
