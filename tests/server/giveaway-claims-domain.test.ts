@@ -48,6 +48,11 @@ type ClaimBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   withdrawGiveawayDeliveryDetails(sessionToken: string, awardId: string): Promise<void>;
   expireGiveawayClaims(sessionToken: string, giveawayId: string): Promise<{ expiredCount: number }>;
   completeGiveawayClaims(sessionToken: string, giveawayId: string): Promise<{ completed: true }>;
+  settleGiveawayAward(
+    sessionToken: string,
+    awardId: string,
+    reason: string,
+  ): Promise<{ id: string }>;
   recoverExpiredDirectGiveawayAward(
     sessionToken: string,
     input: { awardId: string; claimDeadlineAt: string; reason: string },
@@ -515,7 +520,7 @@ describe("in-memory giveaway claim security", () => {
     ).resolves.toMatchObject({ status: "verified" });
   });
 
-  test("expires a direct finite award without silently reallocating it, releases its reservation, and needs an explicit completion", async () => {
+  test("expires a direct finite award without silently reallocating it, releases its reservation, and requires explicit settlement before completion", async () => {
     const backend = asClaimBackend(await createTambikeTestBackend());
     const context = await createClaimableAward(backend);
     const { campaign, award } = internalAward(backend, context.giveaway.id, context.awardId);
@@ -533,6 +538,16 @@ describe("in-memory giveaway claim security", () => {
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "expired", award: { awardId: context.awardId, status: "expired" } });
 
+    await expect(
+      backend.completeGiveawayClaims(context.organizer.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    await expect(
+      backend.settleGiveawayAward(
+        context.organizer.sessionToken,
+        context.awardId,
+        "Close the expired direct-award recovery source.",
+      ),
+    ).resolves.toEqual({ id: context.awardId });
     await expect(
       backend.completeGiveawayClaims(context.organizer.sessionToken, context.giveaway.id),
     ).resolves.toEqual({ completed: true });

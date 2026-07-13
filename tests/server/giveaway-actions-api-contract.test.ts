@@ -1,0 +1,59 @@
+import { readFile } from "node:fs/promises";
+
+import { describe, expect, test } from "vitest";
+
+async function readSource(relativePath: string) {
+  return readFile(new URL(`../../${relativePath}`, import.meta.url), "utf8");
+}
+
+describe("giveaway action and API contracts", () => {
+  test("server actions use the narrow authenticated envelope and omit raw CSV export", async () => {
+    const source = await readSource("src/server/giveaway-actions.ts");
+
+    expect(source).toContain('"use server"');
+    expect(source).toContain("executeGiveawayAction");
+    expect(source).toContain("readSessionToken");
+    expect(source).toContain("createGiveawayAction");
+    expect(source).toContain("issueGiveawayClaimTokenAction");
+    expect(source).toContain("verifyGiveawayClaimAction");
+    expect(source).toContain("getOrganizerGiveawayReportAction");
+    expect(source).toContain("getAdminGiveawayAuditAction");
+    expect(source).toContain("listGiveawayOperatorClaimsAction");
+    expect(source).not.toContain("exportGiveawayCsv");
+    expect(source).not.toContain("console.");
+  });
+
+  test("lifecycle cron uses dynamic Node runtime and has no query-secret fallback", async () => {
+    const source = await readSource("src/app/api/jobs/giveaway-lifecycle/route.ts");
+
+    expect(source).toContain('runtime = "nodejs"');
+    expect(source).toContain('dynamic = "force-dynamic"');
+    expect(source).toContain("hasExactGiveawayCronAuthorization");
+    expect(source).toContain("advanceScheduledGiveawayLifecycle(new Date())");
+    expect(source).not.toContain("searchParams");
+    expect(source).not.toContain("startsWith");
+    expect(source).not.toContain("error.message");
+  });
+
+  test("route helpers use a length-safe constant-time cron comparison", async () => {
+    const source = await readSource("src/server/giveaway-route-runtime.ts");
+
+    expect(source).toContain("timingSafeEqual");
+    expect(source).toContain("actual.length !== expected.length");
+  });
+
+  test("admin export awaits Next params and protects raw CSV response data", async () => {
+    const source = await readSource(
+      "src/app/api/admin/exports/giveaways/[giveawayId]/route.ts",
+    );
+
+    expect(source).toContain("await params");
+    expect(source).toContain("exportGiveawayCsv");
+    expect(source).toContain("createGiveawayCsvExportResponse");
+    expect(source).toContain("sessionCookieName");
+    expect(source).toContain("createGiveawayCsvExportErrorResponse");
+    expect(source).not.toContain("error.message");
+    expect(source).not.toContain("claimToken");
+    expect(source).not.toContain("encryptedPayload");
+  });
+});
