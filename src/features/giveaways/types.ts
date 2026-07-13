@@ -391,6 +391,16 @@ export interface GiveawayManualEntryCandidate {
   label: string;
 }
 
+/**
+ * Organizer-only frozen-snapshot reference for a manual prize selection. The
+ * label is deliberately an opaque entry reference, never a rider profile or
+ * qualification fact.
+ */
+export interface GiveawayManualSelectionCandidate {
+  snapshotEntryId: string;
+  label: string;
+}
+
 export interface GrantManualGiveawayEntryInput {
   giveawayId: string;
   riderId: string;
@@ -401,6 +411,15 @@ export interface RevokeManualGiveawayEntryInput {
   giveawayId: string;
   riderId: string;
   reason: string;
+}
+
+/** Select one eligible entry from a specific, already-locked prize-pool snapshot. */
+export interface SelectManualGiveawayAwardInput {
+  giveawayId: string;
+  prizePoolId: string;
+  snapshotEntryId: string;
+  reason: string;
+  idempotencyKey: string;
 }
 
 /** A winner must make an explicit, revocable choice before any alias is public. */

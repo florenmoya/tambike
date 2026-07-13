@@ -118,6 +118,7 @@ describe("Prisma giveaway lifecycle contract", () => {
     for (const method of [
       "lockGiveaway",
       "runGiveawayDraw",
+      "listGiveawayManualSelectionCandidates",
       "selectManualGiveawayAward",
       "publishGiveawayDraw",
       "declineGiveawayAward",
@@ -151,6 +152,20 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).toContain("hashGiveawayClaimToken");
     expect(prismaBackendSource).toContain("parseGiveawayClaimQrPayload");
     expect(prismaBackendSource).toContain("GIVEAWAY_DELIVERY_ENCRYPTION_KEY");
+  });
+
+  test("keeps Prisma manual-selection candidates frozen, opaque, and pool-scoped", () => {
+    const manualSelectionSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async listGiveawayManualSelectionCandidates"),
+      prismaBackendSource.indexOf("/** Minimal cross-event administrator campaign list"),
+    );
+
+    expect(manualSelectionSource).toContain("requireGiveawayConfigurator");
+    expect(manualSelectionSource).toContain('["locked", "drawing"]');
+    expect(manualSelectionSource).toContain("snapshot.entries");
+    expect(manualSelectionSource).toContain("opaquePublicReference");
+    expect(manualSelectionSource).not.toContain("riderIdsWithGiveawayActivity");
+    expect(manualSelectionSource).not.toContain("displayName");
   });
 
   test("keeps post-deadline claim recovery explicit, delivery retention live, and rider states truthful", () => {

@@ -5,6 +5,7 @@ import type {
   CreateGiveawayInput,
   FulfillGiveawayAwardInput,
   GrantManualGiveawayEntryInput,
+  SelectManualGiveawayAwardInput,
   GiveawayWinnerPublicationInput,
   GiveawayDeliveryDetailsInput,
   RevokeManualGiveawayEntryInput,
@@ -80,6 +81,16 @@ export async function listGiveawayManualEntryCandidatesAction(giveawayId: string
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayManualEntryCandidates(sessionToken, giveawayId);
+  });
+}
+
+export async function listGiveawayManualSelectionCandidatesAction(
+  giveawayId: string,
+  prizePoolId: string,
+) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listGiveawayManualSelectionCandidates(sessionToken, giveawayId, prizePoolId);
   });
 }
 
@@ -241,7 +252,7 @@ export async function runGiveawayDrawAction(input: unknown) {
   });
 }
 
-export async function selectManualGiveawayAwardAction(input: unknown) {
+export async function selectManualGiveawayAwardAction(input: SelectManualGiveawayAwardInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.selectManualGiveawayAward(sessionToken, input);

@@ -9,7 +9,11 @@ import { createTambikeTestBackend } from "../../src/server/testing";
 import type { OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData } from "../../src/features/giveaways/types";
 import {
   buildGiveawayLifecycleRoute,
+  CampaignCancellationPanel,
   CampaignEntryOperations,
+  CampaignManualSelectionOperations,
+  CampaignOperationalHeader,
+  canCancelGiveawayBeforeAwards,
   OrganizerGiveawayWorkspace,
   submitCampaignCode,
   toOrganizerGiveawayEditorDraft,
@@ -245,5 +249,95 @@ describe("organizer giveaway lifecycle route", () => {
 
     expect(inputError).toBeNull();
     expect(onCreateCode).toHaveBeenCalledWith({ maxUses: 3 });
+  });
+
+  test("exposes a reasoned cancellation control only before awards can exist", () => {
+    const preAwardMarkup = renderToStaticMarkup(
+      React.createElement(CampaignCancellationPanel, {
+        state: "paused",
+        reason: "",
+        isPending: false,
+        onReasonChange: () => undefined,
+        onCancel: () => undefined,
+      }),
+    );
+    const lockedMarkup = renderToStaticMarkup(
+      React.createElement(CampaignCancellationPanel, {
+        state: "locked",
+        reason: "No longer needed",
+        isPending: false,
+        onReasonChange: () => undefined,
+        onCancel: () => undefined,
+      }),
+    );
+
+    expect(canCancelGiveawayBeforeAwards("draft")).toBe(true);
+    expect(canCancelGiveawayBeforeAwards("scheduled")).toBe(true);
+    expect(canCancelGiveawayBeforeAwards("open")).toBe(true);
+    expect(canCancelGiveawayBeforeAwards("paused")).toBe(true);
+    expect(canCancelGiveawayBeforeAwards("locked")).toBe(false);
+    expect(canCancelGiveawayBeforeAwards("drawing")).toBe(false);
+    expect(preAwardMarkup).toContain("Cancel campaign before awards exist");
+    expect(preAwardMarkup).toContain("Cancellation reason");
+    expect(preAwardMarkup).toContain("Cancel campaign");
+    expect(preAwardMarkup).toMatch(/disabled/);
+    expect(lockedMarkup).toBe("");
+  });
+
+  test("uses locked snapshot manual selection without offering a random-draw substitute", () => {
+    const manualPools = [{ id: "manual-pool", title: "Community recognition", awardMode: "manual_selection" as const }];
+    const manualMarkup = renderToStaticMarkup(
+      React.createElement(CampaignManualSelectionOperations, {
+        campaignId: "giveaway-manual",
+        state: "locked",
+        prizePools: manualPools,
+        candidatesByPool: {
+          "manual-pool": [{ snapshotEntryId: "snapshot-entry-1", label: "Locked entry entry_opaque" }],
+        },
+        inventoryStatusByPool: { "manual-pool": "ready" },
+        isPending: false,
+        onSelect: () => undefined,
+      }),
+    );
+    const preLockMarkup = renderToStaticMarkup(
+      React.createElement(CampaignManualSelectionOperations, {
+        campaignId: "giveaway-manual",
+        state: "open",
+        prizePools: manualPools,
+        candidatesByPool: {},
+        inventoryStatusByPool: {},
+        isPending: false,
+        onSelect: () => undefined,
+      }),
+    );
+    const lockedManualHeader = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        campaign: {
+          id: "giveaway-manual",
+          eventId: "event-1",
+          title: "Manual award campaign",
+          state: "locked",
+          complianceStatus: "approved",
+          mechanicsVersion: 1,
+        },
+        isPending: false,
+        canRunInitialRandomDraw: false,
+        onSubmit: () => undefined,
+        onSchedule: () => undefined,
+        onOpen: () => undefined,
+        onPause: () => undefined,
+        onLock: () => undefined,
+        onDraw: () => undefined,
+        onPublish: () => undefined,
+      }),
+    );
+
+    expect(manualMarkup).toContain("Manual award selection");
+    expect(manualMarkup).toContain("Locked entry entry_opaque");
+    expect(manualMarkup).toContain("Selection reason");
+    expect(manualMarkup).toContain("Record selection");
+    expect(manualMarkup).not.toContain("Run draw");
+    expect(preLockMarkup).toBe("");
+    expect(lockedManualHeader).not.toContain("Run draw");
   });
 });

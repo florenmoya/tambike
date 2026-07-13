@@ -22,6 +22,7 @@ import type {
   GiveawayKind,
   GiveawayLifecycleAdvanceResult,
   GiveawayManualEntryCandidate,
+  GiveawayManualSelectionCandidate,
   GiveawayNotification,
   GiveawayNotificationKind,
   GiveawayOperatorCandidate,
@@ -44,6 +45,7 @@ import type {
   RiderEventGiveawayState,
   RiderGiveawayClaimContext,
   RiderGiveawayState,
+  SelectManualGiveawayAwardInput,
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
 } from "@/features/giveaways/types";
@@ -1319,6 +1321,39 @@ export class TambikeBackend {
     return [...candidatesByRiderId.values()].sort(
       (left, right) => left.label.localeCompare(right.label) || left.riderId.localeCompare(right.riderId),
     );
+  }
+
+  /**
+   * Manual award selection is limited to the immutable locked snapshot. This
+   * intentionally returns only an opaque entry reference; it never reads or
+   * returns current rider activity, profile, contact, or source-fact data.
+   */
+  async listGiveawayManualSelectionCandidates(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ): Promise<GiveawayManualSelectionCandidate[]> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    const snapshot = giveaway.snapshot;
+    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === prizePoolId);
+    if (!pool || pool.awardMode !== "manual_selection") {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    if (!pool.items.some((item) => item.status === "available")) return [];
+
+    return [...snapshot.entries]
+      .filter((entry) => this.isSnapshotEntryEligibleForPool(entry, pool))
+      .filter((entry) => this.canCreateGiveawayAward(giveaway, pool, entry.riderId))
+      .sort((left, right) => left.opaquePublicReference.localeCompare(right.opaquePublicReference))
+      .map((entry) => ({
+        snapshotEntryId: entry.id,
+        label: `Locked entry ${entry.opaquePublicReference}`,
+      }));
   }
 
   /** Minimal cross-event administrator campaign list; entrant records stay private. */
@@ -2921,14 +2956,24 @@ export class TambikeBackend {
     const giveaway = this.requireGiveaway(parsed.giveawayId);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
     const snapshot = giveaway.snapshot;
-    if (!snapshot) {
+    if (!snapshot || !["locked", "drawing"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === parsed.prizePoolId);
+    if (!pool || pool.awardMode !== "manual_selection") {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const snapshotEntry = snapshot.entries.find((candidate) => candidate.id === parsed.snapshotEntryId);
+    if (!snapshotEntry) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
     const actionInput: GiveawayDrawActionInput = {
       action: "manual_selection",
       reasonDigest: this.hashGiveawayReason(parsed.reason),
       prizePoolId: parsed.prizePoolId,
-      riderId: parsed.riderId,
+      // Keep draw replay commitments stable while accepting only the opaque
+      // snapshot reference from the organizer surface.
+      riderId: snapshotEntry.riderId,
     };
     const inputDigest = this.calculateDrawInputDigest(
       giveaway,
@@ -2941,26 +2986,20 @@ export class TambikeBackend {
       this.assertGiveawayDrawReplayInput(replay, inputDigest);
       return this.toGiveawayDrawResult(giveaway, replay);
     }
-    if (!["locked", "drawing"].includes(giveaway.state)) {
-      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
-    }
-    const pool = giveaway.prizePools.find((candidate) => candidate.id === parsed.prizePoolId);
     const prizeItem = pool?.items
       .filter((candidate) => candidate.status === "available")
       .sort((left, right) => left.position - right.position)[0];
-    const snapshotEntry = snapshot.entries.find((candidate) => candidate.riderId === parsed.riderId);
+    const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
     if (
-      !pool ||
-      pool.awardMode !== "manual_selection" ||
       !prizeItem ||
-      !snapshotEntry ||
       !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
-      !this.canCreateGiveawayAward(giveaway, pool, parsed.riderId)
+      !this.canCreateGiveawayAward(giveaway, pool, snapshotEntry.riderId) ||
+      !entry ||
+      entry.riderId !== snapshotEntry.riderId ||
+      entry.status !== "locked"
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
-    const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
-    if (!entry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     const now = new Date().toISOString();
     const draw: GiveawayDrawRecord = {
       id: `giveaway-draw-${randomUUID()}`,
@@ -4239,12 +4278,19 @@ export class TambikeBackend {
     };
   }
 
-  private parseManualGiveawayAwardInput(input: unknown) {
+  private parseManualGiveawayAwardInput(input: unknown): SelectManualGiveawayAwardInput {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     const record = input as Record<string, unknown>;
-    for (const field of ["giveawayId", "prizePoolId", "riderId", "idempotencyKey"] as const) {
+    if (
+      Object.keys(record).some(
+        (key) => !["giveawayId", "prizePoolId", "snapshotEntryId", "reason", "idempotencyKey"].includes(key),
+      )
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    for (const field of ["giveawayId", "prizePoolId", "snapshotEntryId", "idempotencyKey"] as const) {
       if (typeof record[field] !== "string" || !record[field].trim()) {
         throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
       }
@@ -4252,7 +4298,7 @@ export class TambikeBackend {
     return {
       giveawayId: (record.giveawayId as string).trim(),
       prizePoolId: (record.prizePoolId as string).trim(),
-      riderId: (record.riderId as string).trim(),
+      snapshotEntryId: this.requireOpaqueGiveawayLedgerText(record.snapshotEntryId),
       idempotencyKey: this.requireOpaqueGiveawayLedgerText(record.idempotencyKey),
       reason: this.requireGiveawayReason(record.reason),
     };

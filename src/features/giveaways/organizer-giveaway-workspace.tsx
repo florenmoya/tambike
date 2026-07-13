@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  cancelGiveawayAction,
   createGiveawayAction,
   createGiveawayCampaignCodeAction,
   getOrganizerGiveawayWorkspaceAction,
@@ -38,6 +39,7 @@ import {
   grantManualGiveawayEntryAction,
   listGiveawayCampaignCodesAction,
   listGiveawayManualEntryCandidatesAction,
+  listGiveawayManualSelectionCandidatesAction,
   listOrganizerGiveawaysAction,
   lockGiveawayAction,
   openGiveawayAction,
@@ -47,6 +49,7 @@ import {
   revokeManualGiveawayEntryAction,
   runGiveawayDrawAction,
   scheduleGiveawayAction,
+  selectManualGiveawayAwardAction,
   submitGiveawayForReviewAction,
   updateGiveawayAction,
 } from "@/server/giveaway-actions";
@@ -63,6 +66,7 @@ import type {
   GiveawayFulfilmentMode,
   GiveawayKind,
   GiveawayManualEntryCandidate,
+  GiveawayManualSelectionCandidate,
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
@@ -238,10 +242,17 @@ export function OrganizerGiveawayWorkspace({
   const [draws, setDraws] = React.useState<DrawState>({});
   const [redrawAwardId, setRedrawAwardId] = React.useState("");
   const [redrawReason, setRedrawReason] = React.useState("");
+  const [cancellationReason, setCancellationReason] = React.useState("");
   const [notice, setNotice] = React.useState<{ tone: "error" | "success"; text: string } | null>(null);
   const [operationalEntryModes, setOperationalEntryModes] = React.useState<Record<string, GiveawayEntryMode>>({});
   const [campaignCodes, setCampaignCodes] = React.useState<Record<string, GiveawayCampaignCodeSummary[]>>({});
   const [manualEntryCandidates, setManualEntryCandidates] = React.useState<Record<string, GiveawayManualEntryCandidate[]>>({});
+  const [manualSelectionCandidatesByPool, setManualSelectionCandidatesByPool] = React.useState<
+    Record<string, GiveawayManualSelectionCandidate[]>
+  >({});
+  const [manualSelectionInventoryStatusByPool, setManualSelectionInventoryStatusByPool] = React.useState<
+    Record<string, EntryOperationsInventoryStatus>
+  >({});
   const [entryOperationsInventoryStatus, setEntryOperationsInventoryStatus] = React.useState<
     Record<string, EntryOperationsInventoryStatus>
   >({});
@@ -253,6 +264,13 @@ export function OrganizerGiveawayWorkspace({
   const selectedOperationalEntryMode = selectedCampaign
     ? operationalEntryModes[selectedCampaign.id]
     : undefined;
+  const selectedManualSelectionPools = selectedDraft?.prizePools.filter(
+    (pool) => pool.awardMode === "manual_selection",
+  ) ?? [];
+  const canRunInitialRandomDraw = selectedDraft?.prizePools.some(
+    (pool) => pool.awardMode === "random_draw",
+  ) ?? false;
+  const selectedManualSelectionPoolIds = selectedManualSelectionPools.map((pool) => pool.id).join("|");
 
   const refreshCampaigns = React.useCallback(async () => {
     const result = await listOrganizerGiveawaysAction(eventId);
@@ -342,19 +360,17 @@ export function OrganizerGiveawayWorkspace({
     };
   }, [configurationFailures, selectedCampaignIdForConfiguration, selectedDraft]);
 
+  const refreshCampaignReport = React.useCallback(async (giveawayId: string) => {
+    const result = await getOrganizerGiveawayReportAction(giveawayId);
+    if (!result.ok) throw new Error("GIVEAWAY_REPORT_UNAVAILABLE");
+    setReport({ campaignId: giveawayId, value: result.data });
+  }, []);
+
   const selectedCampaignIdForReport = selectedCampaign?.id;
   React.useEffect(() => {
     if (!selectedCampaignIdForReport) return;
-    let cancelled = false;
-    void getOrganizerGiveawayReportAction(selectedCampaignIdForReport).then((result) => {
-      if (!cancelled && result.ok) {
-        setReport({ campaignId: selectedCampaignIdForReport, value: result.data });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedCampaignIdForReport]);
+    void refreshCampaignReport(selectedCampaignIdForReport).catch(() => undefined);
+  }, [refreshCampaignReport, selectedCampaignIdForReport]);
 
   const refreshEntryOperationsInventory = React.useCallback(
     async (giveawayId: string, entryMode: GiveawayEntryMode) => {
@@ -394,6 +410,58 @@ export function OrganizerGiveawayWorkspace({
       .then(() => refreshEntryOperationsInventory(selectedCampaign.id, selectedOperationalEntryMode))
       .catch(() => undefined);
   }, [refreshEntryOperationsInventory, selectedCampaign, selectedOperationalEntryMode]);
+
+  const refreshManualSelectionCandidates = React.useCallback(
+    async (giveawayId: string, prizePoolId: string) => {
+      setManualSelectionInventoryStatusByPool((current) => ({
+        ...current,
+        [prizePoolId]: "loading",
+      }));
+      try {
+        const result = await listGiveawayManualSelectionCandidatesAction(giveawayId, prizePoolId);
+        if (!result.ok) throw new Error("GIVEAWAY_MANUAL_SELECTION_CANDIDATES_UNAVAILABLE");
+        setManualSelectionCandidatesByPool((current) => ({
+          ...current,
+          [prizePoolId]: result.data as GiveawayManualSelectionCandidate[],
+        }));
+        setManualSelectionInventoryStatusByPool((current) => ({
+          ...current,
+          [prizePoolId]: "ready",
+        }));
+      } catch (error) {
+        setManualSelectionInventoryStatusByPool((current) => ({
+          ...current,
+          [prizePoolId]: "error",
+        }));
+        throw error;
+      }
+    },
+    [],
+  );
+
+  const selectedManualSelectionCampaignId = selectedCampaign?.id;
+  const selectedManualSelectionState = selectedCampaign?.state;
+  React.useEffect(() => {
+    if (
+      !selectedManualSelectionCampaignId ||
+      !selectedManualSelectionPoolIds ||
+      !selectedManualSelectionState ||
+      !["locked", "drawing"].includes(selectedManualSelectionState)
+    ) {
+      return;
+    }
+    const prizePoolIds = selectedManualSelectionPoolIds.split("|");
+    void Promise.all(
+      prizePoolIds.map((prizePoolId) =>
+        refreshManualSelectionCandidates(selectedManualSelectionCampaignId, prizePoolId),
+      ),
+    ).catch(() => undefined);
+  }, [
+    refreshManualSelectionCandidates,
+    selectedManualSelectionCampaignId,
+    selectedManualSelectionPoolIds,
+    selectedManualSelectionState,
+  ]);
 
   const runWorkspaceAction = React.useCallback(
     (successText: string, action: () => Promise<{ ok: boolean }>) => {
@@ -482,6 +550,7 @@ export function OrganizerGiveawayWorkspace({
       setSelectedCampaignId(campaign.id);
       setEditorDraft(draftsByCampaignId[campaign.id] ?? createEmptyDraft());
       setIssuedCampaignCode(null);
+      setCancellationReason("");
       setNotice(null);
     },
     [draftsByCampaignId],
@@ -535,7 +604,7 @@ export function OrganizerGiveawayWorkspace({
   }, [editorDraft, eventId, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
 
   const runInitialDraw = React.useCallback(() => {
-    if (!selectedCampaign) return;
+    if (!selectedCampaign || !canRunInitialRandomDraw) return;
     setNotice(null);
     startTransition(async () => {
       try {
@@ -554,7 +623,58 @@ export function OrganizerGiveawayWorkspace({
         setNotice({ tone: "error", text: "The draw could not run. Lock the campaign first and try again." });
       }
     });
-  }, [refreshCampaigns, selectedCampaign, startTransition]);
+  }, [canRunInitialRandomDraw, refreshCampaigns, selectedCampaign, startTransition]);
+
+  const selectManualAward = React.useCallback(
+    (prizePoolId: string, snapshotEntryId: string, reason: string) => {
+      if (
+        !selectedCampaign ||
+        !selectedDraft ||
+        !["locked", "drawing"].includes(selectedCampaign.state) ||
+        !selectedDraft.prizePools.some(
+          (pool) => pool.id === prizePoolId && pool.awardMode === "manual_selection",
+        )
+      ) {
+        return;
+      }
+      setNotice(null);
+      startTransition(async () => {
+        try {
+          const result = await selectManualGiveawayAwardAction({
+            giveawayId: selectedCampaign.id,
+            prizePoolId,
+            snapshotEntryId,
+            reason,
+            idempotencyKey: makeIdempotencyKey("manual-selection"),
+          });
+          if (!result.ok) throw new Error("GIVEAWAY_MANUAL_SELECTION_UNAVAILABLE");
+          const drawId = (result.data as { drawId?: string }).drawId;
+          if (!drawId) throw new Error("GIVEAWAY_MANUAL_SELECTION_UNAVAILABLE");
+          setDraws((current) => ({ ...current, [selectedCampaign.id]: drawId }));
+          await refreshCampaigns();
+          await refreshCampaignReport(selectedCampaign.id).catch(() => undefined);
+          await refreshManualSelectionCandidates(selectedCampaign.id, prizePoolId).catch(() => undefined);
+          setNotice({
+            tone: "success",
+            text: "Manual selection recorded from the locked candidate snapshot. Review the result before publishing.",
+          });
+        } catch {
+          setNotice({
+            tone: "error",
+            text: "The manual selection was not recorded. Choose a current locked entry, include a reason, and try again.",
+          });
+        }
+      });
+    },
+    [
+      refreshCampaignReport,
+      refreshCampaigns,
+      refreshManualSelectionCandidates,
+      selectedCampaign,
+      selectedDraft,
+      startTransition,
+    ],
+  );
 
   const publishInitialDraw = React.useCallback(() => {
     if (!selectedCampaign || !draws[selectedCampaign.id]) return;
@@ -583,6 +703,29 @@ export function OrganizerGiveawayWorkspace({
       }
     });
   }, [redrawAwardId, redrawReason, refreshCampaigns, selectedCampaign, startTransition]);
+
+  const cancelCampaign = React.useCallback(() => {
+    const reason = cancellationReason.trim();
+    if (!selectedCampaign || !canCancelGiveawayBeforeAwards(selectedCampaign.state) || !reason) return;
+    setNotice(null);
+    startTransition(async () => {
+      try {
+        const result = await cancelGiveawayAction(selectedCampaign.id, reason);
+        if (!result.ok) throw new Error("GIVEAWAY_CANCEL_UNAVAILABLE");
+        await refreshCampaigns();
+        setCancellationReason("");
+        setNotice({
+          tone: "success",
+          text: "Campaign cancelled before awards existed. The campaign state has been refreshed.",
+        });
+      } catch {
+        setNotice({
+          tone: "error",
+          text: "The campaign could not be cancelled. Confirm that it has no awards and that you still have organizer access.",
+        });
+      }
+    });
+  }, [cancellationReason, refreshCampaigns, selectedCampaign, startTransition]);
 
   return (
     <div className="grid gap-4 px-4 pb-8 lg:px-6">
@@ -614,6 +757,7 @@ export function OrganizerGiveawayWorkspace({
             setEditorDraft(createEmptyDraft());
             setReport(null);
             setIssuedCampaignCode(null);
+            setCancellationReason("");
             setNotice(null);
           }}
           onSelect={selectCampaign}
@@ -625,6 +769,7 @@ export function OrganizerGiveawayWorkspace({
               campaign={selectedCampaign}
               isPending={isPending}
               drawId={draws[selectedCampaign.id]}
+              canRunInitialRandomDraw={canRunInitialRandomDraw}
               onSubmit={() => runWorkspaceAction("Campaign sent for compliance review.", () => submitGiveawayForReviewAction(selectedCampaign.id))}
               onSchedule={() => runWorkspaceAction("Campaign scheduled. Automatic lifecycle work remains server-controlled.", () => scheduleGiveawayAction(selectedCampaign.id))}
               onOpen={() => runWorkspaceAction("Campaign is open for qualifying entries.", () => openGiveawayAction(selectedCampaign.id))}
@@ -671,6 +816,28 @@ export function OrganizerGiveawayWorkspace({
               onDismissIssuedCode={() => setIssuedCampaignCode(null)}
               onGrantManualEntry={(riderId, reason) => changeManualEntry("grant", riderId, reason)}
               onRevokeManualEntry={(riderId, reason) => changeManualEntry("revoke", riderId, reason)}
+            />
+          ) : null}
+
+          {selectedCampaign && selectedDraft ? (
+            <CampaignManualSelectionOperations
+              campaignId={selectedCampaign.id}
+              state={selectedCampaign.state}
+              prizePools={selectedManualSelectionPools}
+              candidatesByPool={manualSelectionCandidatesByPool}
+              inventoryStatusByPool={manualSelectionInventoryStatusByPool}
+              isPending={isPending}
+              onSelect={selectManualAward}
+            />
+          ) : null}
+
+          {selectedCampaign ? (
+            <CampaignCancellationPanel
+              state={selectedCampaign.state}
+              reason={cancellationReason}
+              isPending={isPending}
+              onReasonChange={setCancellationReason}
+              onCancel={cancelCampaign}
             />
           ) : null}
 
@@ -748,10 +915,200 @@ function CampaignRail({
   );
 }
 
-function CampaignOperationalHeader({
+export function canCancelGiveawayBeforeAwards(state: GiveawayState) {
+  return state === "draft" || state === "scheduled" || state === "open" || state === "paused";
+}
+
+export function CampaignCancellationPanel({
+  state,
+  reason,
+  isPending,
+  onReasonChange,
+  onCancel,
+}: {
+  state: GiveawayState;
+  reason: string;
+  isPending: boolean;
+  onReasonChange: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  if (!canCancelGiveawayBeforeAwards(state)) return null;
+
+  return (
+    <Card className="border-destructive/30 bg-destructive/[0.02]">
+      <CardHeader className="gap-3">
+        <div className="grid gap-1">
+          <CardTitle className="text-base">Cancel campaign before awards exist</CardTitle>
+          <CardDescription>
+            This permanently ends the campaign while it is still in a pre-award state. Record a clear reason for the audit trail.
+          </CardDescription>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <label className="sr-only" htmlFor="giveaway-cancellation-reason">Cancellation reason</label>
+          <Input
+            id="giveaway-cancellation-reason"
+            value={reason}
+            onChange={(event) => onReasonChange(event.target.value)}
+            placeholder="Cancellation reason"
+            disabled={isPending}
+          />
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={onCancel}
+            disabled={isPending || !reason.trim()}
+          >
+            <Trash2Icon data-icon="inline-start" />
+            Cancel campaign
+          </Button>
+        </div>
+      </CardHeader>
+    </Card>
+  );
+}
+
+/**
+ * Manual prize awards are an explicit organizer action over an immutable
+ * candidate snapshot. This component receives only opaque labels and never
+ * has access to rider profiles, current activity, or qualification facts.
+ */
+export function CampaignManualSelectionOperations({
+  campaignId,
+  state,
+  prizePools,
+  candidatesByPool,
+  inventoryStatusByPool,
+  isPending,
+  onSelect,
+}: {
+  campaignId: string;
+  state: GiveawayState;
+  prizePools: Array<Pick<GiveawayPrizePoolInput, "id" | "title" | "awardMode">>;
+  candidatesByPool: Record<string, GiveawayManualSelectionCandidate[]>;
+  inventoryStatusByPool: Record<string, EntryOperationsInventoryStatus>;
+  isPending: boolean;
+  onSelect: (prizePoolId: string, snapshotEntryId: string, reason: string) => void;
+}) {
+  const manualPools = prizePools.filter((pool) => pool.awardMode === "manual_selection");
+  if (manualPools.length === 0 || !["locked", "drawing"].includes(state)) return null;
+
+  return (
+    <Card className="border-primary/20">
+      <CardHeader>
+        <CardTitle>Manual award selection</CardTitle>
+        <CardDescription>
+          Choose an eligible entry from this campaign&apos;s locked snapshot and record the human reason. This never runs a random draw.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {manualPools.map((pool) => (
+          <ManualSelectionPoolControls
+            key={pool.id}
+            campaignId={campaignId}
+            prizePoolId={pool.id}
+            prizePoolTitle={pool.title}
+            candidates={candidatesByPool[pool.id] ?? []}
+            inventoryStatus={inventoryStatusByPool[pool.id] ?? "idle"}
+            isPending={isPending}
+            onSelect={onSelect}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ManualSelectionPoolControls({
+  campaignId,
+  prizePoolId,
+  prizePoolTitle,
+  candidates,
+  inventoryStatus,
+  isPending,
+  onSelect,
+}: {
+  campaignId: string;
+  prizePoolId: string;
+  prizePoolTitle: string;
+  candidates: GiveawayManualSelectionCandidate[];
+  inventoryStatus: EntryOperationsInventoryStatus;
+  isPending: boolean;
+  onSelect: (prizePoolId: string, snapshotEntryId: string, reason: string) => void;
+}) {
+  const [snapshotEntryId, setSnapshotEntryId] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const selectedEntryIsCurrent = candidates.some((candidate) => candidate.snapshotEntryId === snapshotEntryId);
+  const canSubmit =
+    inventoryStatus === "ready" &&
+    !isPending &&
+    selectedEntryIsCurrent &&
+    Boolean(reason.trim());
+
+  React.useEffect(() => {
+    if (!selectedEntryIsCurrent && snapshotEntryId) setSnapshotEntryId("");
+  }, [selectedEntryIsCurrent, snapshotEntryId]);
+
+  return (
+    <section className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+      <div>
+        <h3 className="font-medium">{prizePoolTitle}</h3>
+        <p className="text-sm text-muted-foreground">Only eligible frozen entries with an available prize item are listed.</p>
+      </div>
+      {inventoryStatus === "idle" || inventoryStatus === "loading" ? (
+        <p className="text-sm text-muted-foreground">Loading locked snapshot entries…</p>
+      ) : null}
+      {inventoryStatus === "error" ? (
+        <p role="alert" className="text-sm text-destructive">
+          Locked snapshot entries could not be loaded. Confirm organizer access and refresh before selecting a winner.
+        </p>
+      ) : null}
+      {inventoryStatus === "ready" && candidates.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No awardable frozen entries remain for this prize pool.</p>
+      ) : null}
+      <fieldset
+        className="grid gap-3"
+        disabled={isPending || inventoryStatus !== "ready" || candidates.length === 0}
+      >
+        <Field label="Locked candidate">
+          <select
+            id={`${campaignId}-${prizePoolId}-manual-selection-entry`}
+            className={selectClassName}
+            value={snapshotEntryId}
+            onChange={(event) => setSnapshotEntryId(event.target.value)}
+          >
+            <option value="">Choose a locked entry</option>
+            {candidates.map((candidate) => (
+              <option key={candidate.snapshotEntryId} value={candidate.snapshotEntryId}>{candidate.label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Selection reason">
+          <textarea
+            className={textareaClassName}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Explain why this frozen entry should receive this prize."
+          />
+        </Field>
+        <p className="text-xs text-muted-foreground">A non-empty reason is recorded in the audit trail. Random draw is not used for this pool.</p>
+        <Button
+          type="button"
+          onClick={() => onSelect(prizePoolId, snapshotEntryId, reason.trim())}
+          disabled={!canSubmit}
+        >
+          {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <CheckCircle2Icon data-icon="inline-start" />}
+          Record selection
+        </Button>
+      </fieldset>
+    </section>
+  );
+}
+
+export function CampaignOperationalHeader({
   campaign,
   isPending,
   drawId,
+  canRunInitialRandomDraw,
   onSubmit,
   onSchedule,
   onOpen,
@@ -763,6 +1120,7 @@ function CampaignOperationalHeader({
   campaign: OrganizerGiveawayCampaign;
   isPending: boolean;
   drawId?: string;
+  canRunInitialRandomDraw: boolean;
   onSubmit: () => void;
   onSchedule: () => void;
   onOpen: () => void;
@@ -815,7 +1173,7 @@ function CampaignOperationalHeader({
                 Lock candidates
               </Button>
             ) : null}
-            {campaign.state === "locked" ? (
+            {campaign.state === "locked" && canRunInitialRandomDraw ? (
               <Button type="button" size="sm" onClick={onDraw} disabled={isPending}>
                 <SparklesIcon data-icon="inline-start" />
                 Run draw

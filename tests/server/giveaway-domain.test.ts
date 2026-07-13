@@ -2,9 +2,11 @@ import { describe, expect, test, vi } from "vitest";
 
 import type {
   CreateGiveawayInput,
+  GiveawayManualSelectionCandidate,
   PublicGiveawayDrawVerification,
   PublicGiveawayCampaignSummary,
   RiderGiveawayState,
+  SelectManualGiveawayAwardInput,
   UpdateGiveawayInput,
 } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
@@ -76,6 +78,11 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
     riderId: string,
     reason: string,
   ): Promise<RiderGiveawayState>;
+  listGiveawayManualSelectionCandidates(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ): Promise<GiveawayManualSelectionCandidate[]>;
   redeemGiveawayPerk(
     sessionToken: string,
     perkId: string,
@@ -110,13 +117,7 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   ): Promise<GiveawayDrawResult>;
   selectManualGiveawayAward(
     sessionToken: string,
-    input: {
-      giveawayId: string;
-      prizePoolId: string;
-      riderId: string;
-      reason: string;
-      idempotencyKey: string;
-    },
+    input: SelectManualGiveawayAwardInput,
   ): Promise<GiveawayDrawResult>;
   cancelGiveaway(
     sessionToken: string,
@@ -1521,6 +1522,92 @@ describe("in-memory event giveaway lifecycle", () => {
     expect(await backend.auditCount("GIVEAWAY_AWARD_DISQUALIFIED")).toBe(1);
   });
 
+  test("returns only opaque frozen manual-selection candidates to the organizer", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        prizePools: [
+          {
+            id: "manual-helmet",
+            title: "Manual helmet",
+            awardMode: "manual_selection",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Manual choice helmet" }],
+          },
+          {
+            id: "random-light",
+            title: "Random light",
+            awardMode: "random_draw",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Random choice light" }],
+          },
+        ],
+      }),
+    );
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const pools = (await backend.getPublicGiveaway(context.giveaway.id)).prizePools;
+    const manualPool = pools.find((pool) => pool.awardMode === "manual_selection");
+    const randomPool = pools.find((pool) => pool.awardMode === "random_draw");
+    if (!manualPool || !randomPool) throw new Error("TEST_POOL_MISSING");
+
+    await expect(
+      backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        manualPool.id,
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      await expect(
+        backend.listGiveawayManualSelectionCandidates(
+          context.rider.sessionToken,
+          context.giveaway.id,
+          manualPool.id,
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        backend.listGiveawayManualSelectionCandidates(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+          randomPool.id,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+
+      const candidates = await backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        manualPool.id,
+      );
+      const serializedCandidates = JSON.stringify(candidates);
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(Object.keys(candidates[0] ?? {}).sort()).toEqual(["label", "snapshotEntryId"]);
+      expect(candidates[0]).toMatchObject({ label: expect.stringMatching(/^Locked entry entry_/) });
+      expect(serializedCandidates).not.toContain(context.rider.user.id);
+      expect(serializedCandidates).not.toContain("Mina Rider");
+      expect(serializedCandidates).not.toContain("mina.rider@example.com");
+
+      const laterRider = await createExtraRider(backend, "post-lock-manual-selection");
+      await backend.registerForEvent(laterRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+      await expect(
+        backend.listGiveawayManualSelectionCandidates(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+          manualPool.id,
+        ),
+      ).resolves.toEqual(candidates);
+    });
+  });
+
   test("requires a frozen snapshot and explicit reason for manual selection", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
     const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
@@ -1543,19 +1630,32 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     const pool = (await backend.getPublicGiveaway(context.giveaway.id)).prizePools[0];
     if (!pool) throw new Error("TEST_POOL_MISSING");
-    const selectionInput = {
+    const preLockSelectionInput = {
       giveawayId: context.giveaway.id,
       prizePoolId: pool.id,
-      riderId: context.rider.user.id,
+      snapshotEntryId: "snapshot-entry-before-lock",
       reason: "Community service recognition",
       idempotencyKey: "manual-choice-1",
     };
     await expect(
-      backend.selectManualGiveawayAward(context.organizer.sessionToken, selectionInput),
+      backend.selectManualGiveawayAward(context.organizer.sessionToken, preLockSelectionInput),
     ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
 
     await withDrawEncryptionKey(async () => {
       await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const candidate = (await backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        pool.id,
+      ))[0];
+      if (!candidate) throw new Error("TEST_MANUAL_SELECTION_CANDIDATE_MISSING");
+      const selectionInput = {
+        giveawayId: context.giveaway.id,
+        prizePoolId: pool.id,
+        snapshotEntryId: candidate.snapshotEntryId,
+        reason: "Community service recognition",
+        idempotencyKey: "manual-choice-1",
+      };
       await expect(
         backend.selectManualGiveawayAward(context.organizer.sessionToken, {
           ...selectionInput,
@@ -1914,10 +2014,19 @@ describe("in-memory event giveaway lifecycle", () => {
 
     await withDrawEncryptionKey(async () => {
       await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const manualCandidates = await backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        manualPool.id,
+      );
+      const [firstCandidate, secondCandidate, thirdCandidate] = manualCandidates;
+      if (!firstCandidate || !secondCandidate || !thirdCandidate) {
+        throw new Error("TEST_MANUAL_CANDIDATES_MISSING");
+      }
       await backend.selectManualGiveawayAward(context.organizer.sessionToken, {
         giveawayId: context.giveaway.id,
         prizePoolId: manualPool.id,
-        riderId: context.rider.user.id,
+        snapshotEntryId: firstCandidate.snapshotEntryId,
         reason: "First manual award before random draw",
         idempotencyKey: "mixed-manual-before-random",
       });
@@ -1925,7 +2034,7 @@ describe("in-memory event giveaway lifecycle", () => {
         backend.selectManualGiveawayAward(context.organizer.sessionToken, {
           giveawayId: context.giveaway.id,
           prizePoolId: manualPool.id,
-          riderId: secondRider.user.id,
+          snapshotEntryId: secondCandidate.snapshotEntryId,
           reason: "A different manual selection must not replay",
           idempotencyKey: "mixed-manual-before-random",
         }),
@@ -1938,7 +2047,7 @@ describe("in-memory event giveaway lifecycle", () => {
         backend.selectManualGiveawayAward(context.organizer.sessionToken, {
           giveawayId: context.giveaway.id,
           prizePoolId: manualPool.id,
-          riderId: secondRider.user.id,
+          snapshotEntryId: secondCandidate.snapshotEntryId,
           reason: "Manual award after random draw",
           idempotencyKey: "mixed-manual-after-random",
         }),
@@ -1952,7 +2061,7 @@ describe("in-memory event giveaway lifecycle", () => {
         backend.selectManualGiveawayAward(context.organizer.sessionToken, {
           giveawayId: context.giveaway.id,
           prizePoolId: manualPool.id,
-          riderId: thirdRider.user.id,
+          snapshotEntryId: thirdCandidate.snapshotEntryId,
           reason: "Too late after publication",
           idempotencyKey: "mixed-manual-after-publication",
         }),
