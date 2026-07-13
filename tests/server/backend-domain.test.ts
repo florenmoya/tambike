@@ -223,6 +223,52 @@ describe("Tambike backend domain rules", () => {
     ).toHaveLength(1);
   });
 
+  test("allows only one concurrent account creation across admin organizer creation and rider signup", async () => {
+    const backend = await createTambikeTestBackend();
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+    const email = "shared-account@example.com";
+
+    const results = await Promise.allSettled([
+      backend.createOrganizerForAdmin(admin.sessionToken, {
+        ...validAdminOrganizerInput,
+        email: ` ${email.toUpperCase()} `,
+      }),
+      backend.signUpRider({
+        displayName: "Shared Account Rider",
+        email,
+        password: "password123",
+        area: "Quezon City",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: "INVALID_INPUT" }) });
+    expect(backend.getSnapshot().users.filter((user) => user.email === email)).toHaveLength(1);
+  });
+
+  test("releases a reserved organizer email after invalid-password creation fails", async () => {
+    const backend = await createTambikeTestBackend();
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+    const email = "retry-organizer@example.com";
+
+    await expect(
+      backend.createOrganizerForAdmin(admin.sessionToken, {
+        ...validAdminOrganizerInput,
+        email,
+        password: "short",
+      }),
+    ).rejects.toThrow("INVALID_INPUT");
+
+    await expect(
+      backend.createOrganizerForAdmin(admin.sessionToken, {
+        ...validAdminOrganizerInput,
+        email,
+      }),
+    ).resolves.toMatchObject({ ownerEmail: email, status: "APPROVED" });
+    expect(backend.getSnapshot().users.filter((user) => user.email === email)).toHaveLength(1);
+  });
+
   test("creates non-guessable pass tokens when a rider registers going", async () => {
     const backend = await createTambikeTestBackend();
     const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");

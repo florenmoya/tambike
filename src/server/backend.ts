@@ -284,7 +284,7 @@ export class TambikeBackend {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
   private readonly organizerVerifications = new Map<string, OrganizerVerificationRecord>();
-  private readonly reservedOrganizerEmails = new Set<string>();
+  private readonly reservedUserEmails = new Set<string>();
   private readonly rsvps = new Map<string, RSVP & { userId: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
@@ -344,32 +344,35 @@ export class TambikeBackend {
 
   async signUpRider(input: SignupWithPasswordInput) {
     const email = input.email.trim().toLowerCase();
-    if (!email || this.findUserByEmail(email)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    this.reserveNewUserEmail(email);
+
+    try {
+      validateSignupPassword(input.password);
+
+      const user: BackendUser = {
+        id: `user-${slugify(email || input.displayName)}`,
+        displayName: input.displayName.trim(),
+        email,
+        role: "rider",
+        verificationStatus: "UNVERIFIED",
+        area: input.area.trim(),
+        bikeModel: input.bikeModel?.trim() || undefined,
+        clubName: input.clubName?.trim() || undefined,
+        joinedAt: "July 4, 2026",
+        passwordHash: await bcrypt.hash(input.password, 10),
+      };
+
+      this.users.set(user.id, user);
+      this.audit("USER_CREATED", user.id, user.id);
+      const session = this.createSessionForUser(user.id);
+
+      return {
+        user: cloneUser(user),
+        sessionToken: session.token,
+      };
+    } finally {
+      this.reservedUserEmails.delete(email);
     }
-    validateSignupPassword(input.password);
-
-    const user: BackendUser = {
-      id: `user-${slugify(email || input.displayName)}`,
-      displayName: input.displayName.trim(),
-      email,
-      role: "rider",
-      verificationStatus: "UNVERIFIED",
-      area: input.area.trim(),
-      bikeModel: input.bikeModel?.trim() || undefined,
-      clubName: input.clubName?.trim() || undefined,
-      joinedAt: "July 4, 2026",
-      passwordHash: await bcrypt.hash(input.password, 10),
-    };
-
-    this.users.set(user.id, user);
-    this.audit("USER_CREATED", user.id, user.id);
-    const session = this.createSessionForUser(user.id);
-
-    return {
-      user: cloneUser(user),
-      sessionToken: session.token,
-    };
   }
 
   async loginWithPassword(email: string, password: string) {
@@ -474,10 +477,7 @@ export class TambikeBackend {
   ) {
     const admin = this.requireRole(sessionToken, "admin");
     const email = requiredTrimmedOrganizerField(input.email).toLowerCase();
-    if (this.findUserByEmail(email) || this.reservedOrganizerEmails.has(email)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-    this.reservedOrganizerEmails.add(email);
+    this.reserveNewUserEmail(email);
 
     try {
       validateSignupPassword(input.password);
@@ -512,7 +512,7 @@ export class TambikeBackend {
       this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
       return cloneOrganizerVerification(record);
     } finally {
-      this.reservedOrganizerEmails.delete(email);
+      this.reservedUserEmails.delete(email);
     }
   }
 
@@ -812,6 +812,14 @@ export class TambikeBackend {
 
   private findUserByEmail(email: string) {
     return Array.from(this.users.values()).find((user) => user.email === email) ?? null;
+  }
+
+  private reserveNewUserEmail(email: string) {
+    if (!email || this.findUserByEmail(email) || this.reservedUserEmails.has(email)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    this.reservedUserEmails.add(email);
   }
 
   private audit(action: AuditAction, actorUserId?: string, targetId?: string) {
