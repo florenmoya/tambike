@@ -82,8 +82,42 @@ function directGiveawayInput(eventId: string): CreateGiveawayInput {
   };
 }
 
+function manualGiveawayInput(eventId: string): CreateGiveawayInput {
+  return {
+    eventId,
+    title: "Disposable manual replacement campaign",
+    kind: "giveaway",
+    entryMode: "automatic",
+    maxEntriesPerRider: 5,
+    mechanics: "An organizer selects one frozen entry and may replace a terminal award.",
+    terms: "Disposable integration-test terms.",
+    timeZone: "Asia/Manila",
+    winnerLimits: { perRider: 1, total: 1 },
+    organizerAttestation: true,
+    publicVisibility: "hidden",
+    eligibilityGroups: [
+      {
+        id: "active-pass",
+        label: "Active RSVP and pass",
+        weight: 1,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+    ],
+    prizePools: [
+      {
+        id: "manual-prize",
+        title: "Disposable manual helmet",
+        awardMode: "manual_selection",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Disposable manual prize item" }],
+      },
+    ],
+  };
+}
+
 describe("Prisma giveaway draw concurrency", () => {
-  test("serializes two-client lock, draw, and redraw replays on the disposable database", async () => {
+  test("serializes two-client draw, redraw, and manual-replacement replays on the disposable database", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createPrismaIntegrationClientPair(
       process.env,
@@ -447,6 +481,166 @@ describe("Prisma giveaway draw concurrency", () => {
         prizeItemId: originalDirectAward.prizeItemId,
       });
       expect(replacementDirectAward?.winnerUserId).not.toBe(originalDirectAward.winnerUserId);
+
+      const manualCampaign = await backendClients.primary.backend.createGiveaway(
+        organizerSession,
+        eventId,
+        manualGiveawayInput(eventId),
+      );
+      await backendClients.primary.backend.submitGiveawayForReview(organizerSession, manualCampaign.id);
+      await backendClients.primary.backend.reviewGiveawayCompliance(adminSession, manualCampaign.id, {
+        decision: "approved",
+      });
+      await backendClients.primary.backend.openGiveaway(organizerSession, manualCampaign.id);
+      await backendClients.primary.backend.lockGiveaway(organizerSession, manualCampaign.id);
+      const manualPrizePool = await rawClients.primary.giveawayPrizePool.findFirst({
+        where: { giveawayId: manualCampaign.id, awardMode: "manual_selection" },
+        select: { id: true },
+      });
+      if (!manualPrizePool) throw new Error("INTEGRATION_MANUAL_PRIZE_POOL_MISSING");
+      const initialManualCandidates =
+        await backendClients.primary.backend.listGiveawayManualSelectionCandidates(
+          organizerSession,
+          manualCampaign.id,
+          manualPrizePool.id,
+        );
+      expect(initialManualCandidates).toHaveLength(2);
+      const initialManualCandidate = initialManualCandidates[0];
+      if (!initialManualCandidate) throw new Error("INTEGRATION_MANUAL_CANDIDATE_MISSING");
+      const initialManualDraw = await backendClients.primary.backend.selectManualGiveawayAward(
+        organizerSession,
+        {
+          giveawayId: manualCampaign.id,
+          prizePoolId: manualPrizePool.id,
+          snapshotEntryId: initialManualCandidate.snapshotEntryId,
+          reason: "Disposable initial manual selection",
+          idempotencyKey: `manual-selection-${suffix}`,
+        },
+      );
+      const manualPublication = await backendClients.primary.backend.publishGiveawayDraw(
+        organizerSession,
+        manualCampaign.id,
+        initialManualDraw.drawId,
+      );
+      const originalManualAward = await rawClients.primary.giveawayAward.findFirst({
+        where: { giveawayId: manualCampaign.id, drawId: initialManualDraw.drawId, isCurrent: true },
+        select: {
+          id: true,
+          drawId: true,
+          prizeItemId: true,
+          snapshotEntryId: true,
+          winnerUserId: true,
+          draw: { select: { snapshotId: true, algorithmVersion: true, status: true } },
+        },
+      });
+      if (
+        !originalManualAward ||
+        !originalManualAward.prizeItemId ||
+        !originalManualAward.snapshotEntryId ||
+        !originalManualAward.draw
+      ) {
+        throw new Error("INTEGRATION_MANUAL_AWARD_MISSING");
+      }
+      expect(originalManualAward.draw).toMatchObject({
+        algorithmVersion: "manual-selection-v1",
+        status: "published",
+      });
+      await backendClients.primary.backend.voidGiveawayAward(
+        adminSession,
+        originalManualAward.id,
+        "Disposable manual replacement reason",
+      );
+      const manualReplacementOptions =
+        await backendClients.primary.backend.listManualGiveawayReplacementCandidates(
+          organizerSession,
+          originalManualAward.id,
+        );
+      expect(manualReplacementOptions).toMatchObject({
+        sourceAwardId: originalManualAward.id,
+        claimDeadlineRequired: false,
+      });
+      expect(manualReplacementOptions.candidates).toHaveLength(1);
+      const manualReplacementCandidate = manualReplacementOptions.candidates[0];
+      if (!manualReplacementCandidate) {
+        throw new Error("INTEGRATION_MANUAL_REPLACEMENT_CANDIDATE_MISSING");
+      }
+      expect(manualReplacementCandidate.snapshotEntryId).not.toBe(
+        originalManualAward.snapshotEntryId,
+      );
+      const manualReplacementInput = {
+        sourceAwardId: originalManualAward.id,
+        snapshotEntryId: manualReplacementCandidate.snapshotEntryId,
+        reason: "Disposable manual replacement reason",
+        idempotencyKey: `manual-replacement-${suffix}`,
+      };
+      const [firstManualReplacement, secondManualReplacement] = await Promise.all([
+        backendClients.primary.backend.replaceManualGiveawayAward(
+          organizerSession,
+          manualReplacementInput,
+        ),
+        backendClients.secondary.backend.replaceManualGiveawayAward(
+          organizerSession,
+          manualReplacementInput,
+        ),
+      ]);
+      expect(secondManualReplacement).toEqual(firstManualReplacement);
+      expect(firstManualReplacement.drawId).not.toBe(initialManualDraw.drawId);
+      expect(firstManualReplacement.verification).toMatchObject({
+        commitment: manualPublication.commitment,
+        snapshotDigest: manualPublication.snapshotDigest,
+        seed: manualPublication.seed,
+        algorithmVersion: "manual-selection-v1",
+      });
+
+      const [historicalManualAward, currentManualAward, replacementManualDraw, currentAwardCount] =
+        await Promise.all([
+          rawClients.primary.giveawayAward.findUnique({
+            where: { id: originalManualAward.id },
+            select: { isCurrent: true, status: true, prizeItemId: true },
+          }),
+          rawClients.primary.giveawayAward.findFirst({
+            where: {
+              giveawayId: manualCampaign.id,
+              predecessorAwardId: originalManualAward.id,
+              isCurrent: true,
+            },
+            select: {
+              prizeItemId: true,
+              snapshotEntryId: true,
+              predecessorAwardId: true,
+              winnerUserId: true,
+            },
+          }),
+          rawClients.primary.giveawayDraw.findUnique({
+            where: { id: firstManualReplacement.drawId },
+            select: { snapshotId: true, type: true, status: true, algorithmVersion: true },
+          }),
+          rawClients.primary.giveawayAward.count({
+            where: {
+              giveawayId: manualCampaign.id,
+              prizeItemId: originalManualAward.prizeItemId,
+              isCurrent: true,
+            },
+          }),
+        ]);
+      expect(historicalManualAward).toMatchObject({
+        isCurrent: false,
+        status: "voided",
+        prizeItemId: originalManualAward.prizeItemId,
+      });
+      expect(currentManualAward).toMatchObject({
+        predecessorAwardId: originalManualAward.id,
+        prizeItemId: originalManualAward.prizeItemId,
+        snapshotEntryId: manualReplacementCandidate.snapshotEntryId,
+      });
+      expect(currentManualAward?.winnerUserId).not.toBe(originalManualAward.winnerUserId);
+      expect(currentAwardCount).toBe(1);
+      expect(replacementManualDraw).toMatchObject({
+        snapshotId: originalManualAward.draw.snapshotId,
+        type: "redraw",
+        status: "published",
+        algorithmVersion: "manual-selection-v1",
+      });
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
