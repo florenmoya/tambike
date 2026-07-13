@@ -213,16 +213,17 @@ export interface PublicGiveawayCampaignSummary {
   prizePools: PublicGiveawayPrizePoolSummary[];
 }
 
-/** One public winner result. The alias is an opaque entry reference, not a rider identity. */
+/** One public winner result. It exists only after the winning rider explicitly opts in. */
 export interface PublicGiveawayResult {
   prizePoolTitle: string;
   winnerAlias: string;
 }
 
-/** Event-page campaign data, with results only after a draw has been published. */
+/** Event-page campaign data, with draw receipts/results only after publication. */
 export interface PublicEventGiveaway {
   giveaway: PublicGiveawayCampaignSummary;
   results: PublicGiveawayResult[];
+  drawVerifications: PublicGiveawayDrawVerification[];
 }
 
 /** Minimal campaign list item for organizer and administrator rails. */
@@ -256,6 +257,17 @@ export interface RiderGiveawayAwardSummary {
   status: Exclude<RiderGiveawayEntryStatus, "not_eligible" | "eligible" | "entered">;
   claimDeadlineAt?: string;
   fulfilmentMode: GiveawayFulfilmentMode;
+  /** The winning rider controls this public-only alias; it is never inferred from an entry reference. */
+  winnerPublication?: {
+    isPublic: boolean;
+    alias?: string;
+  };
+}
+
+/** A self-only receipt for a frozen entry after at least one draw is published. */
+export interface RiderGiveawayDrawProof {
+  entryReference: string;
+  drawVerifications: PublicGiveawayDrawVerification[];
 }
 
 /** Rider-scoped state. It has no other-rider data, source facts, or claim secret. */
@@ -264,6 +276,7 @@ export interface RiderGiveawayState {
   status: RiderGiveawayEntryStatus;
   entryCount: number;
   award?: RiderGiveawayAwardSummary;
+  proof?: RiderGiveawayDrawProof;
 }
 
 /** A rider's own campaign state when loading the giveaways for one event. */
@@ -390,6 +403,17 @@ export interface RevokeManualGiveawayEntryInput {
   reason: string;
 }
 
+/** A winner must make an explicit, revocable choice before any alias is public. */
+export type GiveawayWinnerPublicationInput =
+  | {
+      published: true;
+      alias: string;
+    }
+  | {
+      published: false;
+      alias?: never;
+    };
+
 /** Returned exactly once to the authenticated winner; never persist or place this in a URL. */
 export interface IssuedGiveawayClaimToken {
   awardId: string;
@@ -505,7 +529,7 @@ export interface GiveawayLifecycleAdvanceResult {
   purgedDeliveryDetails: number;
 }
 
-/** Public fairness proof. `seed` is omitted until a draw is published. */
+/** Draw verification payload. Public/rider DTOs include it only after publication. */
 export interface PublicGiveawayDrawVerification {
   giveawayId: string;
   commitment: string;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Gift, LoaderCircle, Trophy } from "lucide-react";
+import { Gift, LoaderCircle, ShieldCheck, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { PublicEventGiveaway } from "@/features/giveaways/types";
@@ -82,7 +82,7 @@ export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
         </div>
       ) : (
         <div className="grid gap-3">
-          {campaigns.map(({ giveaway, results }) => {
+          {campaigns.map(({ giveaway, results, drawVerifications }) => {
             const entryOpen = formatGiveawayMoment(giveaway.entryOpensAt, giveaway.timeZone);
             const entryClose = formatGiveawayMoment(giveaway.entryClosesAt, giveaway.timeZone);
             const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
@@ -149,6 +149,27 @@ export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
                     </ul>
                   </div>
 
+                  {drawVerifications.length > 0 ? (
+                    <div className="rounded-lg border border-sky-300/25 bg-sky-300/[0.06] px-3 py-3">
+                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.13em] text-sky-100">
+                        <ShieldCheck className="size-3.5" aria-hidden="true" />
+                        Draw receipts
+                      </div>
+                      <p className="mb-3 text-sm text-white/68">
+                        Published fairness data for this draw. It contains no entrant list or claim credential.
+                      </p>
+                      <div className="grid gap-2">
+                        {drawVerifications.map((verification, index) => (
+                          <DrawReceipt
+                            key={`${verification.drawDigest}-${verification.seed}`}
+                            verification={verification}
+                            label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
                   {results.length > 0 ? (
                     <div className="rounded-lg border border-[#20b26b]/30 bg-[#20b26b]/[0.08] px-3 py-3">
                       <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.13em] text-[#8ee6b7]">
@@ -156,7 +177,7 @@ export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
                         Published winner aliases
                       </div>
                       <p className="mb-3 text-sm text-white/68">
-                        Each alias is an opaque entry reference, not a rider name.
+                        Only winners who choose a public alias appear here. Everyone else remains private.
                       </p>
                       <ul className="grid list-none gap-2 p-0">
                         {results.map((result) => (
@@ -186,6 +207,36 @@ export function PublicGiveawayPanel({ eventId }: PublicGiveawayPanelProps) {
         </div>
       )}
     </section>
+  );
+}
+
+function DrawReceipt({
+  label,
+  verification,
+}: {
+  label: string;
+  verification: PublicEventGiveaway["drawVerifications"][number];
+}) {
+  const rows = [
+    ["Commitment", verification.commitment],
+    ["Snapshot", `${verification.snapshotDigest} · ${verification.snapshotCount} entries`],
+    ["Algorithm", verification.algorithmVersion],
+    ["Draw digest", verification.drawDigest],
+    ["Revealed seed", verification.seed],
+  ] as const;
+
+  return (
+    <details className="rounded-md border border-sky-200/15 bg-black/15 px-3 py-2 text-sm">
+      <summary className="cursor-pointer font-bold text-sky-50">{label}</summary>
+      <dl className="mt-3 grid gap-2">
+        {rows.map(([rowLabel, value]) => (
+          <div key={rowLabel} className="grid gap-1">
+            <dt className="text-[10px] font-black uppercase tracking-[0.1em] text-white/48">{rowLabel}</dt>
+            <dd className="m-0 break-all font-mono text-xs text-sky-100/90">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

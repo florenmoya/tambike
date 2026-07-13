@@ -28,6 +28,7 @@ import type {
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
+  GiveawayWinnerPublicationInput,
   IssuedGiveawayClaimToken,
   IssuedGiveawayCampaignCode,
   GrantManualGiveawayEntryInput,
@@ -37,6 +38,7 @@ import type {
   PrivateGiveawayDeliveryDetails,
   PublicEventGiveaway,
   PublicGiveawayCampaignSummary,
+  PublicGiveawayDrawVerification,
   PublicGiveawayPrizePoolSummary,
   PublicGiveawayResult,
   RiderEventGiveawayState,
@@ -189,6 +191,8 @@ export type AuditAction =
   | "GIVEAWAY_PERK_REDEEMED"
   | "GIVEAWAY_DRAW_COMPLETED"
   | "GIVEAWAY_DRAW_PUBLISHED"
+  | "GIVEAWAY_WINNER_PUBLICATION_OPTED_IN"
+  | "GIVEAWAY_WINNER_PUBLICATION_REVOKED"
   | "GIVEAWAY_AWARD_DECLINED"
   | "GIVEAWAY_AWARD_REDRAWN"
   | "GIVEAWAY_MANUAL_AWARD_SELECTED"
@@ -484,6 +488,10 @@ type GiveawayAwardRecord = {
   /** Immutable successor link. At most one award can consume a source slot. */
   recoverySourceAwardId?: string;
   predecessorAwardId?: string;
+  /** Rider-controlled public alias and its consent timeline; never defaulted from entry data. */
+  publicWinnerAlias?: string;
+  winnerAliasOptedInAt?: string;
+  winnerAliasRevokedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -1524,6 +1532,7 @@ export class TambikeBackend {
       .map((giveaway) => ({
         giveaway: this.toPublicGiveaway(giveaway),
         results: this.toPublicGiveawayResults(giveaway),
+        drawVerifications: this.toPublicGiveawayDrawVerifications(giveaway),
       }));
   }
 
@@ -1595,6 +1604,62 @@ export class TambikeBackend {
       deliveryDetailsSubmitted: Boolean(deliveryDetail && !deliveryDetail.purgedAt),
       claimCredentialIssued: Boolean(award.claimTokenHash),
     };
+  }
+
+  /**
+   * A winner can voluntarily publish a short alias after a draw is public, or
+   * revoke that consent at any time. The award itself is never reassigned or
+   * removed when this preference changes.
+   */
+  async setGiveawayWinnerPublication(
+    sessionToken: string,
+    awardId: string,
+    input: GiveawayWinnerPublicationInput,
+  ): Promise<RiderGiveawayState> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const preference = this.parseGiveawayWinnerPublicationInput(input);
+    const award = this.giveaways.awardsById.get(awardId);
+    if (!award || award.winnerUserId !== rider.id || !award.isCurrent) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const giveaway = this.requireGiveawayByAward(award);
+    const entry = this.giveaways.entriesById.get(award.entryId);
+    if (
+      !entry ||
+      !award.drawId ||
+      !award.snapshotEntryId ||
+      !giveaway.snapshot?.seedRevealedAt ||
+      !["pending_verification", "claimable", "verified", "fulfilled"].includes(award.status)
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+
+    const now = new Date().toISOString();
+    if (preference.published) {
+      if (this.isOpaqueGiveawayWinnerAlias(preference.alias, entry.opaquePublicReference)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      award.publicWinnerAlias = preference.alias;
+      award.winnerAliasOptedInAt = now;
+      award.winnerAliasRevokedAt = undefined;
+    } else {
+      if (!award.publicWinnerAlias || !award.winnerAliasOptedInAt) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      award.winnerAliasRevokedAt = now;
+    }
+    award.updatedAt = now;
+    this.auditGiveaway(
+      giveaway,
+      rider.id,
+      preference.published
+        ? "GIVEAWAY_WINNER_PUBLICATION_OPTED_IN"
+        : "GIVEAWAY_WINNER_PUBLICATION_REVOKED",
+      "award",
+      award.id,
+      { awardId: award.id, public: preference.published },
+    );
+    return this.toRiderGiveawayState(giveaway, rider.id);
   }
 
   async optInToGiveaway(sessionToken: string, giveawayId: string): Promise<RiderGiveawayState> {
@@ -4083,6 +4148,45 @@ export class TambikeBackend {
     };
   }
 
+  private parseGiveawayWinnerPublicationInput(input: unknown): GiveawayWinnerPublicationInput {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => key !== "published" && key !== "alias") ||
+      !Object.hasOwn(record, "published") ||
+      typeof record.published !== "boolean"
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (!record.published) {
+      if (Object.hasOwn(record, "alias")) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      return { published: false };
+    }
+    if (!Object.hasOwn(record, "alias") || typeof record.alias !== "string") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const alias = record.alias.trim();
+    if (!/^[A-Za-z][A-Za-z0-9 ._-]{1,39}$/.test(alias)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return { published: true, alias };
+  }
+
+  private isOpaqueGiveawayWinnerAlias(alias: string, entryReference: string) {
+    return (
+      alias === entryReference ||
+      /^(?:entry|claim)_[A-Za-z0-9_-]+$/i.test(alias)
+    );
+  }
+
   private parseGiveawayDrawInput(input: unknown) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
@@ -4222,6 +4326,7 @@ export class TambikeBackend {
     if (entry.status === "disqualified") {
       return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
     }
+    const proof = this.toRiderGiveawayDrawProof(giveaway, entry);
     const award = giveaway.awards
       .filter(
         (candidate) =>
@@ -4242,7 +4347,12 @@ export class TambikeBackend {
           Number(right.isCurrent) - Number(left.isCurrent) || right.createdAt.localeCompare(left.createdAt),
       )[0];
     if (!award) {
-      return { giveawayId: giveaway.id, status: "entered", entryCount: entry.currentWeight };
+      return {
+        giveawayId: giveaway.id,
+        status: "entered",
+        entryCount: entry.currentWeight,
+        ...(proof ? { proof } : {}),
+      };
     }
     const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
     if (!pool) throw new BackendError("NOT_FOUND", "NOT_FOUND");
@@ -4256,7 +4366,27 @@ export class TambikeBackend {
         status: award.status as NonNullable<RiderGiveawayState["award"]>["status"],
         claimDeadlineAt: award.claimDeadlineAt,
         fulfilmentMode: pool.fulfilmentMode,
+        winnerPublication: {
+          isPublic: this.isGiveawayWinnerAliasPublic(award),
+          ...(award.publicWinnerAlias ? { alias: award.publicWinnerAlias } : {}),
+        },
       },
+      ...(proof ? { proof } : {}),
+    };
+  }
+
+  private toRiderGiveawayDrawProof(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+  ) {
+    const snapshotEntry = giveaway.snapshot?.entries.find(
+      (candidate) => candidate.entryId === entry.id,
+    );
+    const drawVerifications = this.toPublicGiveawayDrawVerifications(giveaway);
+    if (!snapshotEntry || drawVerifications.length === 0) return undefined;
+    return {
+      entryReference: snapshotEntry.opaquePublicReference,
+      drawVerifications,
     };
   }
 
@@ -5646,6 +5776,31 @@ export class TambikeBackend {
     );
   }
 
+  /** Published draw receipts contain the fairness commitment, never entrants or encrypted seed material. */
+  private toPublicGiveawayDrawVerifications(
+    giveaway: GiveawayAggregate,
+  ): PublicGiveawayDrawVerification[] {
+    const snapshot = giveaway.snapshot;
+    if (!snapshot?.seedRevealedAt || !process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY) return [];
+    const publishedDraws = giveaway.draws
+      .filter((draw) => draw.status === "published")
+      .slice()
+      .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
+    if (publishedDraws.length === 0) return [];
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
+    return publishedDraws.map((draw) => this.buildGiveawayDrawVerification(giveaway, draw, seed, true));
+  }
+
+  private isGiveawayWinnerAliasPublic(
+    award: Pick<
+      GiveawayAwardRecord,
+      "publicWinnerAlias" | "winnerAliasOptedInAt" | "winnerAliasRevokedAt"
+    >,
+  ) {
+    if (!award.publicWinnerAlias || !award.winnerAliasOptedInAt) return false;
+    return !award.winnerAliasRevokedAt;
+  }
+
   private toPublicGiveawayResults(giveaway: GiveawayAggregate): PublicGiveawayResult[] {
     if (
       !giveaway.snapshot?.seedRevealedAt ||
@@ -5659,10 +5814,10 @@ export class TambikeBackend {
           award.isCurrent &&
           ["pending_verification", "claimable", "verified", "fulfilled"].includes(award.status),
       )
+      .filter((award) => Boolean(award.drawId && award.snapshotEntryId && this.isGiveawayWinnerAliasPublic(award)))
       .map((award) => ({
         award,
         pool: giveaway.prizePools.find((pool) => pool.id === award.prizePoolId),
-        entry: this.giveaways.entriesById.get(award.entryId),
       }))
       .filter(
         (
@@ -5670,18 +5825,17 @@ export class TambikeBackend {
         ): value is {
           award: GiveawayAwardRecord;
           pool: GiveawayPrizePoolRecord;
-          entry: GiveawayEntryRecord;
-        } => Boolean(value.pool && value.entry),
+        } => Boolean(value.pool),
       )
       .sort(
         (left, right) =>
           left.pool.position - right.pool.position ||
-          left.entry.opaquePublicReference.localeCompare(right.entry.opaquePublicReference) ||
+          (left.award.publicWinnerAlias ?? "").localeCompare(right.award.publicWinnerAlias ?? "") ||
           left.award.id.localeCompare(right.award.id),
       )
-      .map(({ pool, entry }) => ({
+      .map(({ pool, award }) => ({
         prizePoolTitle: pool.title,
-        winnerAlias: entry.opaquePublicReference,
+        winnerAlias: award.publicWinnerAlias!,
       }));
   }
 

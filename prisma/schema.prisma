@@ -961,6 +961,9 @@ model GiveawayAward {
   recoveryClosedReasonDigest String?
   recoverySourceAwardId String?            @unique
   predecessorAwardId   String?
+  publicWinnerAlias    String?
+  winnerAliasOptedInAt DateTime?
+  winnerAliasRevokedAt DateTime?
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
 

@@ -5,6 +5,7 @@ import type {
   CreateGiveawayInput,
   FulfillGiveawayAwardInput,
   GrantManualGiveawayEntryInput,
+  GiveawayWinnerPublicationInput,
   GiveawayDeliveryDetailsInput,
   RevokeManualGiveawayEntryInput,
   UpdateGiveawayInput,
@@ -199,6 +200,16 @@ export async function getRiderGiveawayStateAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getRiderGiveawayState(sessionToken, giveawayId);
+  });
+}
+
+export async function setGiveawayWinnerPublicationAction(
+  awardId: string,
+  input: GiveawayWinnerPublicationInput,
+) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.setGiveawayWinnerPublication(sessionToken, awardId, input);
   });
 }
 

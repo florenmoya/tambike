@@ -7,8 +7,10 @@ import type {
   EventGiveawayOperatorQueueItem,
   GiveawayCampaignListItem,
   GiveawayOperatorCandidate,
+  GiveawayWinnerPublicationInput,
   OrganizerGiveawayWorkspace,
   PublicEventGiveaway,
+  RiderGiveawayState,
   RiderEventGiveawayState,
   RiderGiveawayClaimContext,
 } from "../../src/features/giveaways/types";
@@ -54,6 +56,11 @@ type GiveawayUiDataBackend = Awaited<ReturnType<typeof createTambikeTestBackend>
     sessionToken: string,
     giveawayId: string,
   ): Promise<Array<{ riderId: string; label: string }>>;
+  setGiveawayWinnerPublication(
+    sessionToken: string,
+    awardId: string,
+    input: GiveawayWinnerPublicationInput,
+  ): Promise<RiderGiveawayState>;
 };
 
 function asGiveawayUiDataBackend(
@@ -108,7 +115,10 @@ async function withDrawEncryptionKey<T>(callback: () => Promise<T>) {
   }
 }
 
-async function createPublishedGiveaway(backend: GiveawayUiDataBackend) {
+async function createPublishedGiveaway(
+  backend: GiveawayUiDataBackend,
+  options: { publish?: boolean } = {},
+) {
   const [organizer, admin, venue, rider] = await Promise.all([
     backend.loginWithPassword("marco.organizer@example.com", "password123"),
     backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
@@ -148,10 +158,14 @@ async function createPublishedGiveaway(backend: GiveawayUiDataBackend) {
       idempotencyKey: "ui-data-contract-initial-draw",
       reason: "Exercise the scoped UI data contracts",
     });
-    await backend.publishGiveawayDraw(organizer.sessionToken, giveaway.id, result.drawId);
+    if (options.publish !== false) {
+      await backend.publishGiveawayDraw(organizer.sessionToken, giveaway.id, result.drawId);
+    }
     return result;
   });
-  const riderState = await backend.getRiderGiveawayState(rider.sessionToken, giveaway.id);
+  const riderState = await withDrawEncryptionKey(() =>
+    backend.getRiderGiveawayState(rider.sessionToken, giveaway.id),
+  );
   if (!riderState.award) throw new Error("TEST_AWARD_MISSING");
 
   return { organizer, admin, venue, rider, event, giveaway, awardId: riderState.award.awardId };
@@ -214,7 +228,7 @@ async function createOpenEntryGiveaway(
 }
 
 describe("giveaway UI data contracts", () => {
-  test("lists only public campaign data and published opaque winner aliases for an event", async () => {
+  test("publishes only a safe draw receipt and opted-in winner aliases", async () => {
     const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
     const context = await createPublishedGiveaway(backend);
     const unpublished = await backend.createGiveaway(
@@ -223,18 +237,122 @@ describe("giveaway UI data contracts", () => {
       giveawayInput(context.event.id),
     );
 
-    const campaigns = await backend.listPublicGiveawaysForEvent(context.event.id);
+    const campaigns = await withDrawEncryptionKey(() =>
+      backend.listPublicGiveawaysForEvent(context.event.id),
+    );
 
     expect(campaigns).toHaveLength(1);
     expect(campaigns[0]).toMatchObject({
       giveaway: { id: context.giveaway.id, title: "Privacy-safe ride giveaway", state: "claims_open" },
-      results: [{ prizePoolTitle: "Helmet prize", winnerAlias: expect.any(String) }],
+      results: [],
+      drawVerifications: [
+        {
+          giveawayId: context.giveaway.id,
+          commitment: expect.stringMatching(/^[a-f0-9]{64}$/),
+          snapshotDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          snapshotCount: 1,
+          algorithmVersion: "hmac-sha256-v1",
+          drawDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          seed: expect.stringMatching(/^[A-Za-z0-9_-]+$/),
+        },
+      ],
     });
-    expect(Object.keys(campaigns[0]!.results[0]!).sort()).toEqual(["prizePoolTitle", "winnerAlias"]);
+    expect(Object.keys(campaigns[0]!).sort()).toEqual(["drawVerifications", "giveaway", "results"]);
+    expect(Object.keys(campaigns[0]!.drawVerifications[0] ?? {}).sort()).toEqual([
+      "algorithmVersion",
+      "commitment",
+      "drawDigest",
+      "giveawayId",
+      "seed",
+      "snapshotCount",
+      "snapshotDigest",
+    ]);
     expect(JSON.stringify(campaigns)).not.toMatch(
-      /mina\.rider@example\.com|winnerUserId|awardId|claimReference|claimToken|sourceFact|seed/i,
+      /mina\.rider@example\.com|winnerUserId|awardId|claimReference|claimToken|sourceFact|encrypted|ciphertext|delivery/i,
     );
     await expect(backend.getPublicGiveaway(unpublished.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
+      published: true,
+      alias: "Mina R.",
+    });
+    const optedIn = await withDrawEncryptionKey(() =>
+      backend.listPublicGiveawaysForEvent(context.event.id),
+    );
+    expect(optedIn[0]?.results).toEqual([{ prizePoolTitle: "Helmet prize", winnerAlias: "Mina R." }]);
+
+    await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
+      published: false,
+    });
+    const revoked = await withDrawEncryptionKey(() =>
+      backend.listPublicGiveawaysForEvent(context.event.id),
+    );
+    expect(revoked[0]?.results).toEqual([]);
+
+    await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
+      published: true,
+      alias: "Mina Rejoined",
+    });
+    const reopted = await withDrawEncryptionKey(() =>
+      backend.listPublicGiveawaysForEvent(context.event.id),
+    );
+    expect(reopted[0]?.results).toEqual([
+      { prizePoolTitle: "Helmet prize", winnerAlias: "Mina Rejoined" },
+    ]);
+  });
+
+  test("withholds public proof before publication and scopes a rider proof to their own entry", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const unpublished = await createPublishedGiveaway(backend, { publish: false });
+
+    const publicBeforePublish = await backend.listPublicGiveawaysForEvent(unpublished.event.id);
+    expect(publicBeforePublish).toEqual([
+      expect.objectContaining({ giveaway: expect.objectContaining({ id: unpublished.giveaway.id }), results: [] }),
+    ]);
+    expect(publicBeforePublish[0]?.drawVerifications).toEqual([]);
+    await expect(
+      withDrawEncryptionKey(() =>
+        backend.getRiderGiveawayState(unpublished.rider.sessionToken, unpublished.giveaway.id),
+      ),
+    ).resolves.not.toHaveProperty("proof");
+
+    const published = await createPublishedGiveaway(backend);
+    const ownerState = await withDrawEncryptionKey(() =>
+      backend.getRiderGiveawayState(published.rider.sessionToken, published.giveaway.id),
+    );
+    const publicAfterPublish = await withDrawEncryptionKey(() =>
+      backend.listPublicGiveawaysForEvent(published.event.id),
+    );
+    const publicCampaign = publicAfterPublish.find((campaign) => campaign.giveaway.id === published.giveaway.id);
+    expect(ownerState.proof).toEqual({
+      entryReference: expect.stringMatching(/^entry_/),
+      drawVerifications: publicCampaign?.drawVerifications,
+    });
+    expect(JSON.stringify(ownerState)).not.toMatch(
+      /email|winnerUserId|sourceFact|sourceSnapshot|claimToken|ciphertext|delivery/i,
+    );
+    await expect(
+      backend.setGiveawayWinnerPublication(published.rider.sessionToken, published.awardId, {
+        published: true,
+        alias: ownerState.proof?.entryReference ?? "entry_missing",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    const anotherRider = await backend.signUpRider({
+      displayName: "Proof snooper",
+      email: "proof-snooper@example.com",
+      password: "password123",
+      area: "Antipolo",
+    });
+    await expect(
+      backend.getRiderGiveawayState(anotherRider.sessionToken, published.giveaway.id),
+    ).resolves.toEqual({ giveawayId: published.giveaway.id, status: "not_eligible", entryCount: 0 });
+    await expect(
+      backend.setGiveawayWinnerPublication(anotherRider.sessionToken, published.awardId, {
+        published: true,
+        alias: "Not mine",
+      }),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
   });
 
   test("returns a rider-owned claim context without a credential or eligibility facts", async () => {
@@ -568,6 +686,24 @@ describe("giveaway UI data contracts", () => {
 });
 
 describe("giveaway UI data action contracts", () => {
+  test("renders published draw receipts and a rider-controlled winner alias", async () => {
+    const [publicPanel, riderPanel] = await Promise.all([
+      readFile(new URL("../../src/features/giveaways/public-giveaway-panel.tsx", import.meta.url), "utf8"),
+      readFile(
+        new URL("../../src/features/giveaways/rider-giveaway-status-panel.tsx", import.meta.url),
+        "utf8",
+      ),
+    ]);
+
+    expect(publicPanel).toContain("Draw receipts");
+    expect(publicPanel).toContain("drawVerifications");
+    expect(publicPanel).not.toContain("opaque entry reference");
+    expect(riderPanel).toContain("Your draw receipt");
+    expect(riderPanel).toContain("setGiveawayWinnerPublicationAction");
+    expect(riderPanel).toContain("Publish alias");
+    expect(riderPanel).toContain("Hide public alias");
+  });
+
   test("implements the same scoped reads in memory and Prisma backends", async () => {
     const [memorySource, prismaSource] = await Promise.all([
       readFile(new URL("../../src/server/backend.ts", import.meta.url), "utf8"),
@@ -584,6 +720,7 @@ describe("giveaway UI data action contracts", () => {
       "getOrganizerGiveawayWorkspace",
       "listGiveawayCampaignCodes",
       "listGiveawayManualEntryCandidates",
+      "setGiveawayWinnerPublication",
     ]) {
       expect(memorySource).toContain(`async ${name}`);
       expect(prismaSource).toContain(`async ${name}`);
@@ -606,6 +743,7 @@ describe("giveaway UI data action contracts", () => {
       "getOrganizerGiveawayWorkspaceAction",
       "listGiveawayCampaignCodesAction",
       "listGiveawayManualEntryCandidatesAction",
+      "setGiveawayWinnerPublicationAction",
     ]) {
       expect(source).toContain(`function ${name}`);
     }

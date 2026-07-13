@@ -12,6 +12,13 @@ const giveawayMigrationSql = readFileSync(
   ),
   "utf8",
 );
+const publicGiveawayProofMigrationSql = readFileSync(
+  resolve(
+    process.cwd(),
+    "prisma/migrations/20260713010000_public_giveaway_proofs/migration.sql",
+  ),
+  "utf8",
+);
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
 const prismaSeed = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
 
@@ -343,6 +350,37 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('"entryId", "drawId", "prizePoolId"');
     expect(giveawayMigrationSql).toContain('"GiveawayAward_entryId_fkey"');
     expect(giveawayMigrationSql).toContain('CREATE INDEX "GiveawayAward_entryId_idx"');
+  });
+
+  test("persists a winner's revocable publication consent without changing award provenance", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const award = models.get("GiveawayAward");
+
+    expect(award?.fields.find((field) => field.name === "publicWinnerAlias")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(award?.fields.find((field) => field.name === "winnerAliasOptedInAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(award?.fields.find((field) => field.name === "winnerAliasRevokedAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(prismaSchema).toMatch(/publicWinnerAlias\s+String\?\s*\n/);
+    expect(prismaSchema).toMatch(/winnerAliasOptedInAt\s+DateTime\?\s*\n/);
+    expect(prismaSchema).toMatch(/winnerAliasRevokedAt\s+DateTime\?\s*\n/);
+    expect(publicGiveawayProofMigrationSql).toContain('ADD COLUMN "publicWinnerAlias" TEXT');
+    expect(publicGiveawayProofMigrationSql).toContain(
+      'CONSTRAINT "GiveawayAward_public_winner_alias_pair"',
+    );
+    expect(publicGiveawayProofMigrationSql).toContain(
+      'GiveawayAward public winner aliases require draw-backed frozen provenance',
+    );
+    expect(publicGiveawayProofMigrationSql).toContain(
+      'CREATE TRIGGER "GiveawayAward_public_winner_alias_guard"',
+    );
   });
 
   test("does not cap a prize pool to one current award per snapshot entry", () => {

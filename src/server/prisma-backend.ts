@@ -25,6 +25,7 @@ import type {
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
+  GiveawayWinnerPublicationInput,
   IssuedGiveawayClaimToken,
   IssuedGiveawayCampaignCode,
   GrantManualGiveawayEntryInput,
@@ -1126,6 +1127,7 @@ export class PrismaTambikeBackend {
       visible.push({
         giveaway: this.toPublicGiveaway(giveaway),
         results: await this.toPublicGiveawayResults(giveaway),
+        drawVerifications: await this.toPublicGiveawayDrawVerifications(giveaway),
       });
     }
     return visible;
@@ -1207,6 +1209,76 @@ export class PrismaTambikeBackend {
       deliveryDetailsSubmitted: Boolean(award.deliveryDetail && !award.deliveryDetail.purgedAt),
       claimCredentialIssued: Boolean(award.claimTokenHash),
     };
+  }
+
+  /** A rider explicitly grants or withdraws public display consent for their own draw-backed award. */
+  async setGiveawayWinnerPublication(
+    sessionToken: string,
+    awardId: string,
+    input: GiveawayWinnerPublicationInput,
+  ): Promise<RiderGiveawayState> {
+    const rider = await this.requireGiveawayRider(sessionToken);
+    const preference = this.parseGiveawayWinnerPublicationInput(input);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: awardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      const award = await this.lockGiveawayAward(tx, awardId);
+      if (
+        !award ||
+        award.giveawayId !== giveaway.id ||
+        award.winnerUserId !== rider.id ||
+        !award.isCurrent ||
+        !award.drawId ||
+        !award.snapshotEntryId ||
+        !["pending_verification", "claimable", "verified", "fulfilled"].includes(award.status)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const [snapshot, entry] = await Promise.all([
+        tx.giveawaySnapshot.findUnique({
+          where: { giveawayId: giveaway.id },
+          select: { seedRevealedAt: true },
+        }),
+        tx.giveawayEntry.findUnique({
+          where: { id: award.entryId },
+          select: { opaquePublicReference: true },
+        }),
+      ]);
+      if (!snapshot?.seedRevealedAt || !entry) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      if (preference.published && this.isOpaqueGiveawayWinnerAlias(preference.alias, entry.opaquePublicReference)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      if (!preference.published && (!award.publicWinnerAlias || !award.winnerAliasOptedInAt)) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+
+      const now = new Date();
+      await tx.giveawayAward.update({
+        where: { id: award.id },
+        data: preference.published
+          ? { publicWinnerAlias: preference.alias, winnerAliasOptedInAt: now, winnerAliasRevokedAt: null }
+          : { winnerAliasRevokedAt: now },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        rider.id,
+        preference.published
+          ? "GIVEAWAY_WINNER_PUBLICATION_OPTED_IN"
+          : "GIVEAWAY_WINNER_PUBLICATION_REVOKED",
+        "award",
+        award.id,
+        { awardId: award.id, public: preference.published },
+      );
+      return this.toRiderGiveawayState(giveaway, rider.id, tx);
+    });
   }
 
   async submitGiveawayForReview(sessionToken: string, giveawayId: string) {
@@ -4283,6 +4355,42 @@ export class PrismaTambikeBackend {
     };
   }
 
+  private parseGiveawayWinnerPublicationInput(input: unknown): GiveawayWinnerPublicationInput {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => key !== "published" && key !== "alias") ||
+      !Object.hasOwn(record, "published") ||
+      typeof record.published !== "boolean"
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (!record.published) {
+      if (Object.hasOwn(record, "alias")) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      return { published: false };
+    }
+    if (!Object.hasOwn(record, "alias") || typeof record.alias !== "string") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const alias = record.alias.trim();
+    if (!/^[A-Za-z][A-Za-z0-9 ._-]{1,39}$/.test(alias)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return { published: true, alias };
+  }
+
+  private isOpaqueGiveawayWinnerAlias(alias: string, entryReference: string) {
+    return alias === entryReference || /^(?:entry|claim)_[A-Za-z0-9_-]+$/i.test(alias);
+  }
+
   private parseGiveawayDrawInput(input: unknown) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
@@ -5657,6 +5765,45 @@ export class PrismaTambikeBackend {
     );
   }
 
+  /** Returns only published fairness receipts; candidate rows and seed ciphertext stay server-private. */
+  private async toPublicGiveawayDrawVerifications(
+    giveaway: GiveawayConfiguration,
+    client: Prisma.TransactionClient | PrismaClient = this.prisma,
+  ): Promise<PublicGiveawayDrawVerification[]> {
+    if (!process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY) return [];
+    const [snapshot, draws] = await Promise.all([
+      client.giveawaySnapshot.findUnique({
+        where: { giveawayId: giveaway.id },
+        select: {
+          seedCommitment: true,
+          snapshotDigest: true,
+          candidateCount: true,
+          encryptedSeedCiphertext: true,
+          encryptedSeedIv: true,
+          encryptedSeedAuthTag: true,
+          seedRevealedAt: true,
+        },
+      }),
+      client.giveawayDraw.findMany({
+        where: { giveawayId: giveaway.id, status: "published" },
+        orderBy: [{ sequence: "asc" }, { id: "asc" }],
+      }),
+    ]);
+    if (!snapshot?.seedRevealedAt || draws.length === 0) return [];
+    const seed = this.decryptGiveawayDrawSeed(snapshot);
+    return draws.map((draw) => this.buildGiveawayDrawVerification(giveaway, snapshot, draw, seed, true));
+  }
+
+  private isGiveawayWinnerAliasPublic(
+    award: Pick<
+      GiveawayAwardRecord,
+      "publicWinnerAlias" | "winnerAliasOptedInAt" | "winnerAliasRevokedAt"
+    >,
+  ) {
+    if (!award.publicWinnerAlias || !award.winnerAliasOptedInAt) return false;
+    return !award.winnerAliasRevokedAt;
+  }
+
   private async toPublicGiveawayResults(
     giveaway: GiveawayConfiguration,
   ): Promise<PublicGiveawayResult[]> {
@@ -5674,21 +5821,29 @@ export class PrismaTambikeBackend {
       },
       select: {
         id: true,
-        entry: { select: { opaquePublicReference: true } },
+        drawId: true,
+        snapshotEntryId: true,
+        publicWinnerAlias: true,
+        winnerAliasOptedInAt: true,
+        winnerAliasRevokedAt: true,
         prizePool: { select: { title: true, position: true } },
       },
       orderBy: { id: "asc" },
     });
     return awards
+      .filter(
+        (award) =>
+          Boolean(award.drawId && award.snapshotEntryId) && this.isGiveawayWinnerAliasPublic(award),
+      )
       .sort(
         (left, right) =>
           left.prizePool.position - right.prizePool.position ||
-          left.entry.opaquePublicReference.localeCompare(right.entry.opaquePublicReference) ||
+          (left.publicWinnerAlias ?? "").localeCompare(right.publicWinnerAlias ?? "") ||
           left.id.localeCompare(right.id),
       )
       .map((award) => ({
         prizePoolTitle: award.prizePool.title,
-        winnerAlias: award.entry.opaquePublicReference,
+        winnerAlias: award.publicWinnerAlias!,
       }));
   }
 
@@ -5789,6 +5944,7 @@ export class PrismaTambikeBackend {
     if (entry.status === "disqualified") {
       return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
     }
+    const proof = await this.toRiderGiveawayDrawProof(giveaway, entry, client);
     const award = await client.giveawayAward.findFirst({
       where: {
         giveawayId: giveaway.id,
@@ -5810,7 +5966,12 @@ export class PrismaTambikeBackend {
       orderBy: [{ isCurrent: "desc" }, { createdAt: "desc" }],
     });
     if (!award) {
-      return { giveawayId: giveaway.id, status: "entered", entryCount: entry.currentWeight };
+      return {
+        giveawayId: giveaway.id,
+        status: "entered",
+        entryCount: entry.currentWeight,
+        ...(proof ? { proof } : {}),
+      };
     }
     return {
       giveawayId: giveaway.id,
@@ -5822,7 +5983,33 @@ export class PrismaTambikeBackend {
         status: award.status as NonNullable<RiderGiveawayState["award"]>["status"],
         claimDeadlineAt: award.claimDeadlineAt?.toISOString(),
         fulfilmentMode: award.prizePool.fulfillmentType as GiveawayFulfilmentMode,
+        winnerPublication: {
+          isPublic: this.isGiveawayWinnerAliasPublic(award),
+          ...(award.publicWinnerAlias ? { alias: award.publicWinnerAlias } : {}),
+        },
       },
+      ...(proof ? { proof } : {}),
+    };
+  }
+
+  private async toRiderGiveawayDrawProof(
+    giveaway: GiveawayConfiguration,
+    entry: { id: string },
+    client: Prisma.TransactionClient | PrismaClient,
+  ) {
+    const snapshotEntry = await client.giveawaySnapshotEntry.findFirst({
+      where: {
+        entryId: entry.id,
+        snapshot: { is: { giveawayId: giveaway.id } },
+      },
+      select: { opaquePublicReference: true },
+    });
+    if (!snapshotEntry) return undefined;
+    const drawVerifications = await this.toPublicGiveawayDrawVerifications(giveaway, client);
+    if (drawVerifications.length === 0) return undefined;
+    return {
+      entryReference: snapshotEntry.opaquePublicReference,
+      drawVerifications,
     };
   }
 
