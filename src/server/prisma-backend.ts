@@ -162,6 +162,8 @@ type GiveawaySnapshotWithEntries = Prisma.GiveawaySnapshotGetPayload<{
 
 type GiveawayDrawRecord = Prisma.GiveawayDrawGetPayload<Record<string, never>>;
 
+type GiveawayAwardRecord = Prisma.GiveawayAwardGetPayload<Record<string, never>>;
+
 type GiveawayDrawActionInput = {
   action: "initial_random_draw" | "manual_selection" | "redraw";
   reasonDigest: string | null;
@@ -216,6 +218,20 @@ type GiveawayEntryWrite = {
     updatedAt: Date;
   };
   entryEventId: string;
+};
+
+type DirectGiveawayAllocationCandidate = Pick<
+  GiveawayEntryWrite["entry"],
+  | "id"
+  | "riderId"
+  | "eligibilityCycleAt"
+  | "qualifiedEligibilityGroupIds"
+  | "qualifiedEligibilityGroupTimings"
+>;
+
+type DirectGiveawayAwardFinalizationLock = {
+  award: GiveawayAwardRecord;
+  lockedEntries?: GiveawayEntryWrite["entry"][];
 };
 
 const eventTypeToDb: Record<EventType, string> = {
@@ -841,10 +857,12 @@ export class PrismaTambikeBackend {
             reconcileDirectAwards: false,
           });
         }
-        const lockedEntries = await this.lockGiveawayEntries(tx, opened.id);
-        await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, opened, lockedEntries);
-        await this.reallocateImmediateGiveawayAwards(tx, opened);
       }
+      // Every entry mode can retain direct awards while paused. Reopening must
+      // reconcile their released capacity, not only automatic campaigns.
+      const lockedEntries = await this.lockGiveawayEntries(tx, opened.id);
+      await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, opened, lockedEntries);
+      await this.reallocateImmediateGiveawayAwards(tx, opened);
       const updated = await this.lockGiveawayCampaign(tx, opened.id);
       await this.auditGiveaway(tx, updated.id, user.id, "GIVEAWAY_OPENED", "giveaway", updated.id, {
         state: updated.status,
@@ -1734,7 +1752,9 @@ export class PrismaTambikeBackend {
     if (!location) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     return this.prisma.$transaction(async (tx) => {
       const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
-      const award = await this.lockGiveawayAward(tx, awardId);
+      const directAwardLock = await this.lockDirectGiveawayAwardForFinalization(tx, giveaway, awardId);
+      const directAward = directAwardLock?.award;
+      const award = directAward ?? (await this.lockGiveawayAward(tx, awardId));
       if (
         !award ||
         award.giveawayId !== giveaway.id ||
@@ -1745,14 +1765,26 @@ export class PrismaTambikeBackend {
         throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
       }
       const reasonDigest = this.hashGiveawayReason(normalizedReason);
-      await tx.giveawayAward.update({
-        where: { id: award.id },
-        data: { status: "declined", reasonDigest },
-      });
+      if (directAward) {
+        await this.finalizeDirectGiveawayAward(tx, award, "declined", reasonDigest);
+      } else {
+        await tx.giveawayAward.update({
+          where: { id: award.id },
+          data: { status: "declined", reasonDigest },
+        });
+      }
       await this.auditGiveaway(tx, giveaway.id, rider.id, "GIVEAWAY_AWARD_DECLINED", "award", award.id, {
         awardId: award.id,
         reasonDigest,
+        directAward: Boolean(directAward),
       });
+      if (directAward) {
+        await this.reallocateFinalizedDirectGiveawayAward(
+          tx,
+          giveaway,
+          directAwardLock?.lockedEntries,
+        );
+      }
       return this.toRiderGiveawayState(giveaway, rider.id, tx);
     });
   }
@@ -1814,7 +1846,16 @@ export class PrismaTambikeBackend {
       const award = await tx.giveawayAward.findUnique({ where: { id: parsed.awardId } });
       if (
         !award ||
-        award.giveawayId !== giveaway.id ||
+        award.giveawayId !== giveaway.id
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      // Immediate allocations never participate in a deterministic draw chain.
+      // They are terminal historical records and are reconciled directly.
+      if (this.isDirectGiveawayAward(award)) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      if (
         !award.isCurrent ||
         !["declined", "disqualified", "expired", "voided"].includes(award.status) ||
         !award.drawId ||
@@ -1843,19 +1884,35 @@ export class PrismaTambikeBackend {
         entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
       });
       const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
-      const selectedSnapshotEntryRows = await tx.giveawayAward.findMany({
+      const historicalAwardRows = await tx.giveawayAward.findMany({
         where: {
           giveawayId: giveaway.id,
           prizePoolId: pool.id,
-          snapshotEntryId: { not: null },
+          drawId: { not: null },
         },
-        select: { snapshotEntryId: true },
+        select: {
+          snapshotEntryId: true,
+          rank: true,
+          draw: { select: { algorithmVersion: true, snapshotId: true } },
+        },
       });
-      const selectedSnapshotEntryIds = new Set(
-        selectedSnapshotEntryRows.flatMap((candidate) =>
-          candidate.snapshotEntryId ? [candidate.snapshotEntryId] : [],
-        ),
-      );
+      const consumedWeightedUnitKeys = new Set<string>();
+      for (const historicalAward of historicalAwardRows) {
+        if (
+          historicalAward.draw?.algorithmVersion !== "hmac-sha256-v1" ||
+          historicalAward.draw.snapshotId !== snapshot.id
+        ) {
+          continue;
+        }
+        if (!historicalAward.snapshotEntryId || historicalAward.rank === null) {
+          throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+        }
+        const consumedUnit = rankedUnits[historicalAward.rank - 1];
+        if (!consumedUnit || consumedUnit.entryId !== historicalAward.snapshotEntryId) {
+          throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+        }
+        consumedWeightedUnitKeys.add(`${consumedUnit.entryId}:${consumedUnit.unitOrdinal}`);
+      }
       let nextUnit: ReturnType<typeof rankFrozenWeightedEntries>[number] | undefined;
       for (const unit of rankedUnits) {
         const snapshotEntry = snapshotEntryById.get(unit.entryId);
@@ -1863,7 +1920,7 @@ export class PrismaTambikeBackend {
         if (
           !snapshotEntry ||
           !entry ||
-          selectedSnapshotEntryIds.has(snapshotEntry.id) ||
+          consumedWeightedUnitKeys.has(`${unit.entryId}:${unit.unitOrdinal}`) ||
           !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
           !(await this.canCreateDrawGiveawayAward(tx, giveaway, pool, entry.riderId, award.id))
         ) {
@@ -3124,6 +3181,89 @@ export class PrismaTambikeBackend {
     return tx.giveawayAward.findUnique({ where: { id: awardId } });
   }
 
+  private isDirectGiveawayAward(award: Pick<GiveawayAwardRecord, "drawId" | "snapshotEntryId">) {
+    return !award.drawId && !award.snapshotEntryId;
+  }
+
+  private shouldReallocateFinalizedDirectAward(giveaway: GiveawayConfiguration) {
+    return ["open", "locked", "drawing", "claims_open"].includes(giveaway.status);
+  }
+
+  /**
+   * A direct award must lock its candidate entries before pool/item/award work,
+   * because finalization can immediately fill the freed capacity from either
+   * open entries or the locked snapshot.
+   */
+  private async lockDirectGiveawayAwardForFinalization(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    awardId: string,
+  ): Promise<DirectGiveawayAwardFinalizationLock | null> {
+    const preview = await tx.giveawayAward.findUnique({ where: { id: awardId } });
+    if (!preview || !this.isDirectGiveawayAward(preview)) return null;
+
+    const lockedEntries = this.shouldReallocateFinalizedDirectAward(giveaway)
+      ? await this.lockGiveawayEntries(tx, giveaway.id)
+      : undefined;
+    if (lockedEntries && ["locked", "drawing", "claims_open"].includes(giveaway.status)) {
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
+    }
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === preview.prizePoolId);
+    if (!pool) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    await this.lockGiveawayPrizePool(tx, pool.id);
+    if (preview.prizeItemId) {
+      const prizeItem = await this.lockGiveawayPrizeItem(tx, preview.prizeItemId);
+      if (!prizeItem || prizeItem.prizePoolId !== pool.id) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+    }
+    const award = await this.lockGiveawayAward(tx, awardId);
+    return award && this.isDirectGiveawayAward(award) ? { award, lockedEntries } : null;
+  }
+
+  /**
+   * Keep the immutable direct allocation key on the historical record. That
+   * proof prevents the same entry from receiving the same immediate award when
+   * the available inventory and winner caps are reconciled.
+   */
+  private async finalizeDirectGiveawayAward(
+    tx: Prisma.TransactionClient,
+    award: GiveawayAwardRecord,
+    status: "declined" | "voided" | "disqualified",
+    reasonDigest: string,
+  ) {
+    if (!this.isDirectGiveawayAward(award)) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    if (award.prizeItemId) {
+      await tx.giveawayPrizeItem.updateMany({
+        where: { id: award.prizeItemId, status: "reserved" },
+        data: { status: "available" },
+      });
+    }
+    return tx.giveawayAward.update({
+      where: { id: award.id },
+      data: { isCurrent: false, status, reasonDigest },
+    });
+  }
+
+  private async reallocateFinalizedDirectGiveawayAward(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    lockedEntries: GiveawayEntryWrite["entry"][] | undefined,
+  ) {
+    if (giveaway.status === "open") {
+      await this.reallocateImmediateGiveawayAwards(tx, giveaway);
+      return;
+    }
+    if (["locked", "drawing", "claims_open"].includes(giveaway.status)) {
+      if (!lockedEntries) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      await this.reallocateFrozenImmediateGiveawayAwards(tx, giveaway, snapshot, lockedEntries);
+    }
+  }
+
   private async requireGiveawaySnapshot(
     tx: Prisma.TransactionClient,
     giveawayId: string,
@@ -3134,6 +3274,35 @@ export class PrismaTambikeBackend {
     });
     if (!snapshot) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     return snapshot;
+  }
+
+  /**
+   * Direct replacement after lock is fail-closed: an entry row may establish
+   * stable identity only when its persisted provenance still exactly matches
+   * the immutable snapshot. riderId is protected by the scope-immutability
+   * trigger; snapshot rows deliberately retain the opaque entry reference.
+   */
+  private assertFrozenDirectEntryProvenance(
+    snapshot: GiveawaySnapshotWithEntries,
+    lockedEntries: GiveawayEntryWrite["entry"][],
+  ) {
+    const lockedEntriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
+    for (const snapshotEntry of snapshot.entries) {
+      const entry = lockedEntriesById.get(snapshotEntry.entryId);
+      if (
+        !entry ||
+        entry.status !== "locked" ||
+        entry.currentWeight !== snapshotEntry.frozenWeight ||
+        entry.eligibilityCycleAt.getTime() !== snapshotEntry.eligibilityCycleAt.getTime() ||
+        entry.qualifiedSourceFingerprint !== snapshotEntry.qualifiedSourceFingerprint ||
+        canonicalizeJson(entry.qualifiedEligibilityGroupIds) !==
+          canonicalizeJson(snapshotEntry.qualifiedEligibilityGroupIds) ||
+        canonicalizeJson(entry.qualifiedEligibilityGroupTimings) !==
+          canonicalizeJson(snapshotEntry.qualifiedEligibilityGroupTimings)
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+    }
   }
 
   private async nextGiveawayDrawSequence(tx: Prisma.TransactionClient, giveawayId: string) {
@@ -3349,22 +3518,27 @@ export class PrismaTambikeBackend {
     if (!location) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     return this.prisma.$transaction(async (tx) => {
       const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
-      const award = await this.lockGiveawayAward(tx, awardId);
+      const directAwardLock = await this.lockDirectGiveawayAwardForFinalization(tx, giveaway, awardId);
+      const directAward = directAwardLock?.award;
+      const award = directAward ?? (await this.lockGiveawayAward(tx, awardId));
       if (
         !award ||
         award.giveawayId !== giveaway.id ||
         !award.isCurrent ||
-        !award.drawId ||
-        !award.snapshotEntryId ||
+        (!this.isDirectGiveawayAward(award) && !(award.drawId && award.snapshotEntryId)) ||
         !["pending_verification", "claimable", "verified"].includes(award.status)
       ) {
         throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
       }
       const reasonDigest = this.hashGiveawayReason(normalizedReason);
-      await tx.giveawayAward.update({
-        where: { id: award.id },
-        data: { status, reasonDigest },
-      });
+      if (directAward) {
+        await this.finalizeDirectGiveawayAward(tx, award, status, reasonDigest);
+      } else {
+        await tx.giveawayAward.update({
+          where: { id: award.id },
+          data: { status, reasonDigest },
+        });
+      }
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -3377,8 +3551,16 @@ export class PrismaTambikeBackend {
           drawId: award.drawId,
           status,
           reasonDigest,
+          directAward: Boolean(directAward),
         },
       );
+      if (directAward) {
+        await this.reallocateFinalizedDirectGiveawayAward(
+          tx,
+          giveaway,
+          directAwardLock?.lockedEntries,
+        );
+      }
       return this.toRiderGiveawayState(giveaway, award.winnerUserId, tx);
     });
   }
@@ -3777,15 +3959,18 @@ export class PrismaTambikeBackend {
     giveaway: GiveawayConfiguration,
     pool: GiveawayConfiguration["prizePools"][number],
     riderId: string,
-    ignoredAwardId?: string,
+    predecessorAwardIdForTotal?: string,
   ) {
     const currentAwardWhere = {
       giveawayId: giveaway.id,
       isCurrent: true,
-      ...(ignoredAwardId ? { id: { not: ignoredAwardId } } : {}),
+    };
+    const currentAwardTotalWhere = {
+      ...currentAwardWhere,
+      ...(predecessorAwardIdForTotal ? { id: { not: predecessorAwardIdForTotal } } : {}),
     };
     const [totalAwards, riderAwards, poolAwards] = await Promise.all([
-      tx.giveawayAward.count({ where: currentAwardWhere }),
+      tx.giveawayAward.count({ where: currentAwardTotalWhere }),
       tx.giveawayAward.count({ where: { ...currentAwardWhere, winnerUserId: riderId } }),
       tx.giveawayAward.count({
         where: { ...currentAwardWhere, prizePoolId: pool.id, winnerUserId: riderId },
@@ -3894,7 +4079,7 @@ export class PrismaTambikeBackend {
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
     pool: GiveawayConfiguration["prizePools"][number],
-    entry: GiveawayEntryWrite["entry"],
+    entry: DirectGiveawayAllocationCandidate,
   ) {
     if (!this.isGiveawayEntryEligibleForPool(entry, pool)) return false;
     await this.lockGiveawayPrizePool(tx, pool.id);
@@ -4087,6 +4272,58 @@ export class PrismaTambikeBackend {
       for (const candidate of orderedCandidates) {
         if (!this.isGiveawayEntryEligibleForPool(candidate, pool)) continue;
         await this.allocateDirectGiveawayAwardForPool(tx, giveaway, pool, candidate);
+      }
+    }
+  }
+
+  /**
+   * Post-lock direct replacement is intentionally based only on snapshot
+   * timing/group facts. The locked entry row supplies the stable rider and
+   * entry identity, never fresh eligibility facts.
+   */
+  private async reallocateFrozenImmediateGiveawayAwards(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    snapshot: GiveawaySnapshotWithEntries,
+    lockedEntries: GiveawayEntryWrite["entry"][],
+  ) {
+    this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
+    const lockedEntriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
+    const candidates = snapshot.entries.map((snapshotEntry) => {
+      const entry = lockedEntriesById.get(snapshotEntry.entryId);
+      if (!entry) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const allocationCandidate: DirectGiveawayAllocationCandidate = {
+        id: snapshotEntry.entryId,
+        riderId: entry.riderId,
+        eligibilityCycleAt: snapshotEntry.eligibilityCycleAt,
+        qualifiedEligibilityGroupIds: snapshotEntry.qualifiedEligibilityGroupIds,
+        qualifiedEligibilityGroupTimings: snapshotEntry.qualifiedEligibilityGroupTimings,
+      };
+      return { allocationCandidate, snapshotEntry };
+    });
+    for (const pool of giveaway.prizePools) {
+      if (pool.awardMode !== "first_come" && pool.awardMode !== "guaranteed") continue;
+      const orderedCandidates = candidates
+        .filter(({ snapshotEntry }) => this.isSnapshotEntryEligibleForPool(snapshotEntry, pool))
+        .sort((left, right) =>
+          compareGiveawayEntriesByPoolPriority(
+            {
+              id: left.snapshotEntry.entryId,
+              eligibilityCycleAt: left.snapshotEntry.eligibilityCycleAt.toISOString(),
+              qualifiedEligibilityGroupTimings: this.entryQualifiedGroupTimings(left.snapshotEntry),
+            },
+            {
+              id: right.snapshotEntry.entryId,
+              eligibilityCycleAt: right.snapshotEntry.eligibilityCycleAt.toISOString(),
+              qualifiedEligibilityGroupTimings: this.entryQualifiedGroupTimings(right.snapshotEntry),
+            },
+            pool.eligibilityGroups.map((link) => link.eligibilityGroupId),
+          ),
+        );
+      for (const { allocationCandidate } of orderedCandidates) {
+        await this.allocateDirectGiveawayAwardForPool(tx, giveaway, pool, allocationCandidate);
       }
     }
   }

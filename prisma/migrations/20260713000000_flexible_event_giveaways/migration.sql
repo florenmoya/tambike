@@ -1152,7 +1152,10 @@ DECLARE
   entry_rider_id TEXT;
   entry_status "GiveawayEntryStatus";
   entry_eligibility_cycle_at TIMESTAMP(3);
+  entry_eligibility_group_ids JSONB;
   entry_eligibility_group_timings JSONB;
+  entry_current_weight INTEGER;
+  entry_qualified_source_fingerprint TEXT;
   draw_giveaway_id TEXT;
   draw_snapshot_id TEXT;
   pool_giveaway_id TEXT;
@@ -1162,11 +1165,16 @@ DECLARE
   snapshot_entry_snapshot_id TEXT;
   snapshot_entry_entry_id TEXT;
   snapshot_entry_rider_id TEXT;
+  locked_snapshot_entry_eligibility_cycle_at TIMESTAMP(3);
+  locked_snapshot_entry_eligibility_group_ids JSONB;
+  locked_snapshot_entry_eligibility_group_timings JSONB;
+  locked_snapshot_entry_frozen_weight INTEGER;
+  locked_snapshot_entry_qualified_source_fingerprint TEXT;
   predecessor_giveaway_id TEXT;
   predecessor_pool_id TEXT;
 BEGIN
-  SELECT "giveawayId", "riderId", "status", "eligibilityCycleAt", "qualifiedEligibilityGroupTimings"
-    INTO entry_giveaway_id, entry_rider_id, entry_status, entry_eligibility_cycle_at, entry_eligibility_group_timings
+  SELECT "giveawayId", "riderId", "status", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings", "currentWeight", "qualifiedSourceFingerprint"
+    INTO entry_giveaway_id, entry_rider_id, entry_status, entry_eligibility_cycle_at, entry_eligibility_group_ids, entry_eligibility_group_timings, entry_current_weight, entry_qualified_source_fingerprint
   FROM "GiveawayEntry"
   WHERE "id" = NEW."entryId";
 
@@ -1219,7 +1227,26 @@ BEGIN
   -- caller-provided timestamp/key: derive it from the entry's frozen
   -- eligibility-group timings and the pool's permitted groups.
   IF NEW."drawId" IS NULL THEN
-    IF entry_status <> 'eligible' THEN
+    IF entry_status = 'locked' THEN
+      -- Post-lock direct replacement is permitted only when this exact entry
+      -- is present in the campaign's immutable snapshot and its current
+      -- provenance still matches the frozen group/timing evidence.
+      SELECT snapshot_entry."eligibilityCycleAt", snapshot_entry."qualifiedEligibilityGroupIds", snapshot_entry."qualifiedEligibilityGroupTimings", snapshot_entry."frozenWeight", snapshot_entry."qualifiedSourceFingerprint"
+        INTO locked_snapshot_entry_eligibility_cycle_at, locked_snapshot_entry_eligibility_group_ids, locked_snapshot_entry_eligibility_group_timings, locked_snapshot_entry_frozen_weight, locked_snapshot_entry_qualified_source_fingerprint
+      FROM "GiveawaySnapshotEntry" AS snapshot_entry
+      JOIN "GiveawaySnapshot" AS snapshot ON snapshot."id" = snapshot_entry."snapshotId"
+      WHERE snapshot."giveawayId" = NEW."giveawayId"
+        AND snapshot_entry."entryId" = NEW."entryId";
+
+      IF NOT FOUND
+        OR locked_snapshot_entry_eligibility_cycle_at IS DISTINCT FROM entry_eligibility_cycle_at
+        OR locked_snapshot_entry_eligibility_group_ids IS DISTINCT FROM entry_eligibility_group_ids
+        OR locked_snapshot_entry_eligibility_group_timings IS DISTINCT FROM entry_eligibility_group_timings
+        OR locked_snapshot_entry_frozen_weight IS DISTINCT FROM entry_current_weight
+        OR locked_snapshot_entry_qualified_source_fingerprint IS DISTINCT FROM entry_qualified_source_fingerprint THEN
+        RAISE EXCEPTION 'GiveawayAward locked direct allocations require matching frozen snapshot provenance';
+      END IF;
+    ELSIF entry_status <> 'eligible' THEN
       RAISE EXCEPTION 'GiveawayAward direct allocations require an eligible entry';
     END IF;
     IF EXISTS (
@@ -1747,8 +1774,8 @@ BEFORE UPDATE OF "giveawayId" ON "GiveawayEligibilityGroup"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
 
 CREATE TRIGGER "GiveawayEntry_scope_immutable"
-BEFORE UPDATE OF "giveawayId" ON "GiveawayEntry"
-FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId');
+BEFORE UPDATE OF "giveawayId", "riderId" ON "GiveawayEntry"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'riderId');
 
 CREATE TRIGGER "GiveawayCampaignCodeClaim_scope_immutable"
 BEFORE UPDATE OF "campaignCodeId", "riderId", "entryId" ON "GiveawayCampaignCodeClaim"

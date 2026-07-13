@@ -281,6 +281,15 @@ type GiveawayEntryRecord = {
   updatedAt: string;
 };
 
+type ImmediateGiveawayCandidate = Pick<
+  GiveawayEntryRecord,
+  | "id"
+  | "riderId"
+  | "eligibilityCycleAt"
+  | "qualifiedGroupIds"
+  | "qualifiedEligibilityGroupTimings"
+>;
+
 type GiveawayEntryEventRecord = {
   id: string;
   entryId: string;
@@ -1461,13 +1470,21 @@ export class TambikeBackend {
     }
     const normalizedReason = this.requireGiveawayReason(reason);
     const giveaway = this.requireGiveawayByAward(award);
-    award.status = "declined";
-    award.reasonDigest = this.hashGiveawayReason(normalizedReason);
-    award.updatedAt = new Date().toISOString();
+    const reasonDigest = this.hashGiveawayReason(normalizedReason);
+    const directAward = this.isDirectGiveawayAward(award);
+    if (directAward) {
+      this.finalizeDirectGiveawayAward(giveaway, award, "declined", reasonDigest);
+    } else {
+      award.status = "declined";
+      award.reasonDigest = reasonDigest;
+      award.updatedAt = new Date().toISOString();
+    }
     this.auditGiveaway(giveaway, rider.id, "GIVEAWAY_AWARD_DECLINED", "award", award.id, {
       awardId: award.id,
       reasonDigest: award.reasonDigest,
+      directAward,
     });
+    if (directAward) this.reallocateFinalizedDirectGiveawayAward(giveaway);
     return this.toRiderGiveawayState(giveaway, rider.id);
   }
 
@@ -1517,6 +1534,11 @@ export class TambikeBackend {
     if (giveaway.state === "suspended" || !["drawing", "claims_open"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
+    // Immediate allocations never participate in a deterministic draw chain.
+    // They are terminal historical records and are reconciled directly.
+    if (this.isDirectGiveawayAward(award)) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
     if (
       !award.isCurrent ||
       !["declined", "disqualified", "expired", "voided"].includes(award.status) ||
@@ -1547,16 +1569,32 @@ export class TambikeBackend {
       entries: snapshot.entries.map((entry) => ({ id: entry.id, weight: entry.frozenWeight })),
     });
     const snapshotEntryById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
-    const selectedSnapshotEntries = new Set(
-      giveaway.awards
-        .filter((candidate) => candidate.prizePoolId === pool.id && candidate.snapshotEntryId)
-        .map((candidate) => candidate.snapshotEntryId),
-    );
+    const consumedWeightedUnitKeys = new Set<string>();
+    for (const historicalAward of giveaway.awards) {
+      const historicalDraw = historicalAward.drawId
+        ? this.giveaways.drawsById.get(historicalAward.drawId)
+        : undefined;
+      if (
+        historicalAward.prizePoolId !== pool.id ||
+        historicalDraw?.algorithmVersion !== "hmac-sha256-v1" ||
+        historicalDraw.snapshotId !== snapshot.id
+      ) {
+        continue;
+      }
+      if (!historicalAward.snapshotEntryId || !historicalAward.rank) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const consumedUnit = rankedUnits[historicalAward.rank - 1];
+      if (!consumedUnit || consumedUnit.entryId !== historicalAward.snapshotEntryId) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      consumedWeightedUnitKeys.add(`${consumedUnit.entryId}:${consumedUnit.unitOrdinal}`);
+    }
     const nextUnit = rankedUnits.find((unit) => {
       const snapshotEntry = snapshotEntryById.get(unit.entryId);
       return Boolean(
         snapshotEntry &&
-          !selectedSnapshotEntries.has(snapshotEntry.id) &&
+          !consumedWeightedUnitKeys.has(`${unit.entryId}:${unit.unitOrdinal}`) &&
           this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) &&
           this.canCreateGiveawayAward(giveaway, pool, snapshotEntry.riderId, award.id),
       );
@@ -2696,20 +2734,24 @@ export class TambikeBackend {
     const administrator = this.requireRole(sessionToken, "admin");
     const normalizedReason = this.requireGiveawayReason(reason);
     const award = this.giveaways.awardsById.get(awardId);
+    const directAward = award ? this.isDirectGiveawayAward(award) : false;
     if (
       !award ||
       !award.isCurrent ||
-      !award.drawId ||
-      !award.snapshotEntryId ||
+      (!directAward && !(award.drawId && award.snapshotEntryId)) ||
       !["pending_verification", "claimable", "verified"].includes(award.status)
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
     const giveaway = this.requireGiveawayByAward(award);
     const reasonDigest = this.hashGiveawayReason(normalizedReason);
-    award.status = status;
-    award.reasonDigest = reasonDigest;
-    award.updatedAt = new Date().toISOString();
+    if (directAward) {
+      this.finalizeDirectGiveawayAward(giveaway, award, status, reasonDigest);
+    } else {
+      award.status = status;
+      award.reasonDigest = reasonDigest;
+      award.updatedAt = new Date().toISOString();
+    }
     this.auditGiveaway(
       giveaway,
       administrator.id,
@@ -2718,11 +2760,13 @@ export class TambikeBackend {
       award.id,
       {
         awardId: award.id,
-        drawId: award.drawId,
+        drawId: award.drawId ?? null,
         status,
         reasonDigest,
+        directAward,
       },
     );
+    if (directAward) this.reallocateFinalizedDirectGiveawayAward(giveaway);
     return this.toRiderGiveawayState(giveaway, award.winnerUserId);
   }
 
@@ -2980,7 +3024,46 @@ export class TambikeBackend {
     );
   }
 
-  private isEntryEligibleForPool(entry: GiveawayEntryRecord, pool: GiveawayPrizePoolRecord) {
+  /**
+   * The memory backend has no database trigger, so it must enforce the same
+   * post-lock provenance boundary before it changes a direct award. A frozen
+   * replacement may use the locked row only as proof that the original entry
+   * still exists for the same rider; every qualification fact comes from the
+   * snapshot.
+   */
+  private frozenImmediateGiveawayCandidates(giveaway: GiveawayAggregate) {
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    return snapshot.entries.map<ImmediateGiveawayCandidate>((snapshotEntry) => {
+      const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
+      if (
+        !entry ||
+        entry.status !== "locked" ||
+        entry.riderId !== snapshotEntry.riderId ||
+        entry.currentWeight !== snapshotEntry.frozenWeight ||
+        entry.eligibilityCycleAt !== snapshotEntry.eligibilityCycleAt ||
+        entry.qualifiedSourceFingerprint !== snapshotEntry.qualifiedSourceFingerprint ||
+        !this.haveSameGiveawayGroupIds(entry.qualifiedGroupIds, snapshotEntry.qualifiedGroupIds) ||
+        !this.haveSameGiveawayEligibilityTimings(
+          entry.qualifiedEligibilityGroupTimings,
+          snapshotEntry.qualifiedEligibilityGroupTimings,
+        )
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      return {
+        id: snapshotEntry.entryId,
+        riderId: snapshotEntry.riderId,
+        eligibilityCycleAt: snapshotEntry.eligibilityCycleAt,
+        qualifiedGroupIds: [...snapshotEntry.qualifiedGroupIds],
+        qualifiedEligibilityGroupTimings: snapshotEntry.qualifiedEligibilityGroupTimings.map((timing) => ({
+          ...timing,
+        })),
+      };
+    });
+  }
+
+  private isEntryEligibleForPool(entry: ImmediateGiveawayCandidate, pool: GiveawayPrizePoolRecord) {
     return (
       pool.eligibilityGroupIds.length === 0 ||
       pool.eligibilityGroupIds.some((groupId) => entry.qualifiedGroupIds.includes(groupId))
@@ -3001,12 +3084,16 @@ export class TambikeBackend {
     giveaway: GiveawayAggregate,
     pool: GiveawayPrizePoolRecord,
     riderId: string,
-    ignoredAwardId?: string,
+    predecessorAwardIdForTotal?: string,
   ) {
-    const currentAwards = giveaway.awards.filter(
-      (award) => award.isCurrent && award.id !== ignoredAwardId,
-    );
-    if (currentAwards.length >= giveaway.maxWinsTotal) return false;
+    const currentAwards = giveaway.awards.filter((award) => award.isCurrent);
+    const currentAwardsForTotal = predecessorAwardIdForTotal
+      ? currentAwards.filter((award) => award.id !== predecessorAwardIdForTotal)
+      : currentAwards;
+    if (currentAwardsForTotal.length >= giveaway.maxWinsTotal) return false;
+    // A redraw frees one campaign-wide slot, but a predecessor still consumes
+    // its rider/pool cap. That preserves a one-win limit while allowing later
+    // weighted units only where the configured rider cap leaves room.
     if (currentAwards.filter((award) => award.winnerUserId === riderId).length >= giveaway.maxWinsPerRider) {
       return false;
     }
@@ -3040,9 +3127,38 @@ export class TambikeBackend {
     }
   }
 
+  /**
+   * Once a campaign is locked, direct pool replacement must use the frozen
+   * entry ordering and group facts rather than current RSVP/check-in data.
+   */
+  private reallocateFrozenImmediateGiveawayAwards(giveaway: GiveawayAggregate) {
+    const candidates = this.frozenImmediateGiveawayCandidates(giveaway);
+    for (const pool of [...giveaway.prizePools].sort((left, right) => left.position - right.position)) {
+      if (pool.awardMode !== "guaranteed" && pool.awardMode !== "first_come") continue;
+      const orderedCandidates = candidates
+        .filter((entry) => this.isEntryEligibleForPool(entry, pool))
+        .sort((left, right) =>
+          compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
+        );
+      for (const entry of orderedCandidates) {
+        this.allocateImmediateGiveawayAwardForPool(giveaway, entry, pool);
+      }
+    }
+  }
+
+  private reallocateFinalizedDirectGiveawayAward(giveaway: GiveawayAggregate) {
+    if (giveaway.state === "open") {
+      this.reallocateImmediateGiveawayAwards(giveaway);
+      return;
+    }
+    if (["locked", "drawing", "claims_open"].includes(giveaway.state)) {
+      this.reallocateFrozenImmediateGiveawayAwards(giveaway);
+    }
+  }
+
   private allocateImmediateGiveawayAwardForPool(
     giveaway: GiveawayAggregate,
-    entry: GiveawayEntryRecord,
+    entry: ImmediateGiveawayCandidate,
     pool: GiveawayPrizePoolRecord,
   ) {
     if (!this.isEntryEligibleForPool(entry, pool)) return false;
@@ -3128,6 +3244,40 @@ export class TambikeBackend {
     return affectedPoolIds;
   }
 
+  private isDirectGiveawayAward(award: GiveawayAwardRecord) {
+    return !award.drawId && !award.snapshotEntryId;
+  }
+
+  /**
+   * Direct awards are terminal at decline/void/disqualification. Their immutable
+   * allocation proof remains on the historical row, so the same entry cannot
+   * receive the same immediate allocation again during reconciliation.
+   */
+  private finalizeDirectGiveawayAward(
+    giveaway: GiveawayAggregate,
+    award: GiveawayAwardRecord,
+    status: Extract<GiveawayAwardRecord["status"], "declined" | "voided" | "disqualified">,
+    reasonDigest: string,
+  ) {
+    if (!this.isDirectGiveawayAward(award)) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    // Validate before mutating so a tampered in-memory locked entry cannot
+    // leave a partially finalized award when frozen reallocation is refused.
+    if (["locked", "drawing", "claims_open"].includes(giveaway.state)) {
+      this.frozenImmediateGiveawayCandidates(giveaway);
+    }
+    award.isCurrent = false;
+    award.status = status;
+    award.reasonDigest = reasonDigest;
+    award.updatedAt = new Date().toISOString();
+    if (award.prizeItemId) {
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+      const item = pool?.items.find((candidate) => candidate.id === award.prizeItemId);
+      if (item?.status === "reserved") item.status = "available";
+    }
+  }
+
   private voidIneligibleDirectEntryAwards(
     giveaway: GiveawayAggregate,
     entry: GiveawayEntryRecord,
@@ -3143,7 +3293,7 @@ export class TambikeBackend {
   private createGiveawayAward(
     giveaway: GiveawayAggregate,
     input: {
-      entry: GiveawayEntryRecord;
+      entry: Pick<GiveawayEntryRecord, "id" | "riderId">;
       prizePool: GiveawayPrizePoolRecord;
       prizeItem?: GiveawayPrizeItemRecord;
       draw?: GiveawayDrawRecord;

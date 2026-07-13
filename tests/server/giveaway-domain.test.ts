@@ -141,7 +141,9 @@ function internalGiveawayEntry(
   giveawayId: string,
   riderId: string,
 ): {
+  currentWeight: number;
   eligibilityCycleAt: string;
+  qualifiedSourceFingerprint: string;
   qualifiedGroupIds: string[];
   qualifiedEligibilityGroupTimings: Array<{ groupId: string; eligibleAt: string }>;
 } {
@@ -153,7 +155,9 @@ function internalGiveawayEntry(
           entriesByRider: Map<
             string,
             {
+              currentWeight: number;
               eligibilityCycleAt: string;
+              qualifiedSourceFingerprint: string;
               qualifiedGroupIds: string[];
               qualifiedEligibilityGroupTimings: Array<{ groupId: string; eligibleAt: string }>;
             }
@@ -165,6 +169,57 @@ function internalGiveawayEntry(
   const entry = store.giveaways.campaignsById.get(giveawayId)?.entriesByRider.get(riderId);
   if (!entry) throw new Error("TEST_GIVEAWAY_ENTRY_MISSING");
   return entry;
+}
+
+function internalGiveawayCampaign(
+  backend: GiveawayBackend,
+  giveawayId: string,
+): {
+  awards: Array<{
+    id: string;
+    winnerUserId: string;
+    prizePoolId: string;
+    prizeItemId?: string;
+    drawId?: string;
+    snapshotEntryId?: string;
+    predecessorAwardId?: string;
+    rank?: number;
+    status: string;
+    isCurrent: boolean;
+  }>;
+  prizePools: Array<{
+    id: string;
+    items: Array<{ id: string; status: string }>;
+  }>;
+} {
+  const store = backend as unknown as {
+    giveaways: {
+      campaignsById: Map<
+        string,
+        {
+          awards: Array<{
+            id: string;
+            winnerUserId: string;
+            prizePoolId: string;
+            prizeItemId?: string;
+            drawId?: string;
+            snapshotEntryId?: string;
+            predecessorAwardId?: string;
+            rank?: number;
+            status: string;
+            isCurrent: boolean;
+          }>;
+          prizePools: Array<{
+            id: string;
+            items: Array<{ id: string; status: string }>;
+          }>;
+        }
+      >;
+    };
+  };
+  const campaign = store.giveaways.campaignsById.get(giveawayId);
+  if (!campaign) throw new Error("TEST_GIVEAWAY_CAMPAIGN_MISSING");
+  return campaign;
 }
 
 function setInternalGiveawayDrawStatus(
@@ -1160,6 +1215,308 @@ describe("in-memory event giveaway lifecycle", () => {
     ).resolves.toEqual({ giveawayId: firstCome.giveaway.id, status: "entered", entryCount: 3 });
   });
 
+  test("finalizes a declined direct first-come award, releases its item, and reallocates it", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "declinable-first-come",
+            title: "Declinable first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Reallocatable prize" }],
+          },
+        ],
+      }),
+    );
+    const nextRider = await createExtraRider(backend, "declined-direct-award");
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const initial = await backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id);
+    if (!initial.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    const initialAwardId = initial.award.awardId;
+    await backend.registerForEvent(nextRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await expect(
+      backend.declineGiveawayAward(
+        context.rider.sessionToken,
+        initialAwardId,
+        "Unable to use this prize",
+      ),
+    ).resolves.toMatchObject({ status: "entered" });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    const historicalAward = campaign.awards.find((award) => award.id === initialAwardId);
+    const replacement = campaign.awards.find(
+      (award) => award.isCurrent && award.winnerUserId === nextRider.user.id,
+    );
+    expect(historicalAward).toMatchObject({ isCurrent: false, status: "declined" });
+    expect(replacement?.prizeItemId).toBe(historicalAward?.prizeItemId);
+    await expect(
+      backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    expect(await backend.auditCount("GIVEAWAY_AWARD_DECLINED")).toBe(1);
+  });
+
+  test("reallocates a declined direct first-come award from frozen candidates in claims_open", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "post-lock-first-come",
+            title: "Post-lock first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Frozen-candidate prize" }],
+          },
+        ],
+      }),
+    );
+    const nextRider = await createExtraRider(backend, "post-lock-direct-award");
+    const lateRider = await createExtraRider(backend, "post-lock-late-direct-award");
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const initial = await backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id);
+    if (!initial.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    const initialAwardId = initial.award.awardId;
+    await backend.registerForEvent(nextRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      await backend.registerForEvent(lateRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+      const draw = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "post-lock-direct-draw",
+      });
+      await backend.publishGiveawayDraw(context.organizer.sessionToken, context.giveaway.id, draw.drawId);
+      await expect(
+        backend.declineGiveawayAward(
+          context.rider.sessionToken,
+          initialAwardId,
+          "Please reassign this prize after lock",
+        ),
+      ).resolves.toMatchObject({ status: "entered" });
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const declinedDirectAward = campaign.awards.find((award) => award.id === initialAwardId);
+      expect(declinedDirectAward).toMatchObject({ isCurrent: false, status: "declined" });
+      expect(declinedDirectAward?.drawId).toBeUndefined();
+      expect(declinedDirectAward?.snapshotEntryId).toBeUndefined();
+      const currentDirectReplacement = campaign.awards.find(
+        (award) => award.isCurrent && award.id !== initialAwardId,
+      );
+      if (!currentDirectReplacement) throw new Error("TEST_DIRECT_REPLACEMENT_MISSING");
+      expect(currentDirectReplacement).toMatchObject({ isCurrent: true });
+      expect(currentDirectReplacement.drawId).toBeUndefined();
+      expect(currentDirectReplacement.snapshotEntryId).toBeUndefined();
+      await expect(
+        backend.redrawGiveawayAward(context.organizer.sessionToken, {
+          awardId: currentDirectReplacement.id,
+          idempotencyKey: "reject-direct-award-redraw",
+          reason: "Direct allocations are replaced without a redraw",
+        }),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    expect(campaign.awards.find((award) => award.id === initialAwardId)).toMatchObject({
+      isCurrent: false,
+      status: "declined",
+    });
+    await expect(
+      backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    await expect(
+      backend.getRiderGiveawayState(lateRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "not_eligible", entryCount: 0 });
+  });
+
+  test("refuses a post-lock direct finalization when memory entry provenance no longer matches its snapshot", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "tamper-guard-first-come",
+            title: "Tamper-guard first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Frozen provenance prize" }],
+          },
+        ],
+      }),
+    );
+    const replacementRider = await createExtraRider(backend, "memory-provenance-guard");
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const initial = await backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id);
+    if (!initial.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    const initialAwardId = initial.award.awardId;
+    await backend.registerForEvent(replacementRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const draw = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "memory-provenance-guard-draw",
+      });
+      await backend.publishGiveawayDraw(context.organizer.sessionToken, context.giveaway.id, draw.drawId);
+
+      const entry = internalGiveawayEntry(backend, context.giveaway.id, context.rider.user.id);
+      const frozenFingerprint = entry.qualifiedSourceFingerprint;
+      entry.qualifiedSourceFingerprint = "tampered-after-lock";
+      await expect(
+        backend.declineGiveawayAward(
+          context.rider.sessionToken,
+          initialAwardId,
+          "This must not mutate before frozen provenance is checked",
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+      expect(
+        internalGiveawayCampaign(backend, context.giveaway.id).awards.find(
+          (award) => award.id === initialAwardId,
+        ),
+      ).toMatchObject({ isCurrent: true });
+
+      entry.qualifiedSourceFingerprint = frozenFingerprint;
+      await expect(
+        backend.declineGiveawayAward(
+          context.rider.sessionToken,
+          initialAwardId,
+          "Frozen provenance restored for direct replacement",
+        ),
+      ).resolves.toMatchObject({ status: "entered" });
+    });
+
+    await expect(
+      backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+  });
+
+  test("lets an admin void a direct first-come award without leaving its item or winner cap stuck", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "voidable-first-come",
+            title: "Voidable first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Released after admin void" }],
+          },
+        ],
+      }),
+    );
+    const nextRider = await createExtraRider(backend, "voided-direct-award");
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const initial = await backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id);
+    if (!initial.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    await backend.registerForEvent(nextRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await expect(
+      backend.voidGiveawayAward(
+        context.admin.sessionToken,
+        initial.award.awardId,
+        "Inventory was assigned incorrectly",
+      ),
+    ).resolves.toMatchObject({ status: "entered" });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    const historicalAward = campaign.awards.find((award) => award.id === initial.award?.awardId);
+    const replacement = campaign.awards.find(
+      (award) => award.isCurrent && award.winnerUserId === nextRider.user.id,
+    );
+    expect(historicalAward).toMatchObject({ isCurrent: false, status: "voided" });
+    expect(replacement?.prizeItemId).toBe(historicalAward?.prizeItemId);
+    await expect(
+      backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    expect(await backend.auditCount("GIVEAWAY_AWARD_VOIDED")).toBe(1);
+  });
+
+  test("keeps a disqualified direct guaranteed award historical so its original rider cannot win it again", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "disqualifiable-guaranteed",
+            title: "Disqualifiable guaranteed prize",
+            awardMode: "guaranteed",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "unlimited" },
+            items: [],
+          },
+        ],
+      }),
+    );
+    const nextRider = await createExtraRider(backend, "disqualified-direct-award");
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const initial = await backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id);
+    if (!initial.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    await backend.registerForEvent(nextRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await expect(
+      backend.disqualifyGiveawayAward(
+        context.admin.sessionToken,
+        initial.award.awardId,
+        "Rider is not eligible for this campaign",
+      ),
+    ).resolves.toMatchObject({ status: "entered" });
+
+    const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+    const historicalAward = campaign.awards.find((award) => award.id === initial.award?.awardId);
+    expect(historicalAward).toMatchObject({ isCurrent: false, status: "disqualified" });
+    await expect(
+      backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "entered" });
+    await expect(
+      backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    expect(await backend.auditCount("GIVEAWAY_AWARD_DISQUALIFIED")).toBe(1);
+  });
+
   test("requires a frozen snapshot and explicit reason for manual selection", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
     const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
@@ -1292,6 +1649,79 @@ describe("in-memory event giveaway lifecycle", () => {
       await expect(
         backend.getRiderGiveawayState(notSelected.sessionToken, context.giveaway.id),
       ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    });
+  });
+
+  test("redraws an unused weighted unit when the same rider can still receive another pool award", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        maxEntriesPerRider: 3,
+        eligibilityGroups: [
+          {
+            id: "triple-weight-rider",
+            label: "Going rider with three weighted units",
+            weight: 3,
+            conditions: [{ source: "active_rsvp_pass" }],
+          },
+        ],
+        winnerLimits: { perRider: 2, total: 1 },
+        prizePools: [
+          {
+            id: "weighted-prize",
+            title: "Weighted prize",
+            awardMode: "random_draw",
+            fulfilmentMode: "onsite",
+            perRiderLimit: 2,
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Weighted prize" }],
+          },
+        ],
+      }),
+    );
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const initialDraw = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "one-unit-initial-draw",
+      });
+      const initialAwards = internalGiveawayCampaign(backend, context.giveaway.id).awards.filter(
+        (award) => award.drawId === initialDraw.drawId,
+      );
+      expect(initialAwards).toHaveLength(1);
+      const declinedAward = initialAwards[0];
+      if (!declinedAward) throw new Error("TEST_WEIGHTED_AWARD_MISSING");
+      const consumedRanks = new Set(initialAwards.map((award) => award.rank));
+
+      await backend.declineGiveawayAward(
+        context.rider.sessionToken,
+        declinedAward.id,
+        "Please redraw this weighted prize",
+      );
+      await expect(
+        backend.redrawGiveawayAward(context.organizer.sessionToken, {
+          awardId: declinedAward.id,
+          idempotencyKey: "redraw-unused-weighted-unit",
+          reason: "Use the next unconsumed weighted unit",
+        }),
+      ).resolves.toMatchObject({ drawId: expect.any(String) });
+
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const replacement = campaign.awards.find(
+        (award) => award.predecessorAwardId === declinedAward.id && award.isCurrent,
+      );
+      expect(campaign.awards.find((award) => award.id === declinedAward.id)).toMatchObject({
+        isCurrent: false,
+        status: "superseded",
+      });
+      expect(replacement?.rank).toBeDefined();
+      expect(consumedRanks.has(replacement?.rank)).toBe(false);
+      expect(campaign.awards.filter((award) => award.isCurrent)).toHaveLength(1);
     });
   });
 
@@ -1698,6 +2128,64 @@ describe("in-memory event giveaway lifecycle", () => {
         riderId: nextRider.user.id,
         reason: "Replacement paper entry",
       }),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+  });
+
+  test("reallocates paused manual-only direct capacity when the campaign reopens", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        entryMode: "manual_only",
+        eligibilityGroups: [
+          {
+            id: "manual-entry",
+            label: "Audited manual entry",
+            weight: 1,
+            conditions: [{ source: "manual" }],
+          },
+        ],
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "paused-manual-first-come",
+            title: "Paused manual first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Reopened capacity prize" }],
+          },
+        ],
+      }),
+    );
+    const replacementRider = await createExtraRider(backend, "paused-manual-reopen");
+    const firstState = await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: context.rider.user.id,
+      reason: "First audited paper entry",
+    });
+    if (!firstState.award) throw new Error("TEST_DIRECT_AWARD_MISSING");
+    await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: replacementRider.user.id,
+      reason: "Second audited paper entry",
+    });
+    await backend.pauseGiveaway(context.organizer.sessionToken, context.giveaway.id);
+    await expect(
+      backend.declineGiveawayAward(
+        context.rider.sessionToken,
+        firstState.award.awardId,
+        "Declined while the manual campaign is paused",
+      ),
+    ).resolves.toMatchObject({ status: "entered" });
+    await expect(
+      backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ status: "entered" });
+
+    await expect(
+      backend.openGiveaway(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ state: "open" });
+    await expect(
+      backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
   });
 

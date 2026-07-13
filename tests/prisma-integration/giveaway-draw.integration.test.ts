@@ -48,6 +48,40 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
   };
 }
 
+function directGiveawayInput(eventId: string): CreateGiveawayInput {
+  return {
+    eventId,
+    title: "Disposable direct reallocation campaign",
+    kind: "giveaway",
+    entryMode: "automatic",
+    maxEntriesPerRider: 5,
+    mechanics: "Eligible riders receive a deterministic first-come allocation.",
+    terms: "Disposable integration-test terms.",
+    timeZone: "Asia/Manila",
+    winnerLimits: { perRider: 1, total: 1 },
+    organizerAttestation: true,
+    publicVisibility: "hidden",
+    eligibilityGroups: [
+      {
+        id: "active-pass",
+        label: "Active RSVP and pass",
+        weight: 1,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+    ],
+    prizePools: [
+      {
+        id: "first-come-prize",
+        title: "Disposable first-come prize",
+        awardMode: "first_come",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Disposable direct prize item" }],
+      },
+    ],
+  };
+}
+
 describe("Prisma giveaway draw concurrency", () => {
   test("serializes two-client lock, draw, and redraw replays on the disposable database", async () => {
     const rawClients = createPrismaIntegrationClients();
@@ -70,6 +104,8 @@ describe("Prisma giveaway draw concurrency", () => {
     const eventId = `integration-event-${suffix}`;
     const organizerSession = `integration-organizer-session-${suffix}`;
     const adminSession = `integration-admin-session-${suffix}`;
+    const riderSession = `integration-rider-session-${suffix}`;
+    const secondRiderSession = `integration-rider-second-session-${suffix}`;
     const previousEncryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
     process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY = Buffer.alloc(32, 61).toString("base64");
 
@@ -206,6 +242,18 @@ describe("Prisma giveaway draw concurrency", () => {
               userId: adminId,
               expiresAt: new Date(Date.now() + 60_000),
             },
+            {
+              id: `integration-session-rider-${suffix}`,
+              tokenHash: sessionTokenHash(riderSession),
+              userId: riderId,
+              expiresAt: new Date(Date.now() + 60_000),
+            },
+            {
+              id: `integration-session-rider-second-${suffix}`,
+              tokenHash: sessionTokenHash(secondRiderSession),
+              userId: secondRiderId,
+              expiresAt: new Date(Date.now() + 60_000),
+            },
           ],
         });
       });
@@ -275,6 +323,130 @@ describe("Prisma giveaway draw concurrency", () => {
       });
       expect(currentAward).toMatchObject({ predecessorAwardId: originalAward.id });
       expect(currentAward?.winnerUserId).not.toBe(originalAward.winnerUserId);
+
+      const directCampaign = await backendClients.primary.backend.createGiveaway(
+        organizerSession,
+        eventId,
+        directGiveawayInput(eventId),
+      );
+      await backendClients.primary.backend.submitGiveawayForReview(organizerSession, directCampaign.id);
+      await backendClients.primary.backend.reviewGiveawayCompliance(adminSession, directCampaign.id, {
+        decision: "approved",
+      });
+      await backendClients.primary.backend.openGiveaway(organizerSession, directCampaign.id);
+      const originalDirectAward = await rawClients.primary.giveawayAward.findFirst({
+        where: { giveawayId: directCampaign.id, drawId: null, isCurrent: true },
+        select: { id: true, entryId: true, winnerUserId: true, prizeItemId: true },
+      });
+      expect(originalDirectAward).not.toBeNull();
+      if (!originalDirectAward) throw new Error("INTEGRATION_DIRECT_AWARD_MISSING");
+
+      await backendClients.primary.backend.lockGiveaway(organizerSession, directCampaign.id);
+      await expect(
+        rawClients.primary.giveawayEntry.update({
+          where: { id: originalDirectAward.entryId },
+          data: {
+            riderId: originalDirectAward.winnerUserId === riderId ? secondRiderId : riderId,
+          },
+        }),
+      ).rejects.toThrow("GiveawayEntry.riderId scope field is immutable once created");
+      const directDraw = await backendClients.primary.backend.runGiveawayDraw(organizerSession, {
+        giveawayId: directCampaign.id,
+        idempotencyKey: `direct-draw-${suffix}`,
+      });
+      await backendClients.primary.backend.publishGiveawayDraw(
+        organizerSession,
+        directCampaign.id,
+        directDraw.drawId,
+      );
+      const [replacementDirectEntry, directPrizePool] = await Promise.all([
+        rawClients.primary.giveawayEntry.findFirst({
+          where: {
+            giveawayId: directCampaign.id,
+            riderId: { not: originalDirectAward.winnerUserId },
+          },
+          select: {
+            id: true,
+            riderId: true,
+            eligibilityCycleAt: true,
+            qualifiedSourceFingerprint: true,
+          },
+        }),
+        rawClients.primary.giveawayPrizePool.findFirst({
+          where: { giveawayId: directCampaign.id, awardMode: "first_come" },
+          select: { id: true },
+        }),
+      ]);
+      expect(replacementDirectEntry).not.toBeNull();
+      expect(directPrizePool).not.toBeNull();
+      if (!replacementDirectEntry || !directPrizePool) {
+        throw new Error("INTEGRATION_DIRECT_REPLACEMENT_PROVENANCE_MISSING");
+      }
+      await rawClients.primary.giveawayEntry.update({
+        where: { id: replacementDirectEntry.id },
+        data: { qualifiedSourceFingerprint: `tampered-after-lock-${suffix}` },
+      });
+      await expect(
+        rawClients.primary.giveawayAward.create({
+          data: {
+            id: `integration-tampered-direct-award-${suffix}`,
+            giveawayId: directCampaign.id,
+            entryId: replacementDirectEntry.id,
+            prizePoolId: directPrizePool.id,
+            prizeItemId: originalDirectAward.prizeItemId,
+            winnerUserId: replacementDirectEntry.riderId,
+            status: "voided",
+            isCurrent: false,
+            directAllocationKey: `direct:${replacementDirectEntry.id}:${directPrizePool.id}:${replacementDirectEntry.eligibilityCycleAt.toISOString()}`,
+            allocationEligibilityAt: replacementDirectEntry.eligibilityCycleAt,
+            opaqueClaimReference: `integration-tampered-direct-${suffix}`,
+          },
+        }),
+      ).rejects.toThrow("GiveawayAward locked direct allocations require matching frozen snapshot provenance");
+      const directWinnerSession =
+        originalDirectAward.winnerUserId === riderId ? riderSession : secondRiderSession;
+      await expect(
+        backendClients.primary.backend.declineGiveawayAward(
+          directWinnerSession,
+          originalDirectAward.id,
+          "Disposable post-lock direct decline must preserve snapshot provenance",
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+      expect(
+        await rawClients.primary.giveawayAward.findUnique({
+          where: { id: originalDirectAward.id },
+          select: { isCurrent: true, status: true },
+        }),
+      ).toMatchObject({ isCurrent: true });
+      await rawClients.primary.giveawayEntry.update({
+        where: { id: replacementDirectEntry.id },
+        data: { qualifiedSourceFingerprint: replacementDirectEntry.qualifiedSourceFingerprint },
+      });
+      await backendClients.primary.backend.declineGiveawayAward(
+        directWinnerSession,
+        originalDirectAward.id,
+        "Disposable post-lock direct decline",
+      );
+      const [historicalDirectAward, replacementDirectAward] = await Promise.all([
+        rawClients.primary.giveawayAward.findUnique({
+          where: { id: originalDirectAward.id },
+          select: { isCurrent: true, status: true },
+        }),
+        rawClients.primary.giveawayAward.findFirst({
+          where: {
+            giveawayId: directCampaign.id,
+            drawId: null,
+            isCurrent: true,
+            id: { not: originalDirectAward.id },
+          },
+          select: { winnerUserId: true, prizeItemId: true },
+        }),
+      ]);
+      expect(historicalDirectAward).toMatchObject({ isCurrent: false, status: "declined" });
+      expect(replacementDirectAward).toMatchObject({
+        prizeItemId: originalDirectAward.prizeItemId,
+      });
+      expect(replacementDirectAward?.winnerUserId).not.toBe(originalDirectAward.winnerUserId);
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;

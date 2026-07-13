@@ -135,6 +135,66 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).not.toMatch(/async fulfillGiveawayAward\(/);
   });
 
+  test("finalizes direct awards as historical records and reallocates post-lock capacity from frozen entries", () => {
+    const declineSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async declineGiveawayAward"),
+      prismaBackendSource.indexOf("async voidGiveawayAward"),
+    );
+    const administratorResolutionSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async resolveGiveawayAwardByAdministrator"),
+      prismaBackendSource.indexOf("private calculateMechanicsChecksum"),
+    );
+    const finalizationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async lockDirectGiveawayAwardForFinalization"),
+      prismaBackendSource.indexOf("private async requireGiveawaySnapshot"),
+    );
+    const frozenReallocationSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async reallocateFrozenImmediateGiveawayAwards"),
+      prismaBackendSource.indexOf("/** Reconciles only open automatic campaigns"),
+    );
+
+    for (const source of [declineSource, administratorResolutionSource]) {
+      expect(source).toContain("lockDirectGiveawayAwardForFinalization");
+      expect(source).toContain("finalizeDirectGiveawayAward");
+      expect(source).toContain("reallocateFinalizedDirectGiveawayAward");
+    }
+    expect(finalizationSource).toContain('data: { isCurrent: false, status, reasonDigest }');
+    expect(finalizationSource).toContain('data: { status: "available" }');
+    expect(finalizationSource).toContain('"locked", "drawing", "claims_open"');
+    expect(finalizationSource).toContain("assertFrozenDirectEntryProvenance");
+    expect(frozenReallocationSource).toContain("snapshot.entries.map");
+    expect(frozenReallocationSource).toContain("assertFrozenDirectEntryProvenance(snapshot, lockedEntries)");
+    expect(frozenReallocationSource).not.toContain('status: "eligible"');
+    expect(giveawayMigrationSql).toContain("IF entry_status = 'locked' THEN");
+    expect(giveawayMigrationSql).toContain("locked direct allocations require matching frozen snapshot provenance");
+    expect(giveawayMigrationSql).toContain('snapshot_entry."entryId" = NEW."entryId"');
+    expect(giveawayMigrationSql).toContain(
+      "locked_snapshot_entry_frozen_weight IS DISTINCT FROM entry_current_weight",
+    );
+    expect(giveawayMigrationSql).toContain(
+      "locked_snapshot_entry_qualified_source_fingerprint IS DISTINCT FROM entry_qualified_source_fingerprint",
+    );
+    expect(giveawayMigrationSql).toContain(
+      'BEFORE UPDATE OF "giveawayId", "riderId" ON "GiveawayEntry"',
+    );
+    expect(giveawayMigrationSql).toContain(
+      `"prevent_giveaway_scope_reparenting"('giveawayId', 'riderId')`,
+    );
+  });
+
+  test("derives redraw exclusions from consumed weighted units instead of excluding every snapshot entry", () => {
+    const redrawSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async redrawGiveawayAward"),
+      prismaBackendSource.indexOf("async createEventDraft"),
+    );
+
+    expect(redrawSource).toContain("consumedWeightedUnitKeys");
+    expect(redrawSource).toContain("rankedUnits[historicalAward.rank - 1]");
+    expect(redrawSource).toContain("${unit.entryId}:${unit.unitOrdinal}");
+    expect(redrawSource).toContain("this.isDirectGiveawayAward(award)");
+    expect(redrawSource).not.toContain("selectedSnapshotEntryIds");
+  });
+
   test("locks giveaway entries before immediate award allocation during snapshot locking", () => {
     const lockSource = prismaBackendSource.slice(
       prismaBackendSource.indexOf("async lockGiveaway"),
@@ -264,5 +324,22 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(openSource).toContain("reconcileDirectAwards: false");
     expect(openSource).toContain("revalidateDirectGiveawayAwardsForLockedEntries");
     expect(allocationPosition).toBeGreaterThan(reconciliationPosition);
+  });
+
+  test("reallocates retained direct capacity on reopen for every entry mode", () => {
+    const openSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async openGiveaway"),
+      prismaBackendSource.indexOf("async pauseGiveaway"),
+    );
+    const automaticBranchEnd = openSource.indexOf("const lockedEntries = await this.lockGiveawayEntries");
+    const immediateAllocationPosition = openSource.indexOf(
+      "await this.reallocateImmediateGiveawayAwards(tx, opened)",
+    );
+
+    expect(automaticBranchEnd).toBeGreaterThanOrEqual(0);
+    expect(immediateAllocationPosition).toBeGreaterThan(automaticBranchEnd);
+    expect(openSource).toContain(
+      "await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, opened, lockedEntries)",
+    );
   });
 });
