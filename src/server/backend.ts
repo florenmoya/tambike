@@ -7,7 +7,9 @@ import { getRuntimeDatabaseUrl } from "./database-url";
 import type {
   AdminGiveawayAudit,
   CreateGiveawayInput,
+  EventGiveawayOperatorQueueItem,
   FulfillGiveawayAwardInput,
+  GiveawayCampaignListItem,
   GiveawayClaimScannerMethod,
   GiveawayComplianceStatus,
   GiveawayDeliveryDetailsInput,
@@ -18,14 +20,21 @@ import type {
   GiveawayLifecycleAdvanceResult,
   GiveawayNotification,
   GiveawayNotificationKind,
+  GiveawayOperatorCandidate,
+  GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
   IssuedGiveawayClaimToken,
+  OrganizerGiveawayWorkspace,
   OrganizerGiveawayReport,
   OperatorGiveawayClaimView,
   PrivateGiveawayDeliveryDetails,
+  PublicEventGiveaway,
   PublicGiveawayCampaignSummary,
   PublicGiveawayPrizePoolSummary,
+  PublicGiveawayResult,
+  RiderEventGiveawayState,
+  RiderGiveawayClaimContext,
   RiderGiveawayState,
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
@@ -604,14 +613,7 @@ type GiveawayStore = {
   auditEventsById: Map<string, GiveawayAuditEventRecord>;
 };
 
-type GiveawayCampaignView = {
-  id: string;
-  eventId: string;
-  title: string;
-  state: GiveawayState;
-  complianceStatus: GiveawayComplianceStatus;
-  mechanicsVersion: number;
-};
+type GiveawayCampaignView = GiveawayCampaignListItem;
 
 type GiveawayConditionEvaluation = {
   satisfied: boolean;
@@ -1206,6 +1208,30 @@ export class TambikeBackend {
       .map((giveaway) => this.toGiveawayCampaignView(giveaway));
   }
 
+  /** Configuration-only workspace read for the event owner or an administrator. */
+  async getOrganizerGiveawayWorkspace(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<OrganizerGiveawayWorkspace> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    return this.toOrganizerGiveawayWorkspace(giveaway);
+  }
+
+  /** Minimal cross-event administrator campaign list; entrant records stay private. */
+  async listAdminGiveaways(sessionToken: string): Promise<GiveawayCampaignListItem[]> {
+    this.requireRole(sessionToken, "admin");
+    return Array.from(this.giveaways.campaignsById.values())
+      .sort(
+        (left, right) =>
+          left.eventId.localeCompare(right.eventId) ||
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      )
+      .map((giveaway) => this.toGiveawayCampaignView(giveaway));
+  }
+
   async getOrganizerGiveawayReport(
     sessionToken: string,
     giveawayId: string,
@@ -1359,23 +1385,52 @@ export class TambikeBackend {
 
   async getPublicGiveaway(giveawayId: string, sessionToken?: string): Promise<PublicGiveawayCampaignSummary> {
     const giveaway = this.requireGiveaway(giveawayId);
-    if (giveaway.publicVisibility === "hidden") {
+    const event = this.requireEvent(giveaway.eventId);
+    if (
+      !["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status) ||
+      !this.isPublicEventGiveaway(giveaway) ||
+      giveaway.publicVisibility === "hidden"
+    ) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
 
     if (giveaway.publicVisibility === "registered_riders") {
       const rider = this.requireUser(sessionToken ?? "");
-      const rsvp = this.rsvps.get(`${giveaway.eventId}:${rider.id}`);
-      if (!rsvp || rsvp.status !== "going") throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      if (!this.canViewPublicEventGiveaway(giveaway, rider.id)) {
+        throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
     }
 
     if (giveaway.publicVisibility === "eligible_riders") {
       const rider = this.requireUser(sessionToken ?? "");
-      const entry = giveaway.entriesByRider.get(rider.id);
-      if (!entry || entry.status === "withdrawn") throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      if (!this.canViewPublicEventGiveaway(giveaway, rider.id)) {
+        throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
     }
 
     return this.toPublicGiveaway(giveaway);
+  }
+
+  /**
+   * Public event-page campaign list. Restricted campaign visibility quietly
+   * filters nonmembers instead of leaking the campaign's existence.
+   */
+  async listPublicGiveawaysForEvent(
+    eventId: string,
+    sessionToken?: string,
+  ): Promise<PublicEventGiveaway[]> {
+    const event = this.requireEvent(eventId);
+    if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status)) return [];
+    const viewer = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const viewerId = viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    return Array.from(this.giveaways.giveawayIdsByEventId.get(eventId) ?? [])
+      .map((id) => this.requireGiveaway(id))
+      .filter((giveaway) => this.canViewPublicEventGiveaway(giveaway, viewerId))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      .map((giveaway) => ({
+        giveaway: this.toPublicGiveaway(giveaway),
+        results: this.toPublicGiveawayResults(giveaway),
+      }));
   }
 
   async getRiderGiveawayState(sessionToken: string, giveawayId: string): Promise<RiderGiveawayState> {
@@ -1385,6 +1440,67 @@ export class TambikeBackend {
     }
     const giveaway = this.requireGiveaway(giveawayId);
     return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  /** Rider-only event list; hidden campaigns appear only when the rider has their own state. */
+  async listRiderGiveawayStatesForEvent(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<RiderEventGiveawayState[]> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    this.requireEvent(eventId);
+    const states: RiderEventGiveawayState[] = [];
+    for (const giveawayId of this.giveaways.giveawayIdsByEventId.get(eventId) ?? []) {
+      const giveaway = this.requireGiveaway(giveawayId);
+      const riderState = this.toRiderGiveawayState(giveaway, rider.id);
+      if (
+        !this.canViewPublicEventGiveaway(giveaway, rider.id) &&
+        riderState.status === "not_eligible"
+      ) {
+        continue;
+      }
+      states.push({
+        giveawayId: giveaway.id,
+        giveawayTitle: giveaway.title,
+        giveawayState: giveaway.state,
+        entryMode: giveaway.entryMode,
+        riderState,
+      });
+    }
+    return states.sort(
+      (left, right) =>
+        left.giveawayTitle.localeCompare(right.giveawayTitle) ||
+        left.giveawayId.localeCompare(right.giveawayId),
+    );
+  }
+
+  /** A winner's own, nonsecret claim-page context. */
+  async getRiderGiveawayClaimContext(
+    sessionToken: string,
+    awardId: string,
+  ): Promise<RiderGiveawayClaimContext> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    const award = this.giveaways.awardsById.get(awardId);
+    if (!award || !award.isCurrent || award.winnerUserId !== rider.id || award.status === "superseded") {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const giveaway = this.requireGiveawayByAward(award);
+    const pool = this.requireGiveawayPrizePool(giveaway, award.prizePoolId);
+    const deliveryDetail = this.giveaways.deliveryDetailsByAwardId.get(award.id);
+    return {
+      awardId: award.id,
+      giveawayId: giveaway.id,
+      giveawayTitle: giveaway.title,
+      giveawayState: giveaway.state,
+      award: {
+        prizePoolTitle: pool.title,
+        status: award.status as RiderGiveawayClaimContext["award"]["status"],
+        ...(award.claimDeadlineAt ? { claimDeadlineAt: award.claimDeadlineAt } : {}),
+        fulfilmentMode: pool.fulfilmentMode,
+      },
+      deliveryDetailsSubmitted: Boolean(deliveryDetail && !deliveryDetail.purgedAt),
+      claimCredentialIssued: Boolean(award.claimTokenHash),
+    };
   }
 
   async optInToGiveaway(sessionToken: string, giveawayId: string): Promise<RiderGiveawayState> {
@@ -2009,6 +2125,65 @@ export class TambikeBackend {
             award.status === "verified"),
       )
       .map((award) => this.toOperatorGiveawayClaimView(giveaway, award));
+  }
+
+  /**
+   * Event-scoped operator queue. Venue owners may see their venue's campaigns;
+   * explicitly assigned operators see only their assignments.
+   */
+  async listEventGiveawayOperatorClaims(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<EventGiveawayOperatorQueueItem[]> {
+    const operator = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    const queue: EventGiveawayOperatorQueueItem[] = [];
+    for (const giveawayId of this.giveaways.giveawayIdsByEventId.get(event.id) ?? []) {
+      const giveaway = this.requireGiveaway(giveawayId);
+      try {
+        this.requireGiveawayOperator(operator, event, giveaway);
+      } catch (error) {
+        if (error instanceof BackendError && error.code === "FORBIDDEN") continue;
+        throw error;
+      }
+      if (giveaway.state === "suspended") continue;
+      for (const award of giveaway.awards) {
+        if (
+          !award.isCurrent ||
+          !(
+            (["pending_verification", "claimable"].includes(award.status) &&
+              !this.isGiveawayClaimDeadlineElapsed(award)) ||
+            award.status === "verified"
+          )
+        ) {
+          continue;
+        }
+        queue.push({
+          ...this.toOperatorGiveawayClaimView(giveaway, award),
+          giveawayTitle: giveaway.title,
+        });
+      }
+    }
+    return queue.sort(
+      (left, right) =>
+        left.giveawayTitle.localeCompare(right.giveawayTitle) ||
+        (left.claimDeadlineAt ?? "").localeCompare(right.claimDeadlineAt ?? "") ||
+        left.awardId.localeCompare(right.awardId),
+    );
+  }
+
+  /** Safe assignment choices for an authorized event owner or administrator. */
+  async listGiveawayOperatorCandidates(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<GiveawayOperatorCandidate[]> {
+    const actor = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireGiveawayConfigurator(actor, event);
+    return Array.from(this.users.values())
+      .filter((user) => user.verificationStatus !== "SUSPENDED" && user.role !== "admin")
+      .map((user) => ({ id: user.id, label: user.displayName.trim() || "Unnamed operator" }))
+      .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
   }
 
   async submitGiveawayDeliveryDetails(
@@ -5345,6 +5520,125 @@ export class TambikeBackend {
       claimDeadlineAt: giveaway.claimDeadlineAt,
       prizePools,
     };
+  }
+
+  private canViewPublicEventGiveaway(giveaway: GiveawayAggregate, viewerId?: string) {
+    if (!this.isPublicEventGiveaway(giveaway)) return false;
+    if (giveaway.publicVisibility === "hidden") return false;
+    if (giveaway.publicVisibility === "event_page") return true;
+    if (!viewerId) return false;
+    if (giveaway.publicVisibility === "registered_riders") {
+      return this.rsvps.get(`${giveaway.eventId}:${viewerId}`)?.status === "going";
+    }
+    const entry = giveaway.entriesByRider.get(viewerId);
+    return Boolean(entry && entry.status !== "withdrawn");
+  }
+
+  private isPublicEventGiveaway(giveaway: GiveawayAggregate) {
+    return (
+      giveaway.complianceStatus === "approved" &&
+      !["draft", "cancelled", "suspended"].includes(giveaway.state)
+    );
+  }
+
+  private toPublicGiveawayResults(giveaway: GiveawayAggregate): PublicGiveawayResult[] {
+    if (
+      !giveaway.snapshot?.seedRevealedAt ||
+      !["claims_open", "completed"].includes(giveaway.state)
+    ) {
+      return [];
+    }
+    return giveaway.awards
+      .filter(
+        (award) =>
+          award.isCurrent &&
+          ["pending_verification", "claimable", "verified", "fulfilled"].includes(award.status),
+      )
+      .map((award) => ({
+        award,
+        pool: giveaway.prizePools.find((pool) => pool.id === award.prizePoolId),
+        entry: this.giveaways.entriesById.get(award.entryId),
+      }))
+      .filter(
+        (
+          value,
+        ): value is {
+          award: GiveawayAwardRecord;
+          pool: GiveawayPrizePoolRecord;
+          entry: GiveawayEntryRecord;
+        } => Boolean(value.pool && value.entry),
+      )
+      .sort(
+        (left, right) =>
+          left.pool.position - right.pool.position ||
+          left.entry.opaquePublicReference.localeCompare(right.entry.opaquePublicReference) ||
+          left.award.id.localeCompare(right.award.id),
+      )
+      .map(({ pool, entry }) => ({
+        prizePoolTitle: pool.title,
+        winnerAlias: entry.opaquePublicReference,
+      }));
+  }
+
+  private toOrganizerGiveawayWorkspace(giveaway: GiveawayAggregate): OrganizerGiveawayWorkspace {
+    const mechanics = this.currentGiveawayMechanics(giveaway);
+    return {
+      id: giveaway.id,
+      eventId: giveaway.eventId,
+      title: giveaway.title,
+      kind: giveaway.kind,
+      state: giveaway.state,
+      complianceStatus: giveaway.complianceStatus,
+      entryMode: giveaway.entryMode,
+      maxEntriesPerRider: giveaway.maxEntriesPerRider,
+      mechanics: mechanics.mechanics,
+      terms: mechanics.terms,
+      sponsorDisclosure: mechanics.sponsorDisclosure,
+      timeZone: giveaway.timeZone,
+      winnerLimits: { perRider: giveaway.maxWinsPerRider, total: giveaway.maxWinsTotal },
+      publicVisibility: giveaway.publicVisibility,
+      presenceVerificationRequired: giveaway.presenceVerificationRequired,
+      entryOpensAt: giveaway.entryOpensAt,
+      entryClosesAt: giveaway.entryClosesAt,
+      drawAt: giveaway.drawAt,
+      claimDeadlineAt: giveaway.claimDeadlineAt,
+      eligibilityGroups: giveaway.eligibilityGroups
+        .slice()
+        .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
+        .map((group) => ({
+          id: group.id,
+          label: group.label,
+          weight: group.entryWeight,
+          conditions: group.conditions.map(({ condition }) => ({ ...condition })),
+        })),
+      prizePools: giveaway.prizePools
+        .slice()
+        .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
+        .map((pool) => this.toOrganizerGiveawayPrizePool(pool)),
+    };
+  }
+
+  private toOrganizerGiveawayPrizePool(pool: GiveawayPrizePoolRecord): GiveawayPrizePoolInput {
+    const base = {
+      id: pool.id,
+      title: pool.title,
+      fulfilmentMode: pool.fulfilmentMode,
+      eligibilityGroupIds: pool.eligibilityGroupIds.length ? [...pool.eligibilityGroupIds] : undefined,
+      perRiderLimit: pool.perRiderLimit ?? 1,
+      presenceVerificationRequired: pool.presenceVerificationRequired,
+    };
+    if (pool.inventoryKind === "unlimited") {
+      return { ...base, awardMode: "guaranteed", inventory: { kind: "unlimited" }, items: [] };
+    }
+    return {
+      ...base,
+      awardMode: pool.awardMode as Exclude<GiveawayPrizePoolInput["awardMode"], "guaranteed">,
+      inventory: { kind: "finite", quantity: pool.inventoryLimit ?? pool.items.length },
+      items: pool.items
+        .slice()
+        .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
+        .map((item) => ({ id: item.id, title: item.title, description: item.description })),
+    } as GiveawayPrizePoolInput;
   }
 
   private requireGiveaway(giveawayId: string) {

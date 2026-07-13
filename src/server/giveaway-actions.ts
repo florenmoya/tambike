@@ -10,6 +10,7 @@ import type {
 import { getTambikeBackend } from "./backend";
 import {
   executeGiveawayAction,
+  executePublicGiveawayAction,
   type GiveawayActionResult,
 } from "./giveaway-action-runtime";
 import { readSessionToken } from "./session-cookie";
@@ -27,6 +28,13 @@ function runGiveawayAction<T>(
   operation: (sessionToken: string) => Promise<T>,
 ): Promise<GiveawayActionResult<T>> {
   return executeGiveawayAction({ readSessionToken }, operation);
+}
+
+/** Guest-safe public reads retain the same detail-free failure envelope. */
+function runPublicGiveawayAction<T>(
+  operation: (sessionToken?: string) => Promise<T>,
+): Promise<GiveawayActionResult<T>> {
+  return executePublicGiveawayAction({ readSessionToken }, operation);
 }
 
 export function createGiveawayAction(input: CreateGiveawayInput) {
@@ -47,6 +55,27 @@ export function listOrganizerGiveawaysAction(eventId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listOrganizerGiveaways(sessionToken, eventId);
+  });
+}
+
+export function getOrganizerGiveawayWorkspaceAction(giveawayId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.getOrganizerGiveawayWorkspace(sessionToken, giveawayId);
+  });
+}
+
+export function listAdminGiveawaysAction() {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listAdminGiveaways(sessionToken);
+  });
+}
+
+export function listPublicGiveawaysForEventAction(eventId: string) {
+  return runPublicGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listPublicGiveawaysForEvent(eventId, sessionToken);
   });
 }
 
@@ -152,6 +181,20 @@ export function getRiderGiveawayStateAction(giveawayId: string) {
   });
 }
 
+export function listRiderGiveawayStatesForEventAction(eventId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listRiderGiveawayStatesForEvent(sessionToken, eventId);
+  });
+}
+
+export function getRiderGiveawayClaimContextAction(awardId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.getRiderGiveawayClaimContext(sessionToken, awardId);
+  });
+}
+
 export function declineGiveawayAwardAction(awardId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
@@ -219,6 +262,20 @@ export function listGiveawayOperatorClaimsAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayOperatorClaims(sessionToken, giveawayId);
+  });
+}
+
+export function listEventGiveawayOperatorClaimsAction(eventId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listEventGiveawayOperatorClaims(sessionToken, eventId);
+  });
+}
+
+export function listGiveawayOperatorCandidatesAction(eventId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listGiveawayOperatorCandidates(sessionToken, eventId);
   });
 }
 

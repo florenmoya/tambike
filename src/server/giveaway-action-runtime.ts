@@ -26,3 +26,20 @@ export async function executeGiveawayAction<T>(
     return { ok: false, code: "ERROR" };
   }
 }
+
+/**
+ * A public read may use an absent session for visibility filtering, but it
+ * keeps the same deliberately detail-free error envelope as authenticated
+ * giveaway actions.
+ */
+export async function executePublicGiveawayAction<T>(
+  dependencies: GiveawayActionDependencies,
+  operation: (sessionToken?: string) => Promise<T>,
+): Promise<GiveawayActionResult<T>> {
+  try {
+    const sessionToken = await dependencies.readSessionToken();
+    return { ok: true, code: "OK", data: await operation(sessionToken ?? undefined) };
+  } catch {
+    return { ok: false, code: "ERROR" };
+  }
+}

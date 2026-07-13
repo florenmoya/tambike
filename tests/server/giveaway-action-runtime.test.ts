@@ -13,13 +13,21 @@ type ExecuteGiveawayAction = <T>(
   operation: (sessionToken: string) => Promise<T>,
 ) => Promise<GiveawayActionResult<T>>;
 
+type ExecutePublicGiveawayAction = <T>(
+  dependencies: GiveawayActionDependencies,
+  operation: (sessionToken?: string) => Promise<T>,
+) => Promise<GiveawayActionResult<T>>;
+
 async function loadGiveawayActionRuntime() {
   // Keep this red-first test compilable until the narrow action runtime is
   // implemented in the next slice. The nonliteral path intentionally avoids
   // turning a missing implementation into a TypeScript resolution error.
   const modulePath = `../../src/server/${"giveaway-action-runtime"}`;
   const runtime = await import(modulePath);
-  return runtime as { executeGiveawayAction: ExecuteGiveawayAction };
+  return runtime as {
+    executeGiveawayAction: ExecuteGiveawayAction;
+    executePublicGiveawayAction: ExecutePublicGiveawayAction;
+  };
 }
 
 describe("giveaway action runtime", () => {
@@ -69,5 +77,23 @@ describe("giveaway action runtime", () => {
       code: "OK",
       data: { sessionToken: "session-token", status: "claimable" },
     });
+  });
+
+  test("allows a guest public read while still suppressing unexpected error details", async () => {
+    const { executePublicGiveawayAction } = await loadGiveawayActionRuntime();
+    const guestDependencies: GiveawayActionDependencies = {
+      readSessionToken: async () => null,
+    };
+
+    await expect(
+      executePublicGiveawayAction(guestDependencies, async (sessionToken) => ({ sessionToken })),
+    ).resolves.toEqual({ ok: true, code: "OK", data: { sessionToken: undefined } });
+
+    const rawClaimSecret = `tbk_gc1_${"b".repeat(43)}`;
+    await expect(
+      executePublicGiveawayAction(guestDependencies, async () => {
+        throw new Error(rawClaimSecret);
+      }),
+    ).resolves.toEqual({ ok: false, code: "ERROR" });
   });
 });

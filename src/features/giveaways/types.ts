@@ -213,6 +213,28 @@ export interface PublicGiveawayCampaignSummary {
   prizePools: PublicGiveawayPrizePoolSummary[];
 }
 
+/** One public winner result. The alias is an opaque entry reference, not a rider identity. */
+export interface PublicGiveawayResult {
+  prizePoolTitle: string;
+  winnerAlias: string;
+}
+
+/** Event-page campaign data, with results only after a draw has been published. */
+export interface PublicEventGiveaway {
+  giveaway: PublicGiveawayCampaignSummary;
+  results: PublicGiveawayResult[];
+}
+
+/** Minimal campaign list item for organizer and administrator rails. */
+export interface GiveawayCampaignListItem {
+  id: string;
+  eventId: string;
+  title: string;
+  state: GiveawayState;
+  complianceStatus: GiveawayComplianceStatus;
+  mechanicsVersion: number;
+}
+
 export type RiderGiveawayEntryStatus =
   | "not_eligible"
   | "eligible"
@@ -244,6 +266,29 @@ export interface RiderGiveawayState {
   award?: RiderGiveawayAwardSummary;
 }
 
+/** A rider's own campaign state when loading the giveaways for one event. */
+export interface RiderEventGiveawayState {
+  giveawayId: string;
+  giveawayTitle: string;
+  giveawayState: GiveawayState;
+  entryMode: GiveawayEntryMode;
+  riderState: RiderGiveawayState;
+}
+
+/**
+ * Narrow award-id read for the authenticated winner's claim page. It never
+ * includes a raw credential, its hash/version, entrant facts, or delivery PII.
+ */
+export interface RiderGiveawayClaimContext {
+  awardId: string;
+  giveawayId: string;
+  giveawayTitle: string;
+  giveawayState: GiveawayState;
+  award: Omit<RiderGiveawayAwardSummary, "awardId">;
+  deliveryDetailsSubmitted: boolean;
+  claimCredentialIssued: boolean;
+}
+
 /** Staff/operator view for a single award after a claim token has been resolved server-side. */
 export interface OperatorGiveawayClaimView {
   awardId: string;
@@ -261,6 +306,45 @@ export interface OperatorGiveawayClaimView {
     | "fulfilled"
     | "expired"
     | "voided";
+}
+
+/** Operator queue item scoped to one event, without rider or delivery details. */
+export interface EventGiveawayOperatorQueueItem extends OperatorGiveawayClaimView {
+  giveawayTitle: string;
+}
+
+/** Safe assignment candidate: display label only, never email, role, or status. */
+export interface GiveawayOperatorCandidate {
+  id: string;
+  label: string;
+}
+
+/**
+ * Editable organizer/admin configuration. It deliberately omits mechanics
+ * checksums, reviewer identities, audit records, draw seeds, and entrant data.
+ */
+export interface OrganizerGiveawayWorkspace {
+  id: string;
+  eventId: string;
+  title: string;
+  kind: GiveawayKind;
+  state: GiveawayState;
+  complianceStatus: GiveawayComplianceStatus;
+  entryMode: GiveawayEntryMode;
+  maxEntriesPerRider: number;
+  mechanics: string;
+  terms: string;
+  sponsorDisclosure?: string;
+  timeZone: string;
+  winnerLimits: GiveawayWinnerLimitsInput;
+  publicVisibility: GiveawayPublicVisibility;
+  presenceVerificationRequired: boolean;
+  entryOpensAt?: string;
+  entryClosesAt?: string;
+  drawAt?: string;
+  claimDeadlineAt?: string;
+  eligibilityGroups: GiveawayEligibilityGroupInput[];
+  prizePools: GiveawayPrizePoolInput[];
 }
 
 /** Returned exactly once to the authenticated winner; never persist or place this in a URL. */
