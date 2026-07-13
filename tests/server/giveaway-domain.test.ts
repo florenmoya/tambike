@@ -91,10 +91,14 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   ): Promise<{
     sourceAwardId: string;
     label: string;
-    status: "declined" | "voided" | "disqualified";
+    status: "declined" | "voided" | "disqualified" | "expired";
     claimDeadlineRequired: boolean;
     candidates: GiveawayManualSelectionCandidate[];
   }>;
+  expireGiveawayClaims(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<{ expiredCount: number }>;
   redeemGiveawayPerk(
     sessionToken: string,
     perkId: string,
@@ -198,6 +202,7 @@ function internalGiveawayCampaign(
   backend: GiveawayBackend,
   giveawayId: string,
 ): {
+  claimDeadlineAt?: string;
   awards: Array<{
     id: string;
     winnerUserId: string;
@@ -209,6 +214,7 @@ function internalGiveawayCampaign(
     recoveryClosedAt?: string;
     recoverySourceAwardId?: string;
     rank?: number;
+    claimDeadlineAt?: string;
     status: string;
     isCurrent: boolean;
   }>;
@@ -222,6 +228,7 @@ function internalGiveawayCampaign(
       campaignsById: Map<
         string,
         {
+          claimDeadlineAt?: string;
           awards: Array<{
             id: string;
             winnerUserId: string;
@@ -233,6 +240,7 @@ function internalGiveawayCampaign(
             recoveryClosedAt?: string;
             recoverySourceAwardId?: string;
             rank?: number;
+            claimDeadlineAt?: string;
             status: string;
             isCurrent: boolean;
           }>;
@@ -1823,6 +1831,136 @@ describe("in-memory event giveaway lifecycle", () => {
           idempotencyKey: "manual-replacement-second-successor",
         }),
       ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    });
+  });
+
+  test("requires a fresh deadline when replacing an expired published manual award", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const operationsBackend = backend as unknown as {
+      getOrganizerGiveawayOperations(
+        sessionToken: string,
+        giveawayId: string,
+      ): Promise<OrganizerGiveawayOperations>;
+    };
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        prizePools: [
+          {
+            id: "manual-expired-replacement-pool",
+            title: "Expired manual replacement prize",
+            awardMode: "manual_selection",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Manual replacement helmet" }],
+          },
+        ],
+      }),
+    );
+    const secondRider = await createExtraRider(backend, "manual-expired-replacement-second");
+    await Promise.all([
+      backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+      backend.registerForEvent(secondRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+    ]);
+    const pool = (await backend.getPublicGiveaway(context.giveaway.id)).prizePools[0];
+    if (!pool) throw new Error("TEST_EXPIRED_MANUAL_REPLACEMENT_POOL_MISSING");
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      const candidates = await backend.listGiveawayManualSelectionCandidates(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        pool.id,
+      );
+      const initialCandidate = candidates[0];
+      if (!initialCandidate) throw new Error("TEST_EXPIRED_MANUAL_REPLACEMENT_CANDIDATE_MISSING");
+      const initial = await backend.selectManualGiveawayAward(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        prizePoolId: pool.id,
+        snapshotEntryId: initialCandidate.snapshotEntryId,
+        reason: "Initial manual recognition before expiry",
+        idempotencyKey: "manual-expired-replacement-original",
+      });
+      const publication = await backend.publishGiveawayDraw(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        initial.drawId,
+      );
+
+      const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
+      const source = campaign.awards.find(
+        (award) => award.drawId === initial.drawId && award.isCurrent,
+      );
+      if (!source) throw new Error("TEST_EXPIRED_MANUAL_REPLACEMENT_SOURCE_MISSING");
+      const elapsedDeadline = new Date(Date.now() - 1_000).toISOString();
+      campaign.claimDeadlineAt = elapsedDeadline;
+      source.claimDeadlineAt = elapsedDeadline;
+
+      await expect(
+        backend.expireGiveawayClaims(context.admin.sessionToken, context.giveaway.id),
+      ).resolves.toEqual({ expiredCount: 1 });
+      expect(source).toMatchObject({ status: "expired", isCurrent: true });
+
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        recoverableAwards: expect.arrayContaining([
+          expect.objectContaining({
+            awardId: source.id,
+            status: "expired",
+            recoveryKind: "manual_replacement",
+            claimDeadlineRequired: true,
+          }),
+        ]),
+      });
+      const options = await backend.listManualGiveawayReplacementCandidates(
+        context.organizer.sessionToken,
+        source.id,
+      );
+      expect(options).toMatchObject({ status: "expired", claimDeadlineRequired: true });
+      const replacementCandidate = options.candidates.find(
+        (candidate) => candidate.snapshotEntryId !== source.snapshotEntryId,
+      );
+      if (!replacementCandidate) throw new Error("TEST_EXPIRED_MANUAL_REPLACEMENT_SUCCESSOR_MISSING");
+      const replacementInput = {
+        sourceAwardId: source.id,
+        snapshotEntryId: replacementCandidate.snapshotEntryId,
+        reason: "The original manual recipient did not claim in time",
+        idempotencyKey: "manual-expired-replacement-successor",
+      };
+      await expect(
+        backend.replaceManualGiveawayAward(context.organizer.sessionToken, replacementInput),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(source).toMatchObject({ status: "expired", isCurrent: true });
+
+      const futureDeadline = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const replacement = await backend.replaceManualGiveawayAward(
+        context.organizer.sessionToken,
+        { ...replacementInput, claimDeadlineAt: futureDeadline },
+      );
+      expect(replacement.verification).toMatchObject({
+        algorithmVersion: "manual-selection-v1",
+        commitment: publication.commitment,
+        snapshotDigest: publication.snapshotDigest,
+      });
+      const successor = campaign.awards.find(
+        (award) => award.predecessorAwardId === source.id,
+      );
+      expect(source).toMatchObject({ status: "expired", isCurrent: false });
+      expect(successor).toMatchObject({
+        isCurrent: true,
+        prizeItemId: source.prizeItemId,
+        prizePoolId: source.prizePoolId,
+        claimDeadlineAt: futureDeadline,
+      });
     });
   });
 
