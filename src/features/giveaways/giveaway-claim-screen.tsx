@@ -36,7 +36,7 @@ import {
 } from "@/features/giveaways/giveaway-claim-client";
 import type {
   GiveawayState,
-  RiderGiveawayAwardSummary,
+  RiderGiveawayClaimContext as RiderGiveawayClaimContextData,
 } from "@/features/giveaways/types";
 import {
   declineGiveawayAwardAction,
@@ -54,15 +54,9 @@ const GiveawayClaimTicketQr = dynamic(
   },
 );
 
-export type RiderGiveawayClaimContext = {
-  awardId: string;
-  giveawayId: string;
-  giveawayTitle: string;
-  giveawayState: GiveawayState;
-  award: RiderGiveawayAwardSummary;
-  deliveryDetailsSubmitted: boolean;
-  claimCredentialIssued: boolean;
-};
+export type RiderGiveawayClaimContext = RiderGiveawayClaimContextData;
+
+type RiderGiveawayClaimAward = RiderGiveawayClaimContext["award"];
 
 type ClaimCredential = {
   qrPayload: string;
@@ -401,7 +395,7 @@ function CampaignRouteStrip({ route }: { route: GiveawayClaimRouteStep[] }) {
   );
 }
 
-function StatusCard({ award }: { award: RiderGiveawayAwardSummary }) {
+function StatusCard({ award }: { award: RiderGiveawayClaimAward }) {
   const status = award.status;
   const copy = claimStatusCopy(status);
   return (
@@ -476,7 +470,7 @@ function DeliveryDetailsCard({
   );
 }
 
-function claimStatusCopy(status: RiderGiveawayAwardSummary["status"]) {
+function claimStatusCopy(status: RiderGiveawayClaimAward["status"]) {
   switch (status) {
     case "pending_verification":
       return { tone: "warning" as const, icon: Clock3Icon, title: "Awaiting verification", body: "Your award is reserved. Generate a claim credential and show it to an authorized giveaway operator." };
@@ -498,11 +492,11 @@ function claimStatusCopy(status: RiderGiveawayAwardSummary["status"]) {
   }
 }
 
-function isClaimCredentialAvailable(status: RiderGiveawayAwardSummary["status"]) {
+function isClaimCredentialAvailable(status: RiderGiveawayClaimAward["status"]) {
   return status === "pending_verification" || status === "claimable";
 }
 
-function isDeclinable(status: RiderGiveawayAwardSummary["status"]) {
+function isDeclinable(status: RiderGiveawayClaimAward["status"]) {
   return status === "pending_verification" || status === "claimable";
 }
 
