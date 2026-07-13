@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   createGiveawayAction,
+  getOrganizerGiveawayWorkspaceAction,
   getOrganizerGiveawayReportAction,
   listOrganizerGiveawaysAction,
   lockGiveawayAction,
@@ -47,6 +48,7 @@ import {
 import type {
   CreateGiveawayInput,
   GiveawayAwardMode,
+  GiveawayCampaignListItem,
   GiveawayComplianceStatus,
   GiveawayEligibilityConditionInput,
   GiveawayEligibilityGroupInput,
@@ -56,6 +58,7 @@ import type {
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
+  OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
   OrganizerGiveawayReport,
   UpdateGiveawayInput,
 } from "./types";
@@ -134,14 +137,7 @@ export function buildGiveawayLifecycleRoute(
   });
 }
 
-export type OrganizerGiveawayCampaign = {
-  id: string;
-  eventId: string;
-  title: string;
-  state: GiveawayState;
-  complianceStatus: GiveawayComplianceStatus;
-  mechanicsVersion: number;
-};
+export type OrganizerGiveawayCampaign = GiveawayCampaignListItem;
 
 type GiveawayEditorDraft = {
   title: string;
@@ -217,6 +213,7 @@ export function OrganizerGiveawayWorkspace({
     initialCampaigns[0]?.id ?? null,
   );
   const [draftsByCampaignId, setDraftsByCampaignId] = React.useState<Record<string, GiveawayEditorDraft>>({});
+  const [configurationFailures, setConfigurationFailures] = React.useState<Record<string, true>>({});
   const [editorDraft, setEditorDraft] = React.useState<GiveawayEditorDraft>(() => createEmptyDraft());
   const [report, setReport] = React.useState<{
     campaignId: string;
@@ -238,7 +235,12 @@ export function OrganizerGiveawayWorkspace({
     }
     const nextCampaigns = result.data as OrganizerGiveawayCampaign[];
     setCampaigns(nextCampaigns);
-    setSelectedCampaignId((current) => current ?? nextCampaigns[0]?.id ?? null);
+    setSelectedCampaignId((current) =>
+      current && nextCampaigns.some((campaign) => campaign.id === current)
+        ? current
+        : nextCampaigns[0]?.id ?? null,
+    );
+    setConfigurationFailures({});
     return nextCampaigns;
   }, [eventId]);
 
@@ -252,7 +254,11 @@ export function OrganizerGiveawayWorkspace({
         if (cancelled) return;
         const nextCampaigns = result.data as OrganizerGiveawayCampaign[];
         setCampaigns(nextCampaigns);
-        setSelectedCampaignId((current) => current ?? nextCampaigns[0]?.id ?? null);
+        setSelectedCampaignId((current) =>
+          current && nextCampaigns.some((campaign) => campaign.id === current)
+            ? current
+            : nextCampaigns[0]?.id ?? null,
+        );
       } catch {
         if (!cancelled) {
         setNotice({
@@ -267,6 +273,43 @@ export function OrganizerGiveawayWorkspace({
       cancelled = true;
     };
   }, [eventId, initialCampaigns.length]);
+
+  const selectedCampaignIdForConfiguration = selectedCampaign?.id;
+  React.useEffect(() => {
+    if (
+      !selectedCampaignIdForConfiguration ||
+      selectedDraft ||
+      configurationFailures[selectedCampaignIdForConfiguration]
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.resolve().then(async () => {
+      try {
+        const result = await getOrganizerGiveawayWorkspaceAction(selectedCampaignIdForConfiguration);
+        if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
+        if (cancelled) return;
+        setDraftsByCampaignId((current) => ({
+          ...current,
+          [selectedCampaignIdForConfiguration]: toOrganizerGiveawayEditorDraft(result.data),
+        }));
+      } catch {
+        if (!cancelled) {
+          setConfigurationFailures((current) => ({
+            ...current,
+            [selectedCampaignIdForConfiguration]: true,
+          }));
+          setNotice({
+            tone: "error",
+            text: "This campaign's policy details are unavailable. Refresh after confirming organizer access.",
+          });
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [configurationFailures, selectedCampaignIdForConfiguration, selectedDraft]);
 
   const selectedCampaignIdForReport = selectedCampaign?.id;
   React.useEffect(() => {
@@ -460,7 +503,13 @@ export function OrganizerGiveawayWorkspace({
             onSave={createOrSaveCampaign}
             isPending={isPending}
             isExisting={Boolean(selectedCampaign)}
-            configurationAvailable={!selectedCampaign || Boolean(selectedDraft)}
+            configurationStatus={
+              !selectedCampaign || selectedDraft
+                ? "ready"
+                : configurationFailures[selectedCampaign.id]
+                  ? "unavailable"
+                  : "loading"
+            }
           />
 
           {selectedCampaign ? (
@@ -669,22 +718,26 @@ function CampaignEditor({
   onSave,
   isPending,
   isExisting,
-  configurationAvailable,
+  configurationStatus,
 }: {
   draft: GiveawayEditorDraft;
   onChange: React.Dispatch<React.SetStateAction<GiveawayEditorDraft>>;
   onSave: () => void;
   isPending: boolean;
   isExisting: boolean;
-  configurationAvailable: boolean;
+  configurationStatus: "ready" | "loading" | "unavailable";
 }) {
-  if (!configurationAvailable) {
+  if (configurationStatus !== "ready") {
     return (
       <Card className="border-dashed">
         <CardHeader>
-          <CardTitle>Policy details are loading</CardTitle>
+          <CardTitle>
+            {configurationStatus === "loading" ? "Policy details are loading" : "Policy details are unavailable"}
+          </CardTitle>
           <CardDescription>
-            This workspace has the campaign summary, but not its scoped policy data. Its mechanics and terms stay protected until the organizer-only configuration is available.
+            {configurationStatus === "loading"
+              ? "This workspace has the campaign summary, but not its scoped policy data. Its mechanics and terms stay protected until the organizer-only configuration is available."
+              : "No policy fields can be changed until this organizer-only configuration is available. Refresh to try again."}
           </CardDescription>
         </CardHeader>
       </Card>
@@ -936,6 +989,87 @@ function DateTimeField({ label, value, onChange }: { label: string; value: strin
 function GroupCheckboxes({ pool, groups, onChange }: { pool: GiveawayPrizePoolInput; groups: GiveawayEligibilityGroupInput[]; onChange: (groupIds: string[]) => void }) {
   const selected = new Set(pool.eligibilityGroupIds ?? []);
   return <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">{groups.map((group) => <label key={group.id} className="flex items-center gap-1.5 text-xs font-normal"><input type="checkbox" checked={selected.has(group.id)} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(group.id); else next.delete(group.id); onChange([...next]); }} />{group.label}</label>)}</div>;
+}
+
+export function toOrganizerGiveawayEditorDraft(
+  workspace: OrganizerGiveawayWorkspaceData,
+): GiveawayEditorDraft {
+  return {
+    title: workspace.title,
+    kind: workspace.kind,
+    entryMode: workspace.entryMode,
+    maxEntriesPerRider: workspace.maxEntriesPerRider,
+    mechanics: workspace.mechanics,
+    terms: workspace.terms,
+    sponsorDisclosure: workspace.sponsorDisclosure ?? "",
+    timeZone: workspace.timeZone,
+    publicVisibility: workspace.publicVisibility,
+    presenceVerificationRequired: workspace.presenceVerificationRequired,
+    winnerLimitPerRider: workspace.winnerLimits.perRider,
+    winnerLimitTotal: workspace.winnerLimits.total,
+    entryOpensAt: toDateTimeLocal(workspace.entryOpensAt, workspace.timeZone),
+    entryClosesAt: toDateTimeLocal(workspace.entryClosesAt, workspace.timeZone),
+    drawAt: toDateTimeLocal(workspace.drawAt, workspace.timeZone),
+    claimDeadlineAt: toDateTimeLocal(workspace.claimDeadlineAt, workspace.timeZone),
+    eligibilityGroups: workspace.eligibilityGroups.map((group) => ({
+      ...group,
+      conditions: group.conditions.map((condition) => ({ ...condition })),
+    })),
+    prizePools: workspace.prizePools.map((pool) => clonePrizePool(pool)),
+  };
+}
+
+function clonePrizePool(pool: GiveawayPrizePoolInput): GiveawayPrizePoolInput {
+  const base = {
+    id: pool.id,
+    title: pool.title,
+    fulfilmentMode: pool.fulfilmentMode,
+    ...(pool.eligibilityGroupIds ? { eligibilityGroupIds: [...pool.eligibilityGroupIds] } : {}),
+    ...(pool.perRiderLimit ? { perRiderLimit: pool.perRiderLimit } : {}),
+    ...(pool.presenceVerificationRequired !== undefined
+      ? { presenceVerificationRequired: pool.presenceVerificationRequired }
+      : {}),
+  };
+  if (pool.inventory.kind === "unlimited") {
+    return { ...base, awardMode: "guaranteed", inventory: { kind: "unlimited" }, items: [] };
+  }
+  return {
+    ...base,
+    awardMode: pool.awardMode,
+    inventory: { kind: "finite", quantity: pool.inventory.quantity },
+    items: pool.items.map((item) => ({ ...item })) as GiveawayPrizePoolInput["items"],
+  } as GiveawayPrizePoolInput;
+}
+
+function toDateTimeLocal(value: string | undefined, timeZone: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value;
+    const [year, month, day, hour, minute] = [
+      valueFor("year"),
+      valueFor("month"),
+      valueFor("day"),
+      valueFor("hour"),
+      valueFor("minute"),
+    ];
+    return year && month && day && hour && minute
+      ? `${year}-${month}-${day}T${hour}:${minute}`
+      : "";
+  } catch {
+    return value.slice(0, 16);
+  }
 }
 
 function createEmptyDraft(): GiveawayEditorDraft {

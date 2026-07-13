@@ -13,6 +13,7 @@ import {
   EllipsisVerticalIcon,
   FileCheck2Icon,
   GaugeIcon,
+  GiftIcon,
   QrCodeIcon,
   ScanLineIcon,
   ShieldAlertIcon,
@@ -60,6 +61,7 @@ import {
 } from "@/components/ui/sidebar";
 import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
 import { CheckInPolicyPanel } from "@/features/check-in/check-in-policy-panel";
+import { OrganizerGiveawayWorkspace } from "@/features/giveaways/organizer-giveaway-workspace";
 import { demoEvents, getVenue, mockUsers, venues } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type {
@@ -82,6 +84,7 @@ export type OrganizerSection =
   | "event"
   | "attendees"
   | "scanner"
+  | "giveaways"
   | "reports"
   | "report";
 
@@ -144,6 +147,11 @@ const sectionCopy: Record<OrganizerSection, { title: string; description: string
     description: "Run event-day QR checks and manual pass outcomes for assigned riders.",
     status: "Check-in",
   },
+  giveaways: {
+    title: "Giveaways",
+    description: "Configure event-scoped campaign policy, lifecycle, draws, and aggregate outcomes.",
+    status: "Campaigns",
+  },
   reports: {
     title: "Organizer reports",
     description: "Compare RSVP, check-in, no-show, and perk activity across your events.",
@@ -205,7 +213,7 @@ export function OrganizerConsole({
   const organizerEvents = getOrganizerEvents(currentUser, events);
   const selectedEvent = getSelectedEvent(organizerEvents, eventId);
 
-  if ((section === "event" || section === "attendees" || section === "scanner" || section === "report") && !selectedEvent) {
+  if ((section === "event" || section === "attendees" || section === "scanner" || section === "giveaways" || section === "report") && !selectedEvent) {
     return (
       <OrganizerAccessState
         title="Event access needed"
@@ -276,6 +284,9 @@ export function OrganizerConsole({
                 scanPass={scanPass}
                 checkedInCount={selectedEvent.confirmedCheckIns ?? 0}
               />
+            ) : null}
+            {section === "giveaways" && selectedEvent ? (
+              <OrganizerGiveawayWorkspace eventId={selectedEvent.id} />
             ) : null}
             {section === "reports" ? <ReportsSection rows={reportRows} /> : null}
             {section === "report" && selectedEvent ? <ReportDetailSection event={selectedEvent} /> : null}
@@ -357,6 +368,12 @@ function OrganizerSidebar({
           href: `/organizer/events/${activeEventId}/scanner`,
           section: "scanner",
           icon: <ScanLineIcon />,
+        },
+        {
+          title: "Giveaways",
+          href: `/organizer/events/${activeEventId}/giveaways`,
+          section: "giveaways",
+          icon: <GiftIcon />,
         },
         {
           title: "Event report",
