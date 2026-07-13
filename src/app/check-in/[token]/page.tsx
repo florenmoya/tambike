@@ -1,4 +1,5 @@
 import { RiderSelfCheckInScreen } from "@/features/check-in/rider-self-check-in-screen";
+import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 
 export default async function CheckInPage({
   params,
@@ -7,5 +8,5 @@ export default async function CheckInPage({
 }) {
   const { token } = await params;
 
-  return <RiderSelfCheckInScreen token={token} />;
+  return <RiderSelfCheckInScreen token={decodeSelfCheckInToken(token)} />;
 }

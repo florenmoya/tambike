@@ -47,10 +47,15 @@ export function RiderSelfCheckInScreen({ token }: RiderSelfCheckInScreenProps) {
     let cancelled = false;
 
     void getSelfCheckInContextAction(token)
-      .then((nextContext) => {
+      .then((nextResult) => {
         if (!cancelled) {
-          setContext(nextContext);
-          setLoadError("");
+          if (nextResult.ok) {
+            setContext(nextResult.context);
+            setLoadError("");
+          } else {
+            setContext(null);
+            setLoadError(nextResult.body);
+          }
         }
       })
       .catch(() => {

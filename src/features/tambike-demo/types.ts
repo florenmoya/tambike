@@ -238,6 +238,18 @@ export type SelfCheckInCode =
   | "FORBIDDEN"
   | "ERROR";
 
+export type SelfCheckInContextActionResult =
+  | {
+      ok: true;
+      context: SelfCheckInContext;
+    }
+  | {
+      ok: false;
+      code: SelfCheckInCode;
+      title: string;
+      body: string;
+    };
+
 export interface DemoState {
   currentUser: UserProfile | null;
   users: UserProfile[];

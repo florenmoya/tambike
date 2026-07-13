@@ -10,9 +10,11 @@ import type {
   ScanPassCode,
   ScanPassResult,
   SelfCheckInActionResult,
+  SelfCheckInContextActionResult,
   SelfCheckInCode,
   SignupInput,
 } from "@/features/tambike-demo/types";
+import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 import { BackendError, getTambikeBackend } from "./backend";
 import { clearSessionToken, readSessionToken, setSessionToken } from "./session-cookie";
 
@@ -102,18 +104,31 @@ export async function issueSelfCheckInQrAction(eventId: string) {
   return backend.issueSelfCheckInQr(token, eventId);
 }
 
-export async function getSelfCheckInContextAction(qrToken: string) {
-  const backend = await getTambikeBackend();
-  const token = qrToken.trim();
-  if (!token) {
-    throw new BackendError("QR_EXPIRED", "QR_EXPIRED");
+export async function getSelfCheckInContextAction(
+  qrToken: string,
+): Promise<SelfCheckInContextActionResult> {
+  try {
+    const token = decodeSelfCheckInToken(qrToken);
+    if (!token) {
+      throw new BackendError("QR_EXPIRED", "QR_EXPIRED");
+    }
+
+    const backend = await getTambikeBackend();
+    return { ok: true, context: await backend.getSelfCheckInContext(token) };
+  } catch (error) {
+    const code = selfCheckInCodeFor(error);
+    return {
+      ok: false,
+      code,
+      title: selfCheckInTitleFor(code),
+      body: selfCheckInBodyFor(code),
+    };
   }
-  return backend.getSelfCheckInContext(token);
 }
 
 export async function selfCheckInAction(qrToken: string): Promise<SelfCheckInActionResult> {
   const backend = await getTambikeBackend();
-  const token = qrToken.trim();
+  const token = decodeSelfCheckInToken(qrToken);
 
   try {
     if (!token) {
