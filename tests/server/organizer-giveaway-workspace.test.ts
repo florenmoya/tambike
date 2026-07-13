@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
 
@@ -11,6 +11,7 @@ import {
   buildGiveawayLifecycleRoute,
   CampaignEntryOperations,
   OrganizerGiveawayWorkspace,
+  submitCampaignCode,
   toOrganizerGiveawayEditorDraft,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
 
@@ -212,5 +213,37 @@ describe("organizer giveaway lifecycle route", () => {
     expect(manualMarkup).toContain("Reason for the audit trail");
     expect(manualMarkup).not.toContain("Campaign-code access");
     expect(manualMarkup).not.toContain("gwy_visible_once");
+  });
+
+  test("rejects a syntactically valid past campaign-code expiry before creating a code", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const onCreateCode = vi.fn();
+
+    try {
+      const inputError = submitCampaignCode({
+        maxUsesInput: "3",
+        expiresAtInput: "2029-12-31T23:59",
+        onCreateCode,
+      });
+
+      expect(inputError).toBe("Choose a future expiry time.");
+      expect(onCreateCode).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps the server-controlled default expiry when a campaign-code expiry is blank", () => {
+    const onCreateCode = vi.fn();
+
+    const inputError = submitCampaignCode({
+      maxUsesInput: "3",
+      expiresAtInput: "",
+      onCreateCode,
+    });
+
+    expect(inputError).toBeNull();
+    expect(onCreateCode).toHaveBeenCalledWith({ maxUses: 3 });
   });
 });

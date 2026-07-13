@@ -1085,18 +1085,7 @@ function CampaignCodeControls({
 
   const createCode = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const maxUses = Number(maxUsesInput);
-    const expiresAt = optionalLocalDateTimeToIso(expiresAtInput);
-    if (!Number.isInteger(maxUses) || maxUses < 1) {
-      setInputError("Enter a whole number of uses greater than zero.");
-      return;
-    }
-    if (expiresAtInput && !expiresAt) {
-      setInputError("Enter a valid future expiry time or leave it blank for the 24-hour default.");
-      return;
-    }
-    setInputError(null);
-    onCreateCode({ maxUses, ...(expiresAt ? { expiresAt } : {}) });
+    setInputError(submitCampaignCode({ maxUsesInput, expiresAtInput, onCreateCode }));
   };
 
   return (
@@ -1205,6 +1194,31 @@ function CampaignCodeControls({
       </CardContent>
     </Card>
   );
+}
+
+export function submitCampaignCode({
+  maxUsesInput,
+  expiresAtInput,
+  onCreateCode,
+}: {
+  maxUsesInput: string;
+  expiresAtInput: string;
+  onCreateCode: (input: CreateGiveawayCampaignCodeInput) => void;
+}): string | null {
+  const maxUses = Number(maxUsesInput);
+  const expiresAt = optionalLocalDateTimeToIso(expiresAtInput);
+  if (!Number.isInteger(maxUses) || maxUses < 1) {
+    return "Enter a whole number of uses greater than zero.";
+  }
+  if (expiresAtInput && !expiresAt) {
+    return "Enter a valid future expiry time or leave it blank for the 24-hour default.";
+  }
+  if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+    return "Choose a future expiry time.";
+  }
+
+  onCreateCode({ maxUses, ...(expiresAt ? { expiresAt } : {}) });
+  return null;
 }
 
 function ManualEntryControls({
