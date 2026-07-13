@@ -53,6 +53,7 @@ export type AdminSection =
   | "overview"
   | "organizers"
   | "events"
+  | "giveaways"
   | "reports"
   | "users"
   | "validation"
@@ -137,6 +138,11 @@ const sectionCopy: Record<AdminSection, { title: string; description: string; st
     description: "Screen events that need admin review before publishing to riders.",
     status: "Publishing",
   },
+  giveaways: {
+    title: "Giveaway review",
+    description: "Review campaign mechanics, protected award interventions, and claim-desk access.",
+    status: "Giveaways",
+  },
   reports: {
     title: "Reports",
     description: "Scan attendance, no-show, and perk activity across published Tambike events.",
@@ -160,12 +166,14 @@ const sectionCopy: Record<AdminSection, { title: string; description: string; st
 };
 
 export function AdminConsole({
+  giveawayContent,
   organizerId,
   reportEventId,
   reviewId,
   section,
 }: {
   section: AdminSection;
+  giveawayContent?: React.ReactNode;
   organizerId?: string;
   reportEventId?: string;
   reviewId?: string;
@@ -292,6 +300,7 @@ export function AdminConsole({
               <OrganizersSection onSetStatus={setOrganizerStatus} rows={organizerRows} />
             ) : null}
             {!hasDetail && section === "events" ? <EventsSection rows={eventRows} /> : null}
+            {!hasDetail && section === "giveaways" ? giveawayContent : null}
             {!hasDetail && section === "reports" ? <ReportsSection rows={reportRows} /> : null}
             {!hasDetail && section === "users" ? (
               <UsersSection currentUserId={currentUser.id} onSetStatus={setUserStatus} rows={userRows} />

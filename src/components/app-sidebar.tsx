@@ -6,6 +6,7 @@ import {
   BarChart3Icon,
   CheckSquareIcon,
   FileCheck2Icon,
+  GiftIcon,
   GaugeIcon,
   ShieldCheckIcon,
   UploadCloudIcon,
@@ -60,6 +61,12 @@ const primaryNav: Array<{
     section: "events",
     icon: <FileCheck2Icon />,
     badge: "pendingEvents",
+  },
+  {
+    title: "Giveaway review",
+    href: "/admin/giveaways",
+    section: "giveaways",
+    icon: <GiftIcon />,
   },
   {
     title: "Reports",

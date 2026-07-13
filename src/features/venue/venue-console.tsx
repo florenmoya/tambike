@@ -12,6 +12,7 @@ import {
   ClipboardCheckIcon,
   EllipsisVerticalIcon,
   FileCheck2Icon,
+  GiftIcon,
   GaugeIcon,
   QrCodeIcon,
   ScanLineIcon,
@@ -345,6 +346,12 @@ function VenueSidebar({
           icon: <ScanLineIcon />,
         },
         {
+          title: "Giveaway claims",
+          href: `/venue/events/${activeEventId}/giveaways`,
+          section: "event",
+          icon: <GiftIcon />,
+        },
+        {
           title: "Event report",
           href: `/venue/events/${activeEventId}/report`,
           section: "report",
@@ -648,6 +655,9 @@ function EventDetailSection({ event }: { event: Event }) {
           <Button asChild variant="outline">
             <Link href={`/venue/events/${event.id}/report`}>Open report</Link>
           </Button>
+          <Button asChild variant="outline">
+            <Link href={`/venue/events/${event.id}/giveaways`}>Open giveaway claims</Link>
+          </Button>
         </CardContent>
       </Card>
     </div>
@@ -841,6 +851,7 @@ const eventColumns: ColumnDef<VenueEventRow>[] = [
   actionsColumn<VenueEventRow>((row) => [
     { label: "Open workspace", href: `/venue/events/${row.id}` },
     { label: "Check-in", href: `/venue/events/${row.id}/checkin` },
+    { label: "Giveaway claims", href: `/venue/events/${row.id}/giveaways` },
     { label: "Report", href: `/venue/events/${row.id}/report` },
   ]),
 ];
