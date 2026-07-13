@@ -1,9 +1,12 @@
 "use server";
 
 import type {
+  CreateGiveawayCampaignCodeInput,
   CreateGiveawayInput,
   FulfillGiveawayAwardInput,
+  GrantManualGiveawayEntryInput,
   GiveawayDeliveryDetailsInput,
+  RevokeManualGiveawayEntryInput,
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
 } from "@/features/giveaways/types";
@@ -37,186 +40,204 @@ function runPublicGiveawayAction<T>(
   return executePublicGiveawayAction({ readSessionToken }, operation);
 }
 
-export function createGiveawayAction(input: CreateGiveawayInput) {
+export async function createGiveawayAction(input: CreateGiveawayInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.createGiveaway(sessionToken, input.eventId, input);
   });
 }
 
-export function updateGiveawayAction(input: UpdateGiveawayInput) {
+export async function updateGiveawayAction(input: UpdateGiveawayInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.updateGiveaway(sessionToken, input);
   });
 }
 
-export function listOrganizerGiveawaysAction(eventId: string) {
+export async function listOrganizerGiveawaysAction(eventId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listOrganizerGiveaways(sessionToken, eventId);
   });
 }
 
-export function getOrganizerGiveawayWorkspaceAction(giveawayId: string) {
+export async function getOrganizerGiveawayWorkspaceAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getOrganizerGiveawayWorkspace(sessionToken, giveawayId);
   });
 }
 
-export function listAdminGiveawaysAction() {
+export async function listGiveawayCampaignCodesAction(giveawayId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listGiveawayCampaignCodes(sessionToken, giveawayId);
+  });
+}
+
+export async function listGiveawayManualEntryCandidatesAction(giveawayId: string) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.listGiveawayManualEntryCandidates(sessionToken, giveawayId);
+  });
+}
+
+export async function listAdminGiveawaysAction() {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listAdminGiveaways(sessionToken);
   });
 }
 
-export function listPublicGiveawaysForEventAction(eventId: string) {
+export async function listPublicGiveawaysForEventAction(eventId: string) {
   return runPublicGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listPublicGiveawaysForEvent(eventId, sessionToken);
   });
 }
 
-export function submitGiveawayForReviewAction(giveawayId: string) {
+export async function submitGiveawayForReviewAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.submitGiveawayForReview(sessionToken, giveawayId);
   });
 }
 
-export function reviewGiveawayComplianceAction(giveawayId: string, input: unknown) {
+export async function reviewGiveawayComplianceAction(giveawayId: string, input: unknown) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.reviewGiveawayCompliance(sessionToken, giveawayId, input);
   });
 }
 
-export function scheduleGiveawayAction(giveawayId: string) {
+export async function scheduleGiveawayAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.scheduleGiveaway(sessionToken, giveawayId);
   });
 }
 
-export function openGiveawayAction(giveawayId: string) {
+export async function openGiveawayAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.openGiveaway(sessionToken, giveawayId);
   });
 }
 
-export function pauseGiveawayAction(giveawayId: string) {
+export async function pauseGiveawayAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.pauseGiveaway(sessionToken, giveawayId);
   });
 }
 
-export function lockGiveawayAction(giveawayId: string) {
+export async function lockGiveawayAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.lockGiveaway(sessionToken, giveawayId);
   });
 }
 
-export function cancelGiveawayAction(giveawayId: string, reason: string) {
+export async function cancelGiveawayAction(giveawayId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.cancelGiveaway(sessionToken, giveawayId, reason);
   });
 }
 
-export function suspendGiveawayAction(giveawayId: string, reason: string) {
+export async function suspendGiveawayAction(giveawayId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.suspendGiveaway(sessionToken, giveawayId, reason);
   });
 }
 
-export function optInToGiveawayAction(giveawayId: string) {
+export async function optInToGiveawayAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.optInToGiveaway(sessionToken, giveawayId);
   });
 }
 
-export function createGiveawayCampaignCodeAction(giveawayId: string, input: unknown) {
+export async function createGiveawayCampaignCodeAction(
+  giveawayId: string,
+  input: CreateGiveawayCampaignCodeInput,
+) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.createGiveawayCampaignCode(sessionToken, giveawayId, input);
   });
 }
 
-export function claimGiveawayCampaignCodeAction(giveawayId: string, code: string) {
+export async function claimGiveawayCampaignCodeAction(giveawayId: string, code: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.claimGiveawayCampaignCode(sessionToken, giveawayId, code);
   });
 }
 
-export function grantManualGiveawayEntryAction(input: unknown) {
+export async function grantManualGiveawayEntryAction(input: GrantManualGiveawayEntryInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.grantManualGiveawayEntry(sessionToken, input);
   });
 }
 
-export function revokeManualGiveawayEntryAction(
-  giveawayId: string,
-  riderId: string,
-  reason: string,
-) {
+export async function revokeManualGiveawayEntryAction(input: RevokeManualGiveawayEntryInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
-    return backend.revokeManualGiveawayEntry(sessionToken, giveawayId, riderId, reason);
+    return backend.revokeManualGiveawayEntry(
+      sessionToken,
+      input.giveawayId,
+      input.riderId,
+      input.reason,
+    );
   });
 }
 
-export function getRiderGiveawayStateAction(giveawayId: string) {
+export async function getRiderGiveawayStateAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getRiderGiveawayState(sessionToken, giveawayId);
   });
 }
 
-export function listRiderGiveawayStatesForEventAction(eventId: string) {
+export async function listRiderGiveawayStatesForEventAction(eventId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listRiderGiveawayStatesForEvent(sessionToken, eventId);
   });
 }
 
-export function getRiderGiveawayClaimContextAction(awardId: string) {
+export async function getRiderGiveawayClaimContextAction(awardId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getRiderGiveawayClaimContext(sessionToken, awardId);
   });
 }
 
-export function declineGiveawayAwardAction(awardId: string, reason: string) {
+export async function declineGiveawayAwardAction(awardId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.declineGiveawayAward(sessionToken, awardId, reason);
   });
 }
 
-export function runGiveawayDrawAction(input: unknown) {
+export async function runGiveawayDrawAction(input: unknown) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.runGiveawayDraw(sessionToken, input);
   });
 }
 
-export function selectManualGiveawayAwardAction(input: unknown) {
+export async function selectManualGiveawayAwardAction(input: unknown) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.selectManualGiveawayAward(sessionToken, input);
   });
 }
 
-export function publishGiveawayDrawAction(giveawayId: string, drawId: string) {
+export async function publishGiveawayDrawAction(giveawayId: string, drawId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.publishGiveawayDraw(sessionToken, giveawayId, drawId);
@@ -227,7 +248,7 @@ export function publishGiveawayDrawAction(giveawayId: string, drawId: string) {
  * This is the only action permitted to return a raw claim secret. The backend
  * enforces that the caller is the winning rider and stores only a hash.
  */
-export function issueGiveawayClaimTokenAction(
+export async function issueGiveawayClaimTokenAction(
   awardId: string,
   input: GiveawayClaimTokenIssueInput = {},
 ) {
@@ -237,63 +258,63 @@ export function issueGiveawayClaimTokenAction(
   });
 }
 
-export function resolveGiveawayClaimAction(payload: string) {
+export async function resolveGiveawayClaimAction(payload: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.resolveGiveawayClaim(sessionToken, payload);
   });
 }
 
-export function verifyGiveawayClaimAction(input: VerifyGiveawayClaimInput) {
+export async function verifyGiveawayClaimAction(input: VerifyGiveawayClaimInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.verifyGiveawayClaim(sessionToken, input);
   });
 }
 
-export function fulfillGiveawayAwardAction(input: FulfillGiveawayAwardInput) {
+export async function fulfillGiveawayAwardAction(input: FulfillGiveawayAwardInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.fulfillGiveawayAward(sessionToken, input);
   });
 }
 
-export function listGiveawayOperatorClaimsAction(giveawayId: string) {
+export async function listGiveawayOperatorClaimsAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayOperatorClaims(sessionToken, giveawayId);
   });
 }
 
-export function listEventGiveawayOperatorClaimsAction(eventId: string) {
+export async function listEventGiveawayOperatorClaimsAction(eventId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listEventGiveawayOperatorClaims(sessionToken, eventId);
   });
 }
 
-export function listGiveawayOperatorCandidatesAction(eventId: string) {
+export async function listGiveawayOperatorCandidatesAction(eventId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayOperatorCandidates(sessionToken, eventId);
   });
 }
 
-export function grantGiveawayOperatorAction(giveawayId: string, userId: string) {
+export async function grantGiveawayOperatorAction(giveawayId: string, userId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.grantGiveawayOperator(sessionToken, giveawayId, userId);
   });
 }
 
-export function revokeGiveawayOperatorAction(assignmentId: string, reason: string) {
+export async function revokeGiveawayOperatorAction(assignmentId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.revokeGiveawayOperator(sessionToken, assignmentId, reason);
   });
 }
 
-export function submitGiveawayDeliveryDetailsAction(
+export async function submitGiveawayDeliveryDetailsAction(
   awardId: string,
   input: GiveawayDeliveryDetailsInput,
 ) {
@@ -303,77 +324,77 @@ export function submitGiveawayDeliveryDetailsAction(
   });
 }
 
-export function readGiveawayDeliveryDetailsAction(awardId: string) {
+export async function readGiveawayDeliveryDetailsAction(awardId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.readGiveawayDeliveryDetails(sessionToken, awardId);
   });
 }
 
-export function withdrawGiveawayDeliveryDetailsAction(awardId: string) {
+export async function withdrawGiveawayDeliveryDetailsAction(awardId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.withdrawGiveawayDeliveryDetails(sessionToken, awardId);
   });
 }
 
-export function voidGiveawayAwardAction(awardId: string, reason: string) {
+export async function voidGiveawayAwardAction(awardId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.voidGiveawayAward(sessionToken, awardId, reason);
   });
 }
 
-export function disqualifyGiveawayAwardAction(awardId: string, reason: string) {
+export async function disqualifyGiveawayAwardAction(awardId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.disqualifyGiveawayAward(sessionToken, awardId, reason);
   });
 }
 
-export function redrawGiveawayAwardAction(input: unknown) {
+export async function redrawGiveawayAwardAction(input: unknown) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.redrawGiveawayAward(sessionToken, input);
   });
 }
 
-export function recoverExpiredDirectGiveawayAwardAction(input: unknown) {
+export async function recoverExpiredDirectGiveawayAwardAction(input: unknown) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.recoverExpiredDirectGiveawayAward(sessionToken, input);
   });
 }
 
-export function settleGiveawayAwardAction(awardId: string, reason: string) {
+export async function settleGiveawayAwardAction(awardId: string, reason: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.settleGiveawayAward(sessionToken, awardId, reason);
   });
 }
 
-export function completeGiveawayClaimsAction(giveawayId: string) {
+export async function completeGiveawayClaimsAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.completeGiveawayClaims(sessionToken, giveawayId);
   });
 }
 
-export function getOrganizerGiveawayReportAction(giveawayId: string) {
+export async function getOrganizerGiveawayReportAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getOrganizerGiveawayReport(sessionToken, giveawayId);
   });
 }
 
-export function getAdminGiveawayAuditAction(giveawayId: string) {
+export async function getAdminGiveawayAuditAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.getAdminGiveawayAudit(sessionToken, giveawayId);
   });
 }
 
-export function listGiveawayNotificationsAction() {
+export async function listGiveawayNotificationsAction() {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.listGiveawayNotifications(sessionToken);

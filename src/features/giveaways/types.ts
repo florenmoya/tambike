@@ -347,6 +347,49 @@ export interface OrganizerGiveawayWorkspace {
   prizePools: GiveawayPrizePoolInput[];
 }
 
+/** Safe organizer/admin code inventory; raw codes and token hashes never leave creation. */
+export type GiveawayCampaignCodeStatus = "active" | "expired" | "exhausted" | "revoked";
+
+export interface GiveawayCampaignCodeSummary {
+  id: string;
+  maxUses: number;
+  usedUses: number;
+  expiresAt: string;
+  createdAt: string;
+  status: GiveawayCampaignCodeStatus;
+}
+
+/** A raw code is returned exactly once from code creation and is never persisted in a DTO. */
+export interface IssuedGiveawayCampaignCode {
+  id: string;
+  code: string;
+  maxUses: number;
+  expiresAt: string;
+}
+
+export interface CreateGiveawayCampaignCodeInput {
+  maxUses: number;
+  expiresAt?: string;
+}
+
+/** Event-scoped choice for an authorized organizer/admin manual-entry control. */
+export interface GiveawayManualEntryCandidate {
+  riderId: string;
+  label: string;
+}
+
+export interface GrantManualGiveawayEntryInput {
+  giveawayId: string;
+  riderId: string;
+  reason: string;
+}
+
+export interface RevokeManualGiveawayEntryInput {
+  giveawayId: string;
+  riderId: string;
+  reason: string;
+}
+
 /** Returned exactly once to the authenticated winner; never persist or place this in a URL. */
 export interface IssuedGiveawayClaimToken {
   awardId: string;

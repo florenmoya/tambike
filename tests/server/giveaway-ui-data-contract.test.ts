@@ -37,6 +37,23 @@ type GiveawayUiDataBackend = Awaited<ReturnType<typeof createTambikeTestBackend>
     sessionToken: string,
     giveawayId: string,
   ): Promise<OrganizerGiveawayWorkspace>;
+  listGiveawayCampaignCodes(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      maxUses: number;
+      usedUses: number;
+      expiresAt: string;
+      createdAt: string;
+      status: "active" | "expired" | "exhausted" | "revoked";
+    }>
+  >;
+  listGiveawayManualEntryCandidates(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<Array<{ riderId: string; label: string }>>;
 };
 
 function asGiveawayUiDataBackend(
@@ -138,6 +155,62 @@ async function createPublishedGiveaway(backend: GiveawayUiDataBackend) {
   if (!riderState.award) throw new Error("TEST_AWARD_MISSING");
 
   return { organizer, admin, venue, rider, event, giveaway, awardId: riderState.award.awardId };
+}
+
+async function createOpenEntryGiveaway(
+  backend: GiveawayUiDataBackend,
+  entryMode: "claim_code" | "manual_only",
+) {
+  const [organizer, admin, venue, rider] = await Promise.all([
+    backend.loginWithPassword("marco.organizer@example.com", "password123"),
+    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
+    backend.loginWithPassword("ana.venue@example.com", "password123"),
+    backend.loginWithPassword("mina.rider@example.com", "password123"),
+  ]);
+  const event = await backend.createEventDraft(organizer.sessionToken, {
+    title: `${entryMode} organizer controls`,
+    type: "Bike Night",
+    venueId: "shell-pugon",
+    date: "August 21, 2026",
+    time: "7:00 PM - 10:00 PM",
+    area: "Antipolo",
+    expectedRiders: 20,
+    perkPreview: "Flexible entry controls",
+  });
+  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
+  await backend.approvePublish(admin.sessionToken, event.id);
+  const giveaway = await backend.createGiveaway(organizer.sessionToken, event.id, {
+    ...giveawayInput(event.id),
+    title: `${entryMode} campaign`,
+    entryMode,
+    eligibilityGroups: [
+      {
+        id: "entry-group",
+        label: entryMode === "claim_code" ? "Code claimant" : "Manual event entrant",
+        weight: 1,
+        conditions:
+          entryMode === "claim_code"
+            ? [{ source: "campaign_code" }]
+            : [{ source: "manual" }, { source: "active_rsvp_pass" }],
+      },
+    ],
+    prizePools: [
+      {
+        id: "entry-prize-pool",
+        title: "Entry prize",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Ride prize" }],
+        eligibilityGroupIds: ["entry-group"],
+      },
+    ],
+  });
+  await backend.submitGiveawayForReview(organizer.sessionToken, giveaway.id);
+  await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, { decision: "approved" });
+  await backend.openGiveaway(organizer.sessionToken, giveaway.id);
+
+  return { organizer, admin, venue, rider, event, giveaway };
 }
 
 describe("giveaway UI data contracts", () => {
@@ -263,10 +336,130 @@ describe("giveaway UI data contracts", () => {
       backend.listEventGiveawayOperatorClaims(context.rider.sessionToken, context.event.id),
     ).resolves.toEqual([]);
   });
+
+  test("lists organizer campaign-code summaries without a raw code or token hash", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "claim_code");
+    const issued = await backend.createGiveawayCampaignCode(
+      context.organizer.sessionToken,
+      context.giveaway.id,
+      { maxUses: 1, expiresAt: "2026-08-22T00:00:00.000Z" },
+    );
+
+    const summaries = await backend.listGiveawayCampaignCodes(
+      context.organizer.sessionToken,
+      context.giveaway.id,
+    );
+
+    expect(summaries).toEqual([
+      {
+        id: issued.id,
+        maxUses: 1,
+        usedUses: 0,
+        expiresAt: "2026-08-22T00:00:00.000Z",
+        createdAt: expect.any(String),
+        status: "active",
+      },
+    ]);
+    expect(Object.keys(summaries[0] ?? {}).sort()).toEqual([
+      "createdAt",
+      "expiresAt",
+      "id",
+      "maxUses",
+      "status",
+      "usedUses",
+    ]);
+    expect(JSON.stringify(summaries)).not.toContain(issued.code);
+    expect(JSON.stringify(summaries)).not.toMatch(/tokenHash|claimedRider|rawCode|email/i);
+
+    await backend.claimGiveawayCampaignCode(
+      context.rider.sessionToken,
+      context.giveaway.id,
+      issued.code,
+    );
+    await expect(
+      backend.listGiveawayCampaignCodes(context.admin.sessionToken, context.giveaway.id),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: issued.id, usedUses: 1, status: "exhausted" }),
+    ]);
+    await expect(
+      backend.listGiveawayCampaignCodes(context.venue.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  test("does not create or expose campaign-code inventory outside claim-code mode", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "manual_only");
+
+    await expect(
+      backend.createGiveawayCampaignCode(context.organizer.sessionToken, context.giveaway.id, {
+        maxUses: 1,
+      }),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_MODE_INVALID" });
+    await expect(
+      backend.listGiveawayCampaignCodes(context.organizer.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_MODE_INVALID" });
+  });
+
+  test("lists only event-qualified manual-entry candidates with safe labels", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "manual_only");
+    await backend.registerForEvent(context.rider.sessionToken, context.event.id, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const unrelatedRider = await backend.signUpRider({
+      displayName: "Unrelated rider",
+      email: "unrelated-entry@example.com",
+      password: "password123",
+      area: "Antipolo",
+    });
+
+    const candidates = await backend.listGiveawayManualEntryCandidates(
+      context.organizer.sessionToken,
+      context.giveaway.id,
+    );
+
+    expect(candidates).toEqual([
+      { riderId: context.rider.user.id, label: context.rider.user.displayName },
+    ]);
+    expect(candidates.some((candidate) => candidate.riderId === unrelatedRider.user.id)).toBe(false);
+    expect(Object.keys(candidates[0] ?? {}).sort()).toEqual(["label", "riderId"]);
+    expect(JSON.stringify(candidates)).not.toMatch(/mina\.rider@example\.com|passId|sourceFact|phone/i);
+    await expect(
+      backend.listGiveawayManualEntryCandidates(context.admin.sessionToken, context.giveaway.id),
+    ).resolves.toEqual(candidates);
+    await expect(
+      backend.listGiveawayManualEntryCandidates(context.rider.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  test("rejects a suspended rider even when an authorized organizer submits a direct manual grant", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "manual_only");
+    await backend.registerForEvent(context.rider.sessionToken, context.event.id, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const store = backend as unknown as {
+      users: Map<string, { verificationStatus: string }>;
+    };
+    const rider = store.users.get(context.rider.user.id);
+    if (!rider) throw new Error("TEST_RIDER_MISSING");
+    rider.verificationStatus = "SUSPENDED";
+
+    await expect(
+      backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        riderId: context.rider.user.id,
+        reason: "Paper entry rejected after account suspension",
+      }),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_NOT_ELIGIBLE" });
+  });
 });
 
 describe("giveaway UI data action contracts", () => {
-  test("implements the same seven scoped reads in memory and Prisma backends", async () => {
+  test("implements the same scoped reads in memory and Prisma backends", async () => {
     const [memorySource, prismaSource] = await Promise.all([
       readFile(new URL("../../src/server/backend.ts", import.meta.url), "utf8"),
       readFile(new URL("../../src/server/prisma-backend.ts", import.meta.url), "utf8"),
@@ -280,6 +473,8 @@ describe("giveaway UI data action contracts", () => {
       "listEventGiveawayOperatorClaims",
       "listGiveawayOperatorCandidates",
       "getOrganizerGiveawayWorkspace",
+      "listGiveawayCampaignCodes",
+      "listGiveawayManualEntryCandidates",
     ]) {
       expect(memorySource).toContain(`async ${name}`);
       expect(prismaSource).toContain(`async ${name}`);
@@ -300,8 +495,31 @@ describe("giveaway UI data action contracts", () => {
       "listEventGiveawayOperatorClaimsAction",
       "listGiveawayOperatorCandidatesAction",
       "getOrganizerGiveawayWorkspaceAction",
+      "listGiveawayCampaignCodesAction",
+      "listGiveawayManualEntryCandidatesAction",
     ]) {
       expect(source).toContain(`function ${name}`);
     }
+  });
+
+  test("uses typed organizer campaign-code and manual-entry action inputs", async () => {
+    const source = await readFile(
+      new URL("../../src/server/giveaway-actions.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("input: CreateGiveawayCampaignCodeInput");
+    expect(source).toContain("input: GrantManualGiveawayEntryInput");
+    expect(source).toContain("input: RevokeManualGiveawayEntryInput");
+  });
+
+  test("declares every giveaway server action as asynchronous for Next server-function calls", async () => {
+    const source = await readFile(
+      new URL("../../src/server/giveaway-actions.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source.match(/^export function /gm) ?? []).toEqual([]);
+    expect(source.match(/^export async function /gm)?.length).toBeGreaterThan(0);
   });
 });

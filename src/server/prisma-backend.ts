@@ -6,8 +6,11 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import type {
   AdminGiveawayAudit,
+  CreateGiveawayCampaignCodeInput,
   CreateGiveawayInput,
   EventGiveawayOperatorQueueItem,
+  GiveawayCampaignCodeStatus,
+  GiveawayCampaignCodeSummary,
   FulfillGiveawayAwardInput,
   GiveawayCampaignListItem,
   GiveawayClaimScannerMethod,
@@ -15,6 +18,7 @@ import type {
   GiveawayEligibilityConditionInput,
   GiveawayFulfilmentMode,
   GiveawayLifecycleAdvanceResult,
+  GiveawayManualEntryCandidate,
   GiveawayNotification,
   GiveawayNotificationKind,
   GiveawayOperatorCandidate,
@@ -22,6 +26,8 @@ import type {
   GiveawayPublicVisibility,
   GiveawayState,
   IssuedGiveawayClaimToken,
+  IssuedGiveawayCampaignCode,
+  GrantManualGiveawayEntryInput,
   OrganizerGiveawayWorkspace,
   OperatorGiveawayClaimView,
   OrganizerGiveawayReport,
@@ -760,6 +766,98 @@ export class PrismaTambikeBackend {
     return this.toOrganizerGiveawayWorkspace(giveaway);
   }
 
+  /**
+   * Authorized configuration inventory only. This deliberately selects none
+   * of the raw-code, hash, claimant, or creator fields.
+   */
+  async listGiveawayCampaignCodes(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<GiveawayCampaignCodeSummary[]> {
+    const user = await this.requireUser(sessionToken);
+    const giveaway = await this.requireGiveawayCampaign(giveawayId);
+    this.requireGiveawayConfigurator(user, giveaway.event);
+    if (giveaway.entryMode !== "claim_code") {
+      throw new BackendError("GIVEAWAY_ENTRY_MODE_INVALID", "GIVEAWAY_ENTRY_MODE_INVALID");
+    }
+    const codes = await this.prisma.giveawayCampaignCode.findMany({
+      where: { giveawayId: giveaway.id },
+      select: {
+        id: true,
+        maxUses: true,
+        useCount: true,
+        expiresAt: true,
+        createdAt: true,
+        revokedAt: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const now = Date.now();
+
+    return codes.map((code) => {
+      const status: GiveawayCampaignCodeStatus = code.revokedAt
+        ? "revoked"
+        : code.expiresAt.getTime() <= now
+          ? "expired"
+          : code.useCount >= code.maxUses
+            ? "exhausted"
+            : "active";
+      return {
+        id: code.id,
+        maxUses: code.maxUses,
+        usedUses: code.useCount,
+        expiresAt: code.expiresAt.toISOString(),
+        createdAt: code.createdAt.toISOString(),
+        status,
+      };
+    });
+  }
+
+  /**
+   * Event-scoped choices for the open manual-entry control. The response
+   * intentionally contains no email, phone, source facts, or entry state.
+   */
+  async listGiveawayManualEntryCandidates(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<GiveawayManualEntryCandidate[]> {
+    const user = await this.requireUser(sessionToken);
+    const giveaway = await this.requireGiveawayCampaign(giveawayId);
+    this.requireGiveawayConfigurator(user, giveaway.event);
+    if (giveaway.status !== "open" || giveaway.entryMode !== "manual_only") return [];
+
+    const riderIds = await this.riderIdsWithGiveawayActivity(this.prisma, giveaway.eventId);
+    if (riderIds.length === 0) return [];
+    const riders = await this.prisma.user.findMany({
+      where: {
+        id: { in: riderIds },
+        role: "rider",
+        verificationStatus: { not: "SUSPENDED" },
+      },
+      select: { id: true, displayName: true },
+    });
+    const actionAt = new Date();
+    const candidates = await Promise.all(
+      riders.map(async (rider) => {
+        const qualification = await this.evaluateGiveawayEntryQualification(
+          this.prisma,
+          giveaway,
+          rider.id,
+          { manual: true, actionAt },
+        );
+        return qualification.weight > 0
+          ? { riderId: rider.id, label: rider.displayName.trim() || "Unnamed rider" }
+          : null;
+      }),
+    );
+    return candidates
+      .filter((candidate): candidate is GiveawayManualEntryCandidate => candidate !== null)
+      .sort(
+        (left, right) =>
+          left.label.localeCompare(right.label) || left.riderId.localeCompare(right.riderId),
+      );
+  }
+
   /** Minimal cross-event administrator campaign list; entrant records stay private. */
   async listAdminGiveaways(sessionToken: string): Promise<GiveawayCampaignListItem[]> {
     await this.requireRole(sessionToken, "admin");
@@ -1464,13 +1562,20 @@ export class PrismaTambikeBackend {
     });
   }
 
-  async createGiveawayCampaignCode(sessionToken: string, giveawayId: string, input: unknown) {
+  async createGiveawayCampaignCode(
+    sessionToken: string,
+    giveawayId: string,
+    input: CreateGiveawayCampaignCodeInput,
+  ): Promise<IssuedGiveawayCampaignCode> {
     const organizer = await this.requireUser(sessionToken);
     const parsed = this.parseGiveawayCampaignCodeInput(input);
     const code = `gwy_${randomBytes(24).toString("base64url")}`;
     return this.prisma.$transaction(async (tx) => {
       const giveaway = await this.lockGiveawayCampaign(tx, giveawayId);
       this.requireGiveawayConfigurator(organizer, giveaway.event);
+      if (giveaway.entryMode !== "claim_code") {
+        throw new BackendError("GIVEAWAY_ENTRY_MODE_INVALID", "GIVEAWAY_ENTRY_MODE_INVALID");
+      }
       if (!["draft", "scheduled", "open", "paused"].includes(giveaway.status)) {
         throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
       }
@@ -1580,7 +1685,7 @@ export class PrismaTambikeBackend {
 
   async grantManualGiveawayEntry(
     sessionToken: string,
-    input: unknown,
+    input: GrantManualGiveawayEntryInput,
   ): Promise<RiderGiveawayState> {
     const parsed = this.parseManualGiveawayEntryInput(input);
     const organizer = await this.requireUser(sessionToken);
@@ -1591,6 +1696,9 @@ export class PrismaTambikeBackend {
       const rider = await tx.user.findUnique({ where: { id: parsed.riderId } });
       if (!rider || rider.role !== "rider") {
         throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
+      if (rider.verificationStatus === "SUSPENDED") {
+        throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
       }
       const existing = await this.lockGiveawayEntry(tx, giveaway.id, rider.id);
       if (existing && existing.status !== "withdrawn") {
@@ -5791,7 +5899,7 @@ export class PrismaTambikeBackend {
   }
 
   private async evaluateGiveawayEntryQualification(
-    tx: Prisma.TransactionClient,
+    tx: Prisma.TransactionClient | PrismaClient,
     giveaway: GiveawayConfiguration,
     riderId: string,
     context: { campaignCode?: boolean; manual?: boolean; actionAt?: Date } = {},
@@ -5850,7 +5958,7 @@ export class PrismaTambikeBackend {
   }
 
   private async evaluateGiveawayCondition(
-    tx: Prisma.TransactionClient,
+    tx: Prisma.TransactionClient | PrismaClient,
     eventId: string,
     riderId: string,
     condition: GiveawayEligibilityConditionInput,
@@ -6827,7 +6935,10 @@ export class PrismaTambikeBackend {
     }
   }
 
-  private async riderIdsWithGiveawayActivity(tx: Prisma.TransactionClient, eventId: string) {
+  private async riderIdsWithGiveawayActivity(
+    tx: Prisma.TransactionClient | PrismaClient,
+    eventId: string,
+  ) {
     const [rsvps, passes, checkIns] = await Promise.all([
       tx.rSVP.findMany({ where: { eventId }, select: { userId: true } }),
       tx.pass.findMany({ where: { eventId }, select: { userId: true } }),

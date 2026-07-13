@@ -6,8 +6,11 @@ import type { PrismaTambikeBackend } from "./prisma-backend";
 import { getRuntimeDatabaseUrl } from "./database-url";
 import type {
   AdminGiveawayAudit,
+  CreateGiveawayCampaignCodeInput,
   CreateGiveawayInput,
   EventGiveawayOperatorQueueItem,
+  GiveawayCampaignCodeStatus,
+  GiveawayCampaignCodeSummary,
   FulfillGiveawayAwardInput,
   GiveawayCampaignListItem,
   GiveawayClaimScannerMethod,
@@ -18,6 +21,7 @@ import type {
   GiveawayFulfilmentMode,
   GiveawayKind,
   GiveawayLifecycleAdvanceResult,
+  GiveawayManualEntryCandidate,
   GiveawayNotification,
   GiveawayNotificationKind,
   GiveawayOperatorCandidate,
@@ -25,6 +29,8 @@ import type {
   GiveawayPublicVisibility,
   GiveawayState,
   IssuedGiveawayClaimToken,
+  IssuedGiveawayCampaignCode,
+  GrantManualGiveawayEntryInput,
   OrganizerGiveawayWorkspace,
   OrganizerGiveawayReport,
   OperatorGiveawayClaimView,
@@ -1219,6 +1225,76 @@ export class TambikeBackend {
     return this.toOrganizerGiveawayWorkspace(giveaway);
   }
 
+  /**
+   * Authorized configuration inventory only. The raw campaign code and its
+   * stored hash remain creation/audit-only secrets.
+   */
+  async listGiveawayCampaignCodes(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<GiveawayCampaignCodeSummary[]> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    if (giveaway.entryMode !== "claim_code") {
+      throw new BackendError("GIVEAWAY_ENTRY_MODE_INVALID", "GIVEAWAY_ENTRY_MODE_INVALID");
+    }
+    const now = Date.now();
+
+    return [...giveaway.campaignCodes]
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      )
+      .map((code) => {
+        const status: GiveawayCampaignCodeStatus = code.revokedAt
+          ? "revoked"
+          : new Date(code.expiresAt).getTime() <= now
+            ? "expired"
+            : code.useCount >= code.maxUses
+              ? "exhausted"
+              : "active";
+        return {
+          id: code.id,
+          maxUses: code.maxUses,
+          usedUses: code.useCount,
+          expiresAt: code.expiresAt,
+          createdAt: code.createdAt,
+          status,
+        };
+      });
+  }
+
+  /**
+   * An actionable manual-entry picker. It stays event-scoped and returns no
+   * rider contact details, source facts, or existing entry state.
+   */
+  async listGiveawayManualEntryCandidates(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<GiveawayManualEntryCandidate[]> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    if (giveaway.state !== "open" || giveaway.entryMode !== "manual_only") return [];
+
+    const actionAt = new Date().toISOString();
+    const candidates: GiveawayManualEntryCandidate[] = [];
+    for (const riderId of this.riderIdsWithEventActivity(giveaway.eventId)) {
+      const rider = this.users.get(riderId);
+      if (!rider || rider.role !== "rider" || rider.verificationStatus === "SUSPENDED") continue;
+      const qualification = this.evaluateGiveawayEntryQualification(giveaway, rider.id, {
+        manual: true,
+        actionAt,
+      });
+      if (qualification.weight <= 0) continue;
+      candidates.push({ riderId: rider.id, label: rider.displayName.trim() || "Unnamed rider" });
+    }
+    return candidates.sort(
+      (left, right) => left.label.localeCompare(right.label) || left.riderId.localeCompare(right.riderId),
+    );
+  }
+
   /** Minimal cross-event administrator campaign list; entrant records stay private. */
   async listAdminGiveaways(sessionToken: string): Promise<GiveawayCampaignListItem[]> {
     this.requireRole(sessionToken, "admin");
@@ -1529,11 +1605,14 @@ export class TambikeBackend {
   async createGiveawayCampaignCode(
     sessionToken: string,
     giveawayId: string,
-    input: unknown,
-  ) {
+    input: CreateGiveawayCampaignCodeInput,
+  ): Promise<IssuedGiveawayCampaignCode> {
     const organizer = this.requireUser(sessionToken);
     const giveaway = this.requireGiveaway(giveawayId);
     this.requireGiveawayConfigurator(organizer, this.requireEvent(giveaway.eventId));
+    if (giveaway.entryMode !== "claim_code") {
+      throw new BackendError("GIVEAWAY_ENTRY_MODE_INVALID", "GIVEAWAY_ENTRY_MODE_INVALID");
+    }
     if (!["draft", "scheduled", "open", "paused"].includes(giveaway.state)) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
@@ -1601,7 +1680,7 @@ export class TambikeBackend {
 
   async grantManualGiveawayEntry(
     sessionToken: string,
-    input: unknown,
+    input: GrantManualGiveawayEntryInput,
   ): Promise<RiderGiveawayState> {
     const parsed = this.parseManualGiveawayEntryInput(input);
     const organizer = this.requireUser(sessionToken);
@@ -1610,6 +1689,9 @@ export class TambikeBackend {
     this.requireGiveawayEntryMode(giveaway, "manual_only");
     const rider = this.users.get(parsed.riderId);
     if (!rider || rider.role !== "rider") throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    if (rider.verificationStatus === "SUSPENDED") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
     const entry = this.createGiveawayEntryFromPath(giveaway, rider.id, {
       path: "manual",
       eventType: "manual_grant",
