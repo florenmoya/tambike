@@ -53,6 +53,16 @@ import {
   type RegistrationInput,
 } from "./backend";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
+import {
+  assertGiveawayEligibilityTimingIntegrity,
+  calculateGiveawayEntryWeightDelta,
+  compareGiveawayEntriesByPoolPriority,
+  earliestGiveawayEligibilityTimestamp,
+  latestGiveawayEligibilityTimestamp,
+  reconcileGiveawayEligibilityTimings,
+  resolveGiveawayPoolEligibilityPriority,
+  type GiveawayEligibilityGroupTiming,
+} from "./giveaways/eligibility-timing";
 
 type SignupWithPasswordInput = SignupInput & {
   password: string;
@@ -135,6 +145,13 @@ type GiveawayConfiguration = Prisma.EventGiveawayGetPayload<{
 
 type GiveawayQualification = {
   qualifiedGroupIds: string[];
+  qualifiedGroups: Array<{
+    id: string;
+    position: number;
+    weight: number;
+    facts: Record<string, unknown>[];
+    derivedEligibleAt: string;
+  }>;
   weight: number;
   sourceFingerprint: string;
   sourceFacts: Array<Record<string, unknown>>;
@@ -157,8 +174,10 @@ type GiveawayEntryWrite = {
     status: string;
     entryPath: string;
     currentWeight: number;
+    eligibilityCycleAt: Date;
     qualifiedSourceFingerprint: string;
     qualifiedEligibilityGroupIds: Prisma.JsonValue;
+    qualifiedEligibilityGroupTimings: Prisma.JsonValue;
     manualGrantActive: boolean;
     opaquePublicReference: string;
     createdAt: Date;
@@ -475,10 +494,11 @@ export class PrismaTambikeBackend {
       const entryEventCount = await tx.giveawayEntryEvent.count({
         where: { giveawayId: giveaway.id },
       });
+      const hasEntrantHistory = entryCount > 0 || entryEventCount > 0;
       if (
         Object.hasOwn(patch, "entryMode") &&
         patch.entryMode !== giveaway.entryMode &&
-        (entryCount > 0 || entryEventCount > 0)
+        hasEntrantHistory
       ) {
         throw new BackendError("GIVEAWAY_ENTRY_MODE_LOCKED", "GIVEAWAY_ENTRY_MODE_LOCKED");
       }
@@ -541,6 +561,23 @@ export class PrismaTambikeBackend {
             nextWinnerLimits.total !== giveaway.maxWinsTotal)) ||
         (Object.hasOwn(patch, "timeZone") && patch.timeZone !== giveaway.timeZone) ||
         scheduleChanged;
+      const changesEntrantFacingConfiguration =
+        mechanicsChanged ||
+        hasConfigurationPatch ||
+        (Object.hasOwn(patch, "kind") && patch.kind !== giveaway.kind) ||
+        (Object.hasOwn(patch, "maxEntriesPerRider") &&
+          patch.maxEntriesPerRider !== giveaway.maxEntriesPerRider) ||
+        (Object.hasOwn(patch, "presenceVerificationRequired") &&
+          Boolean(patch.presenceVerificationRequired) !== giveaway.presenceVerificationRequired) ||
+        (nextWinnerLimits !== undefined &&
+          (nextWinnerLimits.perRider !== giveaway.maxWinsPerRider ||
+            nextWinnerLimits.total !== giveaway.maxWinsTotal));
+      if (hasEntrantHistory && changesEntrantFacingConfiguration) {
+        throw new BackendError(
+          "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
+          "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
+        );
+      }
       const changed = mechanicsChanged || hasConfigurationPatch || coreChanged;
       if (!changed) {
         return this.toGiveawayCampaignView(giveaway);
@@ -589,7 +626,7 @@ export class PrismaTambikeBackend {
             : giveaway.presenceVerificationRequired,
         );
       }
-      if (changed) {
+      if (mechanicsChanged) {
         await tx.giveawayMechanicsVersion.create({
           data: {
             id: `giveaway-mechanics-${randomUUID()}`,
@@ -752,8 +789,13 @@ export class PrismaTambikeBackend {
       const opened = await this.lockGiveawayCampaign(tx, giveaway.id);
       if (opened.entryMode === "automatic") {
         const riderIds = await this.riderIdsWithGiveawayActivity(tx, opened.eventId);
+        let reconciledAnyEntry = false;
         for (const riderId of riderIds) {
-          await this.reconcileAutomaticGiveawayEntry(tx, opened, riderId);
+          reconciledAnyEntry =
+            (await this.reconcileAutomaticGiveawayEntry(tx, opened, riderId)) || reconciledAnyEntry;
+        }
+        if (reconciledAnyEntry) {
+          await this.reallocateImmediateGiveawayAwards(tx, opened);
         }
       }
       const updated = await this.lockGiveawayCampaign(tx, opened.id);
@@ -837,7 +879,10 @@ export class PrismaTambikeBackend {
       if (existing && existing.status !== "withdrawn") {
         throw new BackendError("GIVEAWAY_ALREADY_ENTERED", "GIVEAWAY_ALREADY_ENTERED");
       }
-      const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, rider.id);
+      const actionAt = new Date();
+      const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, rider.id, {
+        actionAt,
+      });
       if (qualification.weight <= 0) {
         throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
       }
@@ -846,8 +891,9 @@ export class PrismaTambikeBackend {
         entryEventType: "opted_in",
         actorUserId: rider.id,
         mechanicsAcknowledgement: mechanics,
+        actionAt,
       });
-      await this.allocateDirectGiveawayAwards(tx, giveaway, write.entry, write.entryEventId);
+      await this.allocateDirectGiveawayAwards(tx, giveaway);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -937,8 +983,10 @@ export class PrismaTambikeBackend {
       if (existingEntry && existingEntry.status !== "withdrawn") {
         throw new BackendError("GIVEAWAY_ALREADY_ENTERED", "GIVEAWAY_ALREADY_ENTERED");
       }
+      const actionAt = new Date();
       const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, rider.id, {
         campaignCode: true,
+        actionAt,
       });
       if (qualification.weight <= 0) {
         throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
@@ -948,6 +996,7 @@ export class PrismaTambikeBackend {
         entryEventType: "campaign_code_claimed",
         actorUserId: rider.id,
         campaignCodeId: code.id,
+        actionAt,
       });
       await tx.giveawayCampaignCode.update({
         where: { id: code.id },
@@ -962,7 +1011,7 @@ export class PrismaTambikeBackend {
           idempotencyKey: `campaign-code:${code.id}:${rider.id}`,
         },
       });
-      await this.allocateDirectGiveawayAwards(tx, giveaway, write.entry, write.entryEventId);
+      await this.allocateDirectGiveawayAwards(tx, giveaway);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -994,8 +1043,10 @@ export class PrismaTambikeBackend {
       if (existing && existing.status !== "withdrawn") {
         throw new BackendError("GIVEAWAY_ALREADY_ENTERED", "GIVEAWAY_ALREADY_ENTERED");
       }
+      const actionAt = new Date();
       const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, rider.id, {
         manual: true,
+        actionAt,
       });
       if (qualification.weight <= 0) {
         throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
@@ -1006,8 +1057,9 @@ export class PrismaTambikeBackend {
         actorUserId: organizer.id,
         manualGrantActive: true,
         reasonDigest: this.hashGiveawayReason(parsed.reason),
+        actionAt,
       });
-      await this.allocateDirectGiveawayAwards(tx, giveaway, write.entry, write.entryEventId);
+      await this.allocateDirectGiveawayAwards(tx, giveaway);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -1042,7 +1094,7 @@ export class PrismaTambikeBackend {
       ) {
         throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
       }
-      const affectedPoolIds = await this.voidDirectGiveawayAwards(
+      await this.voidDirectGiveawayAwards(
         tx,
         giveaway,
         entry,
@@ -1051,22 +1103,32 @@ export class PrismaTambikeBackend {
       );
       const next = await tx.giveawayEntry.update({
         where: { id: entry.id },
-        data: { status: "withdrawn", manualGrantActive: false },
+        data: {
+          status: "withdrawn",
+          manualGrantActive: false,
+          qualifiedEligibilityGroupIds: this.toJsonValue([]),
+          qualifiedEligibilityGroupTimings: this.toJsonValue([]),
+        },
       });
-      const entryEvent = await tx.giveawayEntryEvent.create({
+      await tx.giveawayEntryEvent.create({
         data: {
           id: `giveaway-entry-event-${randomUUID()}`,
           giveawayId: giveaway.id,
           entryId: entry.id,
           type: "manual_revoke",
           sourceKey: `manual-revoke:${giveaway.id}:${entry.id}:${randomUUID()}`,
-          sourceSnapshot: this.toJsonValue({ reasonDigest: this.hashGiveawayReason(normalizedReason) }),
+          sourceSnapshot: this.toJsonValue({
+            reasonDigest: this.hashGiveawayReason(normalizedReason),
+            qualifiedGroupIds: [],
+            qualifiedEligibilityGroupTimings: [],
+            eligibilityCycleAt: entry.eligibilityCycleAt.toISOString(),
+          }),
           weightDelta: -entry.currentWeight,
           actorUserId: organizer.id,
           idempotencyKey: `manual-revoke:${giveaway.id}:${entry.id}:${randomUUID()}`,
         },
       });
-      await this.reallocateImmediateGiveawayAwards(tx, giveaway, affectedPoolIds, entryEvent.id);
+      await this.reallocateImmediateGiveawayAwards(tx, giveaway);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -1234,17 +1296,30 @@ export class PrismaTambikeBackend {
 
     const result = await this.prisma.$transaction(async (tx) => {
       await this.lockGiveawayEvent(tx, event.id);
+      const previousRsvp = await tx.rSVP.findUnique({
+        where: { eventId_userId: { eventId: event.id, userId: user.id } },
+        select: { status: true, goingAt: true },
+      });
+      const now = new Date();
+      const goingAt =
+        input.status === "going"
+          ? previousRsvp?.status === "going" && previousRsvp.goingAt
+            ? previousRsvp.goingAt
+            : now
+          : null;
       const rsvp = await tx.rSVP.upsert({
         where: { eventId_userId: { eventId: event.id, userId: user.id } },
         create: {
           eventId: event.id,
           userId: user.id,
           status: input.status,
+          goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
         },
         update: {
           status: input.status,
+          goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
         },
@@ -2189,9 +2264,9 @@ export class PrismaTambikeBackend {
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
     riderId: string,
-    context: { campaignCode?: boolean; manual?: boolean } = {},
+    context: { campaignCode?: boolean; manual?: boolean; actionAt?: Date } = {},
   ): Promise<GiveawayQualification> {
-    const qualifiedGroups: Array<{ id: string; weight: number; facts: Record<string, unknown>[] }> = [];
+    const qualifiedGroups: GiveawayQualification["qualifiedGroups"] = [];
     for (const group of giveaway.eligibilityGroups) {
       if (!group.enabled) continue;
       const facts: Record<string, unknown>[] = [];
@@ -2212,8 +2287,17 @@ export class PrismaTambikeBackend {
         facts.push(evaluation.sourceFact);
         if (!evaluation.satisfied) qualified = false;
       }
-      if (qualified) {
-        qualifiedGroups.push({ id: group.id, weight: group.entryWeight, facts });
+      const derivedEligibleAt = latestGiveawayEligibilityTimestamp(
+        facts.map((fact) => (typeof fact.eligibleAt === "string" ? fact.eligibleAt : undefined)),
+      );
+      if (qualified && derivedEligibleAt) {
+        qualifiedGroups.push({
+          id: group.id,
+          position: group.position,
+          weight: group.entryWeight,
+          facts,
+          derivedEligibleAt,
+        });
       }
     }
     const weight = Math.min(
@@ -2226,6 +2310,7 @@ export class PrismaTambikeBackend {
     }));
     return {
       qualifiedGroupIds: qualifiedGroups.map((group) => group.id),
+      qualifiedGroups,
       weight,
       sourceFacts,
       sourceFingerprint: createHash("sha256")
@@ -2239,48 +2324,69 @@ export class PrismaTambikeBackend {
     eventId: string,
     riderId: string,
     condition: GiveawayEligibilityConditionInput,
-    context: { campaignCode?: boolean; manual?: boolean },
-  ): Promise<{ satisfied: boolean; sourceFact: Record<string, unknown> }> {
+    context: { campaignCode?: boolean; manual?: boolean; actionAt?: Date },
+  ): Promise<{ satisfied: boolean; eligibleAt?: string; sourceFact: Record<string, unknown> }> {
     switch (condition.source) {
       case "active_rsvp_pass": {
         const [rsvp, pass] = await Promise.all([
-          tx.rSVP.findUnique({ where: { eventId_userId: { eventId, userId: riderId } } }),
+          tx.rSVP.findUnique({
+            where: { eventId_userId: { eventId, userId: riderId } },
+            select: { status: true, attendanceType: true, goingAt: true },
+          }),
           tx.pass.findFirst({ where: { eventId, userId: riderId }, orderBy: { generatedAt: "asc" } }),
         ]);
+        const satisfied = rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled");
+        const eligibleAt = satisfied
+          ? latestGiveawayEligibilityTimestamp([
+              rsvp?.goingAt?.toISOString(),
+              pass?.generatedAt.toISOString(),
+            ])
+          : null;
         return {
-          satisfied: rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled"),
+          satisfied,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             rsvpStatus: rsvp?.status ?? null,
             attendanceType: rsvp?.attendanceType ?? null,
+            rsvpGoingAt: rsvp?.goingAt?.toISOString() ?? null,
             passId: pass?.id ?? null,
             passStatus: pass?.status ?? null,
+            passGeneratedAt: pass?.generatedAt.toISOString() ?? null,
+            eligibleAt,
           },
         };
       }
       case "confirmed_check_in": {
         const checkIns = await tx.checkIn.findMany({
           where: { eventId, userId: riderId, status: "confirmed" },
-          select: { id: true, method: true, confirmationMethod: true },
-          orderBy: { id: "asc" },
+          select: { id: true, method: true, confirmationMethod: true, confirmedAt: true, timestamp: true },
+          orderBy: [{ confirmedAt: "asc" }, { timestamp: "asc" }, { id: "asc" }],
         });
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          checkIns.map((checkIn) => (checkIn.confirmedAt ?? checkIn.timestamp).toISOString()),
+        );
         return {
           satisfied: checkIns.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             confirmedCheckIns: checkIns.map((checkIn) => ({
               id: checkIn.id,
               method: checkIn.method,
               confirmationMethod: checkIn.confirmationMethod ?? null,
+              confirmedAt: checkIn.confirmedAt?.toISOString() ?? null,
+              timestamp: checkIn.timestamp.toISOString(),
             })),
+            eligibleAt,
           },
         };
       }
       case "staff_confirmed_check_in": {
         const checkIns = await tx.checkIn.findMany({
           where: { eventId, userId: riderId, status: "confirmed" },
-          select: { id: true, method: true, confirmationMethod: true },
-          orderBy: { id: "asc" },
+          select: { id: true, method: true, confirmationMethod: true, confirmedAt: true, timestamp: true },
+          orderBy: [{ confirmedAt: "asc" }, { timestamp: "asc" }, { id: "asc" }],
         });
         const staffCheckIns = checkIns.filter(
           (checkIn) =>
@@ -2289,45 +2395,71 @@ export class PrismaTambikeBackend {
               checkIn.confirmationMethod !== null &&
               this.isStaffCheckInMethod(checkIn.confirmationMethod)),
         );
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          staffCheckIns.map((checkIn) => (checkIn.confirmedAt ?? checkIn.timestamp).toISOString()),
+        );
         return {
           satisfied: staffCheckIns.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             staffConfirmedCheckIns: staffCheckIns.map((checkIn) => ({
               id: checkIn.id,
               method: checkIn.method,
               confirmationMethod: checkIn.confirmationMethod ?? null,
+              confirmedAt: checkIn.confirmedAt?.toISOString() ?? null,
+              timestamp: checkIn.timestamp.toISOString(),
             })),
+            eligibleAt,
           },
         };
       }
       case "perk_redemption": {
         const redemptions = await tx.perkRedemption.findMany({
-          where: { perkId: condition.perkId, userId: riderId, status: "redeemed" },
-          select: { id: true },
-          orderBy: { id: "asc" },
+          where: {
+            perkId: condition.perkId,
+            userId: riderId,
+            status: "redeemed",
+            redeemedAt: { not: null },
+          },
+          select: { id: true, redeemedAt: true },
+          orderBy: [{ redeemedAt: "asc" }, { id: "asc" }],
         });
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          redemptions.map((redemption) => redemption.redeemedAt?.toISOString()),
+        );
         return {
           satisfied: redemptions.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             perkId: condition.perkId,
-            redemptionIds: redemptions.map((redemption) => redemption.id),
+            redemptions: redemptions.map((redemption) => ({
+              id: redemption.id,
+              redeemedAt: redemption.redeemedAt?.toISOString() ?? null,
+            })),
+            eligibleAt,
           },
         };
       }
       case "campaign_code":
         return {
           satisfied: Boolean(context.campaignCode),
+          eligibleAt: context.campaignCode ? context.actionAt?.toISOString() : undefined,
           sourceFact: {
             source: condition.source,
             satisfiedBy: context.campaignCode ? "claim" : null,
+            eligibleAt: context.campaignCode ? context.actionAt?.toISOString() ?? null : null,
           },
         };
       case "manual":
         return {
           satisfied: Boolean(context.manual),
-          sourceFact: { source: condition.source },
+          eligibleAt: context.manual ? context.actionAt?.toISOString() : undefined,
+          sourceFact: {
+            source: condition.source,
+            eligibleAt: context.manual ? context.actionAt?.toISOString() ?? null : null,
+          },
         };
     }
   }
@@ -2354,18 +2486,37 @@ export class PrismaTambikeBackend {
       campaignCodeId?: string;
       manualGrantActive?: boolean;
       reasonDigest?: string;
+      actionAt?: Date;
     },
   ): Promise<GiveawayEntryWrite> {
     const existing = await tx.giveawayEntry.findUnique({
       where: { giveawayId_riderId: { giveawayId: giveaway.id, riderId } },
     });
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: existing ? this.entryQualifiedGroupTimings(existing) : [],
+      qualifiedGroups: qualification.qualifiedGroups.map((group) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt: group.derivedEligibleAt,
+      })),
+      actionAt: input.actionAt?.toISOString(),
+    });
+    if (!timing.eligibilityCycleAt) {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    assertGiveawayEligibilityTimingIntegrity(
+      qualification.qualifiedGroupIds,
+      timing.qualifiedEligibilityGroupTimings,
+    );
     const acknowledgement = input.mechanicsAcknowledgement;
     const data = {
       status: "eligible" as const,
       entryPath: input.entryPath as never,
       currentWeight: qualification.weight,
+      eligibilityCycleAt: new Date(timing.eligibilityCycleAt),
       qualifiedSourceFingerprint: qualification.sourceFingerprint,
       qualifiedEligibilityGroupIds: this.toJsonValue(qualification.qualifiedGroupIds),
+      qualifiedEligibilityGroupTimings: this.toJsonValue(timing.qualifiedEligibilityGroupTimings),
       manualGrantActive: input.entryPath === "manual" && Boolean(input.manualGrantActive),
       acknowledgedMechanicsVersionId: acknowledgement?.id ?? null,
       acknowledgedMechanicsChecksum: acknowledgement?.checksum ?? null,
@@ -2382,7 +2533,7 @@ export class PrismaTambikeBackend {
             ...data,
           },
         });
-    const weightDelta = qualification.weight - (existing?.currentWeight ?? 0);
+    const weightDelta = calculateGiveawayEntryWeightDelta(existing, qualification.weight);
     const entryEvent = await tx.giveawayEntryEvent.create({
       data: {
         id: `giveaway-entry-event-${randomUUID()}`,
@@ -2392,6 +2543,8 @@ export class PrismaTambikeBackend {
         sourceKey: `${input.entryPath}:${giveaway.id}:${entry.id}:${randomUUID()}`,
         sourceSnapshot: this.toJsonValue({
           qualifiedGroupIds: qualification.qualifiedGroupIds,
+          qualifiedEligibilityGroupTimings: timing.qualifiedEligibilityGroupTimings,
+          eligibilityCycleAt: timing.eligibilityCycleAt,
           sourceFingerprint: qualification.sourceFingerprint,
           sourceFacts: qualification.sourceFacts,
           ...(acknowledgement
@@ -2416,6 +2569,37 @@ export class PrismaTambikeBackend {
     return entry.qualifiedEligibilityGroupIds.filter(
       (value): value is string => typeof value === "string",
     );
+  }
+
+  private entryQualifiedGroupTimings(entry: {
+    qualifiedEligibilityGroupIds: Prisma.JsonValue;
+    qualifiedEligibilityGroupTimings: Prisma.JsonValue;
+  }): GiveawayEligibilityGroupTiming[] {
+    if (!Array.isArray(entry.qualifiedEligibilityGroupTimings)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const timings = entry.qualifiedEligibilityGroupTimings.flatMap((value) => {
+      const timing = value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+      if (
+        !timing ||
+        typeof timing.groupId !== "string" ||
+        typeof timing.eligibleAt !== "string"
+      ) {
+        return [];
+      }
+      return [{ groupId: timing.groupId, eligibleAt: timing.eligibleAt }];
+    });
+    if (timings.length !== entry.qualifiedEligibilityGroupTimings.length) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    try {
+      assertGiveawayEligibilityTimingIntegrity(this.entryQualifiedGroupIds(entry), timings);
+    } catch {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return timings;
   }
 
   private isGiveawayEntryEligibleForPool(
@@ -2474,20 +2658,8 @@ export class PrismaTambikeBackend {
   private async allocateDirectGiveawayAwards(
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
-    entry: GiveawayEntryWrite["entry"],
-    allocationEventId: string,
   ) {
-    for (const pool of giveaway.prizePools) {
-      if (pool.awardMode !== "guaranteed" && pool.awardMode !== "first_come") continue;
-      if (!this.isGiveawayEntryEligibleForPool(entry, pool)) continue;
-      await this.allocateDirectGiveawayAwardForPool(
-        tx,
-        giveaway,
-        pool,
-        entry,
-        `direct:${allocationEventId}:${pool.id}`,
-      );
-    }
+    await this.reallocateImmediateGiveawayAwards(tx, giveaway);
   }
 
   private async allocateDirectGiveawayAwardForPool(
@@ -2495,13 +2667,30 @@ export class PrismaTambikeBackend {
     giveaway: GiveawayConfiguration,
     pool: GiveawayConfiguration["prizePools"][number],
     entry: GiveawayEntryWrite["entry"],
-    directAllocationKey: string,
   ) {
     if (!this.isGiveawayEntryEligibleForPool(entry, pool)) return false;
     await this.lockGiveawayPrizePool(tx, pool.id);
-    if (!(await this.canCreateDirectGiveawayAward(tx, giveaway, pool, entry.riderId))) return false;
+    const allocationEligibilityAt = resolveGiveawayPoolEligibilityPriority({
+      eligibilityCycleAt: entry.eligibilityCycleAt.toISOString(),
+      qualifiedEligibilityGroupTimings: this.entryQualifiedGroupTimings(entry),
+      permittedGroupIds: pool.eligibilityGroups.map((link) => link.eligibilityGroupId),
+    });
+    if (!allocationEligibilityAt) return false;
+    const directAllocationKey = `direct:${entry.id}:${pool.id}:${allocationEligibilityAt}`;
     const existing = await tx.giveawayAward.findUnique({ where: { directAllocationKey } });
     if (existing) return true;
+    const existingCurrentAward = await tx.giveawayAward.findFirst({
+      where: {
+        giveawayId: giveaway.id,
+        entryId: entry.id,
+        prizePoolId: pool.id,
+        drawId: null,
+        isCurrent: true,
+      },
+      select: { id: true },
+    });
+    if (existingCurrentAward) return true;
+    if (!(await this.canCreateDirectGiveawayAward(tx, giveaway, pool, entry.riderId))) return false;
 
     let prizeItemId: string | null = null;
     if (pool.awardMode === "first_come") {
@@ -2524,6 +2713,7 @@ export class PrismaTambikeBackend {
         status: pool.presenceVerificationRequired ? "pending_verification" : "claimable",
         isCurrent: true,
         directAllocationKey,
+        allocationEligibilityAt: new Date(allocationEligibilityAt),
         opaqueClaimReference: `claim_${randomBytes(16).toString("base64url")}`,
         claimDeadlineAt: giveaway.claimDeadlineAt,
       },
@@ -2607,27 +2797,36 @@ export class PrismaTambikeBackend {
   private async reallocateImmediateGiveawayAwards(
     tx: Prisma.TransactionClient,
     giveaway: GiveawayConfiguration,
-    affectedPoolIds: Set<string>,
-    releaseEventId: string,
   ) {
-    if (affectedPoolIds.size === 0) return;
-    // A void can free campaign-wide winner capacity, not only a finite item, so
-    // reconsider every immediate pool in deterministic entry order.
+    // A void can free campaign-wide winner capacity, not only a finite item.
+    // Re-evaluate all immediate pools, preserving valid current awards and
+    // filling only the remaining inventory by pool-specific eligibility time.
     for (const pool of giveaway.prizePools) {
       if (pool.awardMode !== "first_come" && pool.awardMode !== "guaranteed") continue;
       const candidates = await tx.giveawayEntry.findMany({
         where: { giveawayId: giveaway.id, status: "eligible" },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        orderBy: [{ eligibilityCycleAt: "asc" }, { id: "asc" }],
       });
-      for (const candidate of candidates) {
-        if (!this.isGiveawayEntryEligibleForPool(candidate, pool)) continue;
-        await this.allocateDirectGiveawayAwardForPool(
-          tx,
-          giveaway,
-          pool,
-          candidate,
-          `reallocation:${releaseEventId}:${pool.id}:${candidate.id}`,
+      const orderedCandidates = candidates
+        .filter((candidate) => this.isGiveawayEntryEligibleForPool(candidate, pool))
+        .sort((left, right) =>
+          compareGiveawayEntriesByPoolPriority(
+            {
+              id: left.id,
+              eligibilityCycleAt: left.eligibilityCycleAt.toISOString(),
+              qualifiedEligibilityGroupTimings: this.entryQualifiedGroupTimings(left),
+            },
+            {
+              id: right.id,
+              eligibilityCycleAt: right.eligibilityCycleAt.toISOString(),
+              qualifiedEligibilityGroupTimings: this.entryQualifiedGroupTimings(right),
+            },
+            pool.eligibilityGroups.map((link) => link.eligibilityGroupId),
+          ),
         );
+      for (const candidate of orderedCandidates) {
+        if (!this.isGiveawayEntryEligibleForPool(candidate, pool)) continue;
+        await this.allocateDirectGiveawayAwardForPool(tx, giveaway, pool, candidate);
       }
     }
   }
@@ -2648,8 +2847,14 @@ export class PrismaTambikeBackend {
     for (const campaign of campaignIds) {
       const giveaway = await this.lockGiveawayCampaign(tx, campaign.id);
       if (giveaway.status !== "open" || giveaway.entryMode !== "automatic") continue;
+      let reconciledAnyEntry = false;
       for (const candidateRiderId of riderIds) {
-        await this.reconcileAutomaticGiveawayEntry(tx, giveaway, candidateRiderId);
+        reconciledAnyEntry =
+          (await this.reconcileAutomaticGiveawayEntry(tx, giveaway, candidateRiderId)) ||
+          reconciledAnyEntry;
+      }
+      if (reconciledAnyEntry) {
+        await this.reallocateImmediateGiveawayAwards(tx, giveaway);
       }
     }
   }
@@ -2671,23 +2876,24 @@ export class PrismaTambikeBackend {
     const existing = await this.lockGiveawayEntry(tx, giveaway.id, riderId);
     const qualification = await this.evaluateGiveawayEntryQualification(tx, giveaway, riderId);
     if (qualification.weight <= 0) {
-      if (!existing || existing.status !== "eligible") return;
+      if (!existing || existing.status !== "eligible") return false;
       const withdrawn = await tx.giveawayEntry.update({
         where: { id: existing.id },
         data: {
           status: "withdrawn",
           qualifiedSourceFingerprint: qualification.sourceFingerprint,
           qualifiedEligibilityGroupIds: this.toJsonValue([]),
+          qualifiedEligibilityGroupTimings: this.toJsonValue([]),
         },
       });
-      const affectedPoolIds = await this.voidDirectGiveawayAwards(
+      await this.voidDirectGiveawayAwards(
         tx,
         giveaway,
         withdrawn,
         undefined,
         "automatic_withdrawal",
       );
-      const event = await tx.giveawayEntryEvent.create({
+      await tx.giveawayEntryEvent.create({
         data: {
           id: `giveaway-entry-event-${randomUUID()}`,
           giveawayId: giveaway.id,
@@ -2696,6 +2902,8 @@ export class PrismaTambikeBackend {
           sourceKey: `automatic-withdrawal:${giveaway.id}:${withdrawn.id}:${randomUUID()}`,
           sourceSnapshot: this.toJsonValue({
             qualifiedGroupIds: qualification.qualifiedGroupIds,
+            qualifiedEligibilityGroupTimings: [],
+            eligibilityCycleAt: existing.eligibilityCycleAt.toISOString(),
             sourceFingerprint: qualification.sourceFingerprint,
             sourceFacts: qualification.sourceFacts,
           }),
@@ -2703,7 +2911,6 @@ export class PrismaTambikeBackend {
           idempotencyKey: `automatic-withdrawal:${giveaway.id}:${withdrawn.id}:${randomUUID()}`,
         },
       });
-      await this.reallocateImmediateGiveawayAwards(tx, giveaway, affectedPoolIds, event.id);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -2718,7 +2925,7 @@ export class PrismaTambikeBackend {
           sourceFingerprint: qualification.sourceFingerprint,
         },
       );
-      return;
+      return true;
     }
 
     if (!existing) {
@@ -2726,7 +2933,6 @@ export class PrismaTambikeBackend {
         entryPath: "automatic",
         entryEventType: "automatic_qualified",
       });
-      await this.allocateDirectGiveawayAwards(tx, giveaway, write.entry, write.entryEventId);
       await this.auditGiveaway(
         tx,
         giveaway.id,
@@ -2741,7 +2947,7 @@ export class PrismaTambikeBackend {
           sourceFingerprint: qualification.sourceFingerprint,
         },
       );
-      return;
+      return true;
     }
 
     const sameGroups =
@@ -2749,26 +2955,36 @@ export class PrismaTambikeBackend {
       this.entryQualifiedGroupIds(existing).every(
         (groupId, index) => groupId === qualification.qualifiedGroupIds[index],
       );
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: this.entryQualifiedGroupTimings(existing),
+      qualifiedGroups: qualification.qualifiedGroups.map((group) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt: group.derivedEligibleAt,
+      })),
+    });
+    if (!timing.eligibilityCycleAt) return false;
     const changed =
       existing.status !== "eligible" ||
       existing.currentWeight !== qualification.weight ||
       existing.qualifiedSourceFingerprint !== qualification.sourceFingerprint ||
-      !sameGroups;
-    if (!changed) return;
+      !sameGroups ||
+      existing.eligibilityCycleAt.toISOString() !== timing.eligibilityCycleAt ||
+      JSON.stringify(this.entryQualifiedGroupTimings(existing)) !==
+        JSON.stringify(timing.qualifiedEligibilityGroupTimings);
+    if (!changed) return false;
 
     const write = await this.writeGiveawayEntry(tx, giveaway, riderId, qualification, {
       entryPath: "automatic",
       entryEventType: "source_revalidated",
     });
-    const affectedPoolIds = await this.voidIneligibleDirectGiveawayAwards(
+    await this.voidIneligibleDirectGiveawayAwards(
       tx,
       giveaway,
       write.entry,
       undefined,
       "automatic_pool_revalidation",
     );
-    await this.reallocateImmediateGiveawayAwards(tx, giveaway, affectedPoolIds, write.entryEventId);
-    await this.allocateDirectGiveawayAwards(tx, giveaway, write.entry, write.entryEventId);
     await this.auditGiveaway(
       tx,
       giveaway.id,
@@ -2783,6 +2999,7 @@ export class PrismaTambikeBackend {
         sourceFingerprint: qualification.sourceFingerprint,
       },
     );
+    return true;
   }
 
   private async auditGiveaway(

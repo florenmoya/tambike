@@ -70,6 +70,17 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(giveawayMigrationSql).toContain('"GiveawayCampaignCodeClaim_append_only"');
   });
 
+  test("restores a withdrawn entry's active ledger weight on Prisma requalification", () => {
+    const writeEntrySource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async writeGiveawayEntry"),
+      prismaBackendSource.indexOf("private entryQualifiedGroupIds"),
+    );
+
+    expect(writeEntrySource).toContain(
+      "calculateGiveawayEntryWeightDelta(existing, qualification.weight)",
+    );
+  });
+
   test("exposes the non-draw lifecycle and entry methods through interactive campaign transactions", () => {
     const methods = [
       "createGiveaway",

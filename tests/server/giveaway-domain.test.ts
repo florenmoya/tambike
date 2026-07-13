@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type {
   CreateGiveawayInput,
@@ -124,6 +124,37 @@ function asGiveawayBackend(
   backend: Awaited<ReturnType<typeof createTambikeTestBackend>>,
 ): GiveawayBackend {
   return backend as GiveawayBackend;
+}
+
+function internalGiveawayEntry(
+  backend: GiveawayBackend,
+  giveawayId: string,
+  riderId: string,
+): {
+  eligibilityCycleAt: string;
+  qualifiedGroupIds: string[];
+  qualifiedEligibilityGroupTimings: Array<{ groupId: string; eligibleAt: string }>;
+} {
+  const store = backend as unknown as {
+    giveaways: {
+      campaignsById: Map<
+        string,
+        {
+          entriesByRider: Map<
+            string,
+            {
+              eligibilityCycleAt: string;
+              qualifiedGroupIds: string[];
+              qualifiedEligibilityGroupTimings: Array<{ groupId: string; eligibleAt: string }>;
+            }
+          >;
+        }
+      >;
+    };
+  };
+  const entry = store.giveaways.campaignsById.get(giveawayId)?.entriesByRider.get(riderId);
+  if (!entry) throw new Error("TEST_GIVEAWAY_ENTRY_MISSING");
+  return entry;
 }
 
 function automaticGiveawayInput(
@@ -317,7 +348,7 @@ describe("in-memory event giveaway lifecycle", () => {
       id: created.id,
       title: "Updated ride day giveaway",
     });
-    expect(updated.mechanicsVersion).toBe(2);
+    expect(updated.mechanicsVersion).toBe(1);
     await expect(
       backend.submitGiveawayForReview(rider.sessionToken, created.id),
     ).rejects.toThrow("FORBIDDEN");
@@ -468,7 +499,7 @@ describe("in-memory event giveaway lifecycle", () => {
         title: "Winner-limit change must not partially update",
         winnerLimits: { perRider: 2, total: 2 },
       }),
-    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED" });
     await expect(backend.listOrganizerGiveaways(organizer.sessionToken, eventId)).resolves.toEqual([
       expect.objectContaining({ id: giveaway.id, title: "Ride day giveaway" }),
     ]);
@@ -489,7 +520,7 @@ describe("in-memory event giveaway lifecycle", () => {
           },
         ],
       }),
-    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED" });
   });
 
   test("revalidates an equal-weight entry when its qualified source fingerprint changes", async () => {
@@ -1591,4 +1622,273 @@ describe("in-memory event giveaway lifecycle", () => {
       backend.getRiderGiveawayState(secondRider.sessionToken, giveaway.id),
     ).resolves.toEqual({ giveawayId: giveaway.id, status: "not_eligible", entryCount: 0 });
   });
+});
+
+describe("giveaway first-come fairness and entrant-facing configuration freezes", () => {
+  test("clears active timing rows when a manual entry is revoked", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        entryMode: "manual_only",
+        eligibilityGroups: [
+          {
+            id: "manual-entry",
+            label: "Manual entry",
+            weight: 1,
+            conditions: [{ source: "manual" }],
+          },
+        ],
+      }),
+    );
+    await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: context.rider.user.id,
+      reason: "Audited paper entry",
+    });
+    const activeEntry = internalGiveawayEntry(backend, context.giveaway.id, context.rider.user.id);
+    await backend.revokeManualGiveawayEntry(
+      context.organizer.sessionToken,
+      context.giveaway.id,
+      context.rider.user.id,
+      "Paper entry revoked",
+    );
+
+    expect(internalGiveawayEntry(backend, context.giveaway.id, context.rider.user.id)).toMatchObject({
+      eligibilityCycleAt: activeEntry.eligibilityCycleAt,
+      qualifiedGroupIds: [],
+      qualifiedEligibilityGroupTimings: [],
+    });
+  });
+
+  test("uses a new RSVP going transition for requalified first-come priority at campaign opening", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createPublishedOrganizerEvent(backend);
+    const laterRequalifiedRider = context.rider;
+    const earlierCurrentRider = await createExtraRider(backend, "rsvp-priority");
+    const giveaway = await backend.createGiveaway(
+      context.organizer.sessionToken,
+      context.eventId,
+      giveawayInput(context.eventId, {
+        winnerLimits: { perRider: 1, total: 1 },
+        prizePools: [
+          {
+            id: "opened-first-come",
+            title: "Opening first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Opening cap" }],
+          },
+        ],
+      }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-01T09:00:00.000Z"));
+      await backend.registerForEvent(laterRequalifiedRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+      vi.setSystemTime(new Date("2026-08-01T10:00:00.000Z"));
+      await backend.registerForEvent(earlierCurrentRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+      vi.setSystemTime(new Date("2026-08-01T11:00:00.000Z"));
+      await backend.registerForEvent(laterRequalifiedRider.sessionToken, context.eventId, {
+        status: "interested",
+        attendanceType: "direct",
+      });
+      vi.setSystemTime(new Date("2026-08-01T12:00:00.000Z"));
+      await backend.registerForEvent(laterRequalifiedRider.sessionToken, context.eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await backend.submitGiveawayForReview(context.organizer.sessionToken, giveaway.id);
+    await backend.reviewGiveawayCompliance(context.admin.sessionToken, giveaway.id, {
+      decision: "approved",
+    });
+    await backend.openGiveaway(context.organizer.sessionToken, giveaway.id);
+
+    await expect(
+      backend.getRiderGiveawayState(earlierCurrentRider.sessionToken, giveaway.id),
+    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    await expect(
+      backend.getRiderGiveawayState(laterRequalifiedRider.sessionToken, giveaway.id),
+    ).resolves.toEqual({ giveawayId: giveaway.id, status: "entered", entryCount: 3 });
+  });
+
+  test("refills a released pool from an already eligible rider when the prior winner loses only that pool group", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
+      giveawayInput(eventId, {
+        eligibilityGroups: [
+          {
+            id: "rsvp-pass",
+            label: "Going rider with an active pass",
+            weight: 1,
+            conditions: [{ source: "active_rsvp_pass" }],
+          },
+          {
+            id: "checked-in",
+            label: "Confirmed attendee",
+            weight: 1,
+            conditions: [{ source: "confirmed_check_in" }],
+          },
+        ],
+        prizePools: [
+          {
+            id: "rsvp-first-come",
+            title: "RSVP first-come prize",
+            awardMode: "first_come",
+            fulfilmentMode: "onsite",
+            eligibilityGroupIds: ["rsvp-pass"],
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Reserved RSVP prize" }],
+          },
+        ],
+        winnerLimits: { perRider: 1, total: 1 },
+      }),
+    );
+    const alreadyEligibleRider = await createExtraRider(backend, "already-eligible-refill");
+    const registration = await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    if (!registration.pass) throw new Error("TEST_PASS_MISSING");
+    await backend.scanPass(
+      context.admin.sessionToken,
+      context.eventId,
+      registration.pass.qrToken,
+      "staff_camera",
+    );
+    await backend.registerForEvent(alreadyEligibleRider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await expect(
+      backend.getRiderGiveawayState(alreadyEligibleRider.sessionToken, context.giveaway.id),
+    ).resolves.toEqual({ giveawayId: context.giveaway.id, status: "entered", entryCount: 1 });
+
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "interested",
+      attendanceType: "direct",
+    });
+
+    await expect(
+      backend.getRiderGiveawayState(alreadyEligibleRider.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({
+      giveawayId: context.giveaway.id,
+      status: "selected",
+      award: { prizePoolTitle: "RSVP first-come prize" },
+    });
+  });
+
+  test("freezes entrant-facing mechanics after automatic entry history while preserving operational edits", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const context = await createApprovedOpenGiveaway(backend);
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await backend.pauseGiveaway(context.organizer.sessionToken, context.giveaway.id);
+
+    await expect(
+      backend.updateGiveaway(context.organizer.sessionToken, {
+        id: context.giveaway.id,
+        mechanics: "Changed mechanics would silently alter an existing entrant's consent.",
+      }),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED" });
+    await expect(
+      backend.updateGiveaway(context.organizer.sessionToken, {
+        id: context.giveaway.id,
+        title: "Operationally renamed giveaway",
+        publicVisibility: "eligible_riders",
+        timeZone: "UTC",
+        entryOpensAt: "2026-08-15T01:00:00.000Z",
+        entryClosesAt: "2026-08-15T02:00:00.000Z",
+        drawAt: null,
+        claimDeadlineAt: null,
+      }),
+    ).resolves.toMatchObject({
+      title: "Operationally renamed giveaway",
+      mechanicsVersion: 1,
+    });
+  });
+
+  test.each(["automatic", "opt_in", "claim_code", "manual_only"] as const)(
+    "freezes entrant-facing configuration after %s entry history",
+    async (entryMode) => {
+      const backend = asGiveawayBackend(await createTambikeTestBackend());
+      const context = await createPublishedOrganizerEvent(backend);
+      const input = giveawayInput(context.eventId, {
+        entryMode,
+        eligibilityGroups:
+          entryMode === "claim_code"
+            ? [
+                {
+                  id: "campaign-code",
+                  label: "Campaign code claim",
+                  weight: 1,
+                  conditions: [{ source: "campaign_code" }],
+                },
+              ]
+            : entryMode === "manual_only"
+              ? [
+                  {
+                    id: "manual-entry",
+                    label: "Audited manual entry",
+                    weight: 1,
+                    conditions: [{ source: "manual" }],
+                  },
+                ]
+              : automaticGiveawayInput(context.eventId).eligibilityGroups,
+      });
+      const giveaway = await backend.createGiveaway(context.organizer.sessionToken, context.eventId, input);
+      await backend.submitGiveawayForReview(context.organizer.sessionToken, giveaway.id);
+      await backend.reviewGiveawayCompliance(context.admin.sessionToken, giveaway.id, {
+        decision: "approved",
+      });
+      await backend.openGiveaway(context.organizer.sessionToken, giveaway.id);
+
+      if (entryMode === "automatic") {
+        await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+          status: "going",
+          attendanceType: "direct",
+        });
+      } else if (entryMode === "opt_in") {
+        await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+          status: "going",
+          attendanceType: "direct",
+        });
+        await backend.optInToGiveaway(context.rider.sessionToken, giveaway.id);
+      } else if (entryMode === "claim_code") {
+        const code = await backend.createGiveawayCampaignCode(
+          context.organizer.sessionToken,
+          giveaway.id,
+          { maxUses: 1 },
+        );
+        await backend.claimGiveawayCampaignCode(context.rider.sessionToken, giveaway.id, code.code);
+      } else {
+        await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+          giveawayId: giveaway.id,
+          riderId: context.rider.user.id,
+          reason: "Audited paper entry",
+        });
+      }
+      await backend.pauseGiveaway(context.organizer.sessionToken, giveaway.id);
+
+      await expect(
+        backend.updateGiveaway(context.organizer.sessionToken, {
+          id: giveaway.id,
+          maxEntriesPerRider: 2,
+        }),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED" });
+    },
+  );
 });

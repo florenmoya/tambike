@@ -60,6 +60,15 @@ import {
   rankFrozenWeightedEntries,
   type EncryptedDrawSeed,
 } from "./giveaways/draw-engine";
+import {
+  assertGiveawayEligibilityTimingIntegrity,
+  compareGiveawayEntriesByPoolPriority,
+  earliestGiveawayEligibilityTimestamp,
+  latestGiveawayEligibilityTimestamp,
+  reconcileGiveawayEligibilityTimings,
+  resolveGiveawayPoolEligibilityPriority,
+  type GiveawayEligibilityGroupTiming,
+} from "./giveaways/eligibility-timing";
 
 export class BackendError extends Error {
   constructor(
@@ -77,6 +86,7 @@ export class BackendError extends Error {
       | "GIVEAWAY_COMPLIANCE_REQUIRED"
       | "INVALID_GIVEAWAY_STATE"
       | "GIVEAWAY_ENTRY_MODE_LOCKED"
+      | "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED"
       | "GIVEAWAY_ENTRY_NOT_OPEN"
       | "GIVEAWAY_ENTRY_MODE_INVALID"
       | "GIVEAWAY_ENTRY_NOT_ELIGIBLE"
@@ -251,8 +261,11 @@ type GiveawayEntryRecord = {
   riderId: string;
   status: "eligible" | "locked" | "disqualified" | "withdrawn";
   currentWeight: number;
+  /** Retained through withdrawal; active timing rows are cleared instead. */
+  eligibilityCycleAt: string;
   qualifiedSourceFingerprint: string;
   qualifiedGroupIds: string[];
+  qualifiedEligibilityGroupTimings: GiveawayEligibilityGroupTiming[];
   entryPath: "automatic" | "opt_in" | "campaign_code" | "manual";
   mechanicsAcknowledgement?: {
     version: number;
@@ -316,8 +329,10 @@ type GiveawaySnapshotEntryRecord = Readonly<{
   riderId: string;
   opaquePublicReference: string;
   frozenWeight: number;
+  eligibilityCycleAt: string;
   qualifiedSourceFingerprint: string;
   qualifiedGroupIds: readonly string[];
+  qualifiedEligibilityGroupTimings: readonly GiveawayEligibilityGroupTiming[];
   rankSourceDigest: string;
 }>;
 
@@ -375,6 +390,9 @@ type GiveawayAwardRecord = {
     | "superseded";
   isCurrent: boolean;
   rank?: number;
+  directAllocationKey?: string;
+  /** Frozen pool-specific priority used for an entry-time award. */
+  allocationEligibilityAt?: string;
   opaqueClaimReference: string;
   claimDeadlineAt?: string;
   reasonDigest?: string;
@@ -453,18 +471,20 @@ type GiveawayCampaignView = {
 
 type GiveawayConditionEvaluation = {
   satisfied: boolean;
+  eligibleAt?: string;
   sourceFact: Record<string, unknown>;
 };
 
 type QualifiedAutomaticGiveawayGroup = {
   group: GiveawayEligibilityGroupRecord;
   sourceFacts: Record<string, unknown>[];
+  derivedEligibleAt: string;
 };
 
 type BackendSeed = {
   users: BackendUser[];
   events: Event[];
-  rsvps: Array<RSVP & { userId: string }>;
+  rsvps: Array<RSVP & { userId: string; goingAt?: string }>;
   passes: Array<Pass & { userId: string }>;
   giveaways: GiveawayAggregate[];
   perkRedemptions: PerkRedemptionRecord[];
@@ -621,7 +641,7 @@ export class TambikeBackend {
   private readonly users = new Map<string, BackendUser>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
-  private readonly rsvps = new Map<string, RSVP & { userId: string }>();
+  private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
   private readonly checkInSettings = new Map<string, CheckInSettings>();
@@ -862,19 +882,41 @@ export class TambikeBackend {
     }
 
     const patch = parsed as Record<string, unknown>;
+    const currentMechanics = this.currentGiveawayMechanics(giveaway);
+    const hasEntrantHistory = giveaway.entriesByRider.size > 0 || giveaway.entryEvents.length > 0;
     if (
       Object.hasOwn(patch, "entryMode") &&
       patch.entryMode !== giveaway.entryMode &&
-      (giveaway.entriesByRider.size > 0 || giveaway.entryEvents.length > 0)
+      hasEntrantHistory
     ) {
       throw new BackendError("GIVEAWAY_ENTRY_MODE_LOCKED", "GIVEAWAY_ENTRY_MODE_LOCKED");
     }
-    const hasAwardHistory = giveaway.awards.length > 0;
     const hasConfigurationPatch =
       Object.hasOwn(patch, "eligibilityGroups") && Object.hasOwn(patch, "prizePools");
     const nextWinnerLimits = Object.hasOwn(patch, "winnerLimits")
       ? (patch.winnerLimits as CreateGiveawayInput["winnerLimits"])
       : undefined;
+    const changesEntrantFacingConfiguration =
+      (Object.hasOwn(patch, "mechanics") && patch.mechanics !== currentMechanics.mechanics) ||
+      (Object.hasOwn(patch, "terms") && patch.terms !== currentMechanics.terms) ||
+      (Object.hasOwn(patch, "sponsorDisclosure") &&
+        patch.sponsorDisclosure !== currentMechanics.sponsorDisclosure) ||
+      (Object.hasOwn(patch, "kind") && patch.kind !== giveaway.kind) ||
+      (Object.hasOwn(patch, "maxEntriesPerRider") &&
+        patch.maxEntriesPerRider !== giveaway.maxEntriesPerRider) ||
+      (Object.hasOwn(patch, "presenceVerificationRequired") &&
+        Boolean(patch.presenceVerificationRequired) !== giveaway.presenceVerificationRequired) ||
+      hasConfigurationPatch ||
+      (nextWinnerLimits !== undefined &&
+        (giveaway.maxWinsPerRider !== nextWinnerLimits.perRider ||
+          giveaway.maxWinsTotal !== nextWinnerLimits.total));
+    if (hasEntrantHistory && changesEntrantFacingConfiguration) {
+      throw new BackendError(
+        "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
+        "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
+      );
+    }
+    const hasAwardHistory = giveaway.awards.length > 0;
     if (
       hasAwardHistory &&
       (hasConfigurationPatch ||
@@ -884,7 +926,6 @@ export class TambikeBackend {
     ) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
-    const currentMechanics = this.currentGiveawayMechanics(giveaway);
     let nextMechanics = currentMechanics.mechanics;
     let nextTerms = currentMechanics.terms;
     let nextSponsorDisclosure = currentMechanics.sponsorDisclosure;
@@ -982,16 +1023,23 @@ export class TambikeBackend {
 
     if (!changed) return this.toGiveawayCampaignView(giveaway);
 
+    const mechanicsChanged =
+      nextMechanics !== currentMechanics.mechanics ||
+      nextTerms !== currentMechanics.terms ||
+      nextSponsorDisclosure !== currentMechanics.sponsorDisclosure;
+
     giveaway.updatedAt = new Date().toISOString();
     giveaway.complianceStatus = "draft";
     giveaway.complianceReviewerId = undefined;
     giveaway.complianceReviewedAt = undefined;
     giveaway.complianceReviewReason = undefined;
-    this.createGiveawayMechanicsVersion(giveaway, user.id, {
-      mechanics: nextMechanics,
-      terms: nextTerms,
-      sponsorDisclosure: nextSponsorDisclosure,
-    });
+    if (mechanicsChanged) {
+      this.createGiveawayMechanicsVersion(giveaway, user.id, {
+        mechanics: nextMechanics,
+        terms: nextTerms,
+        sponsorDisclosure: nextSponsorDisclosure,
+      });
+    }
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_UPDATED", "giveaway", giveaway.id, {
       mechanicsVersion: giveaway.mechanicsVersions.at(-1)?.version ?? 1,
       complianceStatus: giveaway.complianceStatus,
@@ -1178,6 +1226,8 @@ export class TambikeBackend {
     this.voidDirectEntryAwards(giveaway, entry, organizer.id, "manual_revoke");
     entry.manualGrantActive = false;
     entry.status = "withdrawn";
+    entry.qualifiedGroupIds = [];
+    entry.qualifiedEligibilityGroupTimings = [];
     entry.updatedAt = now;
     this.recordGiveawayEntryEvent(giveaway, entry, {
       type: "manual_revoke",
@@ -1185,8 +1235,14 @@ export class TambikeBackend {
       actorUserId: organizer.id,
       idempotencyKey: `manual-revoke:${giveaway.id}:${entry.id}:${randomUUID()}`,
       weightDelta: -entry.currentWeight,
-      sourceSnapshot: { reasonDigest: this.hashGiveawayReason(normalizedReason) },
+      sourceSnapshot: {
+        reasonDigest: this.hashGiveawayReason(normalizedReason),
+        qualifiedGroupIds: [],
+        qualifiedEligibilityGroupTimings: [],
+        eligibilityCycleAt: entry.eligibilityCycleAt,
+      },
     });
+    this.reallocateImmediateGiveawayAwards(giveaway);
     this.auditGiveaway(giveaway, organizer.id, "GIVEAWAY_MANUAL_ENTRY_REVOKED", "entry", entry.id, {
       entryId: entry.id,
       reasonDigest: this.hashGiveawayReason(normalizedReason),
@@ -1628,7 +1684,10 @@ export class TambikeBackend {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
     this.transitionGiveaway(giveaway, "open");
-    this.reconcileAutomaticEligibilityForEvent(event.id);
+    if (giveaway.entryMode === "automatic") {
+      this.reconcileAutomaticEligibilityForEvent(event.id, undefined, { reallocate: false });
+    }
+    this.reallocateImmediateGiveawayAwards(giveaway);
     this.auditGiveaway(giveaway, user.id, "GIVEAWAY_OPENED", "giveaway", giveaway.id, {
       state: giveaway.state,
     });
@@ -1671,6 +1730,7 @@ export class TambikeBackend {
         this.reconcileEntryForLock(giveaway, riderId);
       }
     }
+    this.reallocateImmediateGiveawayAwards(giveaway);
 
     const mechanics = this.currentGiveawayMechanics(giveaway);
     const lockedAt = new Date().toISOString();
@@ -1686,15 +1746,21 @@ export class TambikeBackend {
           riderId: entry.riderId,
           opaquePublicReference: entry.opaquePublicReference,
           frozenWeight: entry.currentWeight,
+          eligibilityCycleAt: entry.eligibilityCycleAt,
           qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
           qualifiedGroupIds: Object.freeze([...entry.qualifiedGroupIds]),
+          qualifiedEligibilityGroupTimings: Object.freeze(
+            entry.qualifiedEligibilityGroupTimings.map((timing) => Object.freeze({ ...timing })),
+          ),
           rankSourceDigest: createHash("sha256")
             .update(
               canonicalizeJson({
                 entryId: entry.id,
                 opaquePublicReference: entry.opaquePublicReference,
+                eligibilityCycleAt: entry.eligibilityCycleAt,
                 qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
                 qualifiedGroupIds: entry.qualifiedGroupIds,
+                qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
                 weight: entry.currentWeight,
               }),
             )
@@ -1712,8 +1778,10 @@ export class TambikeBackend {
             entryId: entry.entryId,
             opaquePublicReference: entry.opaquePublicReference,
             frozenWeight: entry.frozenWeight,
+            eligibilityCycleAt: entry.eligibilityCycleAt,
             qualifiedSourceFingerprint: entry.qualifiedSourceFingerprint,
             qualifiedGroupIds: entry.qualifiedGroupIds,
+            qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
             rankSourceDigest: entry.rankSourceDigest,
           })),
         }),
@@ -1793,12 +1861,22 @@ export class TambikeBackend {
     }
 
     const rsvpKey = `${event.id}:${user.id}`;
-    const rsvp: RSVP & { userId: string } = {
+    const previousRsvp = this.rsvps.get(rsvpKey);
+    const now = new Date().toISOString();
+    const rsvp: RSVP & { userId: string; goingAt?: string } = {
       eventId: event.id,
       userId: user.id,
       status: input.status,
       attendanceType: input.attendanceType,
       clubName: input.clubName?.trim() || user.clubName,
+      ...(input.status === "going"
+        ? {
+            goingAt:
+              previousRsvp?.status === "going" && previousRsvp.goingAt
+                ? previousRsvp.goingAt
+                : now,
+          }
+        : {}),
     };
 
     this.rsvps.set(rsvpKey, rsvp);
@@ -1810,14 +1888,16 @@ export class TambikeBackend {
     }
 
     event.going += 1;
-    const pass: Pass & { userId: string } = {
-      id: passIdForEvent(event.id, user.id),
-      eventId: event.id,
-      userId: user.id,
-      qrToken: makePassToken(),
-      status: "active",
-      generatedAt: new Date().toISOString(),
-    };
+    const pass =
+      this.findPassForEventRider(event.id, user.id) ??
+      ({
+        id: passIdForEvent(event.id, user.id),
+        eventId: event.id,
+        userId: user.id,
+        qrToken: makePassToken(),
+        status: "active",
+        generatedAt: now,
+      } satisfies Pass & { userId: string });
 
     this.passes.set(pass.id, pass);
     this.audit("RSVP_UPDATED", user.id, event.id);
@@ -2529,14 +2609,29 @@ export class TambikeBackend {
     if (existing && existing.status !== "withdrawn") {
       throw new BackendError("GIVEAWAY_ALREADY_ENTERED", "GIVEAWAY_ALREADY_ENTERED");
     }
+    const now = new Date().toISOString();
     const qualification = this.evaluateGiveawayEntryQualification(giveaway, riderId, {
       campaignCode: input.path === "campaign_code",
       manual: input.path === "manual",
+      actionAt: now,
     });
     if (qualification.weight <= 0) {
       throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
     }
-    const now = new Date().toISOString();
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: existing?.qualifiedEligibilityGroupTimings ?? [],
+      qualifiedGroups: qualification.qualifiedGroups.map(({ group, derivedEligibleAt }) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt,
+      })),
+      actionAt: now,
+    });
+    if (!timing.eligibilityCycleAt) throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    assertGiveawayEligibilityTimingIntegrity(
+      qualification.qualifiedGroups.map(({ group }) => group.id),
+      timing.qualifiedEligibilityGroupTimings,
+    );
     const entry =
       existing ??
       ({
@@ -2544,8 +2639,10 @@ export class TambikeBackend {
         riderId,
         status: "eligible",
         currentWeight: qualification.weight,
+        eligibilityCycleAt: timing.eligibilityCycleAt,
         qualifiedSourceFingerprint: qualification.sourceFingerprint,
         qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+        qualifiedEligibilityGroupTimings: timing.qualifiedEligibilityGroupTimings,
         entryPath: input.path,
         opaquePublicReference: `entry_${randomBytes(16).toString("base64url")}`,
         createdAt: now,
@@ -2553,8 +2650,10 @@ export class TambikeBackend {
       } satisfies GiveawayEntryRecord);
     entry.status = "eligible";
     entry.currentWeight = qualification.weight;
+    entry.eligibilityCycleAt = timing.eligibilityCycleAt;
     entry.qualifiedSourceFingerprint = qualification.sourceFingerprint;
     entry.qualifiedGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
+    entry.qualifiedEligibilityGroupTimings = timing.qualifiedEligibilityGroupTimings;
     entry.entryPath = input.path;
     entry.mechanicsAcknowledgement = input.mechanicsAcknowledgement;
     entry.campaignCodeId = input.campaignCodeId;
@@ -2570,6 +2669,8 @@ export class TambikeBackend {
       weightDelta: qualification.weight,
       sourceSnapshot: {
         qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+        qualifiedEligibilityGroupTimings: timing.qualifiedEligibilityGroupTimings,
+        eligibilityCycleAt: timing.eligibilityCycleAt,
         sourceFingerprint: qualification.sourceFingerprint,
         ...(input.mechanicsAcknowledgement
           ? {
@@ -2581,14 +2682,14 @@ export class TambikeBackend {
         ...(input.reasonDigest ? { reasonDigest: input.reasonDigest } : {}),
       },
     });
-    this.allocateEntryTimeAwards(giveaway, entry);
+    this.reallocateImmediateGiveawayAwards(giveaway);
     return entry;
   }
 
   private evaluateGiveawayEntryQualification(
     giveaway: GiveawayAggregate,
     riderId: string,
-    context: { campaignCode?: boolean; manual?: boolean } = {},
+    context: { campaignCode?: boolean; manual?: boolean; actionAt?: string } = {},
   ) {
     const qualifiedGroups = giveaway.eligibilityGroups.flatMap<QualifiedAutomaticGiveawayGroup>(
       (group) => {
@@ -2597,7 +2698,17 @@ export class TambikeBackend {
           this.evaluateGiveawayCondition(giveaway.eventId, riderId, condition.condition, context),
         );
         if (!evaluations.every((evaluation) => evaluation.satisfied)) return [];
-        return [{ group, sourceFacts: evaluations.map((evaluation) => evaluation.sourceFact) }];
+        const derivedEligibleAt = latestGiveawayEligibilityTimestamp(
+          evaluations.map((evaluation) => evaluation.eligibleAt),
+        );
+        if (!derivedEligibleAt) return [];
+        return [
+          {
+            group,
+            sourceFacts: evaluations.map((evaluation) => evaluation.sourceFact),
+            derivedEligibleAt,
+          },
+        ];
       },
     );
     const calculatedWeight = qualifiedGroups.reduce(
@@ -2645,19 +2756,24 @@ export class TambikeBackend {
     const qualification = this.evaluateGiveawayEntryQualification(giveaway, riderId, {
       campaignCode: entry.entryPath === "campaign_code",
       manual: entry.entryPath === "manual" && entry.manualGrantActive,
+      actionAt: entry.createdAt,
     });
     const now = new Date().toISOString();
     if (qualification.weight <= 0) {
       if (entry.status === "eligible") {
         this.voidDirectEntryAwards(giveaway, entry, undefined, "lock_revalidation");
         entry.status = "withdrawn";
+        entry.qualifiedGroupIds = [];
+        entry.qualifiedEligibilityGroupTimings = [];
         entry.updatedAt = now;
         this.recordGiveawayEntryEvent(giveaway, entry, {
           type: "source_revalidated",
           sourceKey: `lock-revalidation:${giveaway.id}:${entry.id}:${giveaway.entryEvents.length + 1}`,
           weightDelta: -entry.currentWeight,
           sourceSnapshot: {
-            qualifiedGroupIds: qualification.qualifiedGroups.map(({ group }) => group.id),
+            qualifiedGroupIds: [],
+            qualifiedEligibilityGroupTimings: [],
+            eligibilityCycleAt: entry.eligibilityCycleAt,
             sourceFingerprint: qualification.sourceFingerprint,
           },
           idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
@@ -2665,19 +2781,35 @@ export class TambikeBackend {
       }
       return;
     }
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: entry.qualifiedEligibilityGroupTimings,
+      qualifiedGroups: qualification.qualifiedGroups.map(({ group, derivedEligibleAt }) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt,
+      })),
+      actionAt: entry.entryPath === "automatic" ? undefined : entry.createdAt,
+    });
+    if (!timing.eligibilityCycleAt) throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    const nextGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
+    assertGiveawayEligibilityTimingIntegrity(nextGroupIds, timing.qualifiedEligibilityGroupTimings);
     if (entry.status === "withdrawn" && entry.entryPath !== "manual") entry.status = "eligible";
     if (entry.status === "eligible") {
       const weightDelta = qualification.weight - entry.currentWeight;
       const changed =
         weightDelta !== 0 ||
         entry.qualifiedSourceFingerprint !== qualification.sourceFingerprint ||
-        !this.haveSameGiveawayGroupIds(
-          entry.qualifiedGroupIds,
-          qualification.qualifiedGroups.map(({ group }) => group.id),
+        !this.haveSameGiveawayGroupIds(entry.qualifiedGroupIds, nextGroupIds) ||
+        entry.eligibilityCycleAt !== timing.eligibilityCycleAt ||
+        !this.haveSameGiveawayEligibilityTimings(
+          entry.qualifiedEligibilityGroupTimings,
+          timing.qualifiedEligibilityGroupTimings,
         );
       entry.currentWeight = qualification.weight;
+      entry.eligibilityCycleAt = timing.eligibilityCycleAt;
       entry.qualifiedSourceFingerprint = qualification.sourceFingerprint;
-      entry.qualifiedGroupIds = qualification.qualifiedGroups.map(({ group }) => group.id);
+      entry.qualifiedGroupIds = nextGroupIds;
+      entry.qualifiedEligibilityGroupTimings = timing.qualifiedEligibilityGroupTimings;
       entry.updatedAt = now;
       this.voidIneligibleDirectEntryAwards(giveaway, entry, undefined, "lock_pool_revalidation");
       if (changed) {
@@ -2687,17 +2819,31 @@ export class TambikeBackend {
           weightDelta,
           sourceSnapshot: {
             qualifiedGroupIds: entry.qualifiedGroupIds,
+            qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
+            eligibilityCycleAt: entry.eligibilityCycleAt,
             sourceFingerprint: entry.qualifiedSourceFingerprint,
           },
           idempotencyKey: `lock-revalidation:${giveaway.id}:${entry.id}:${randomUUID()}`,
         });
-        this.allocateEntryTimeAwards(giveaway, entry);
       }
     }
   }
 
   private haveSameGiveawayGroupIds(left: readonly string[], right: readonly string[]) {
     return left.length === right.length && left.every((id, index) => id === right[index]);
+  }
+
+  private haveSameGiveawayEligibilityTimings(
+    left: readonly GiveawayEligibilityGroupTiming[],
+    right: readonly GiveawayEligibilityGroupTiming[],
+  ) {
+    return (
+      left.length === right.length &&
+      left.every(
+        (timing, index) =>
+          timing.groupId === right[index]?.groupId && timing.eligibleAt === right[index]?.eligibleAt,
+      )
+    );
   }
 
   private isEntryEligibleForPool(entry: GiveawayEntryRecord, pool: GiveawayPrizePoolRecord) {
@@ -2738,20 +2884,78 @@ export class TambikeBackend {
     );
   }
 
-  private allocateEntryTimeAwards(giveaway: GiveawayAggregate, entry: GiveawayEntryRecord) {
+  /**
+   * Reconciles every immediate pool in one deterministic pass. Opening first
+   * materializes all automatic candidates and then calls this method, so a
+   * lexical identifier or reconciliation loop cannot decide a first-come win.
+   */
+  private reallocateImmediateGiveawayAwards(giveaway: GiveawayAggregate) {
+    const candidates = Array.from(giveaway.entriesByRider.values()).filter(
+      (entry) => entry.status === "eligible",
+    );
     for (const pool of [...giveaway.prizePools].sort((left, right) => left.position - right.position)) {
-      if (!["guaranteed", "first_come"].includes(pool.awardMode)) continue;
-      if (!this.isEntryEligibleForPool(entry, pool)) continue;
-      if (!this.canCreateGiveawayAward(giveaway, pool, entry.riderId)) continue;
-      if (pool.awardMode === "guaranteed") {
-        this.createGiveawayAward(giveaway, { entry, prizePool: pool });
-        continue;
+      if (pool.awardMode !== "guaranteed" && pool.awardMode !== "first_come") continue;
+      const orderedCandidates = candidates
+        .filter((entry) => this.isEntryEligibleForPool(entry, pool))
+        .sort((left, right) =>
+          compareGiveawayEntriesByPoolPriority(left, right, pool.eligibilityGroupIds),
+        );
+      for (const entry of orderedCandidates) {
+        this.allocateImmediateGiveawayAwardForPool(giveaway, entry, pool);
       }
-      const prizeItem = pool.items
-        .filter((item) => item.status === "available")
-        .sort((left, right) => left.position - right.position)[0];
-      if (prizeItem) this.createGiveawayAward(giveaway, { entry, prizePool: pool, prizeItem });
     }
+  }
+
+  private allocateImmediateGiveawayAwardForPool(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+    pool: GiveawayPrizePoolRecord,
+  ) {
+    if (!this.isEntryEligibleForPool(entry, pool)) return false;
+    if (
+      giveaway.awards.some(
+        (award) =>
+          award.entryId === entry.id &&
+          award.prizePoolId === pool.id &&
+          !award.drawId &&
+          award.isCurrent,
+      )
+    ) {
+      return true;
+    }
+    const allocationEligibilityAt = resolveGiveawayPoolEligibilityPriority({
+      eligibilityCycleAt: entry.eligibilityCycleAt,
+      qualifiedEligibilityGroupTimings: entry.qualifiedEligibilityGroupTimings,
+      permittedGroupIds: pool.eligibilityGroupIds,
+    });
+    if (!allocationEligibilityAt) return false;
+    const directAllocationKey = `direct:${entry.id}:${pool.id}:${allocationEligibilityAt}`;
+    const historicAward = giveaway.awards.find(
+      (award) => award.directAllocationKey === directAllocationKey,
+    );
+    if (historicAward) return historicAward.isCurrent;
+    if (!this.canCreateGiveawayAward(giveaway, pool, entry.riderId)) return false;
+    if (pool.awardMode === "guaranteed") {
+      this.createGiveawayAward(giveaway, {
+        entry,
+        prizePool: pool,
+        directAllocationKey,
+        allocationEligibilityAt,
+      });
+      return true;
+    }
+    const prizeItem = pool.items
+      .filter((item) => item.status === "available")
+      .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))[0];
+    if (!prizeItem) return false;
+    this.createGiveawayAward(giveaway, {
+      entry,
+      prizePool: pool,
+      prizeItem,
+      directAllocationKey,
+      allocationEligibilityAt,
+    });
+    return true;
   }
 
   private voidDirectEntryAwards(
@@ -2761,6 +2965,7 @@ export class TambikeBackend {
     reason: string,
     shouldVoid: (award: GiveawayAwardRecord) => boolean = () => true,
   ) {
+    const affectedPoolIds = new Set<string>();
     for (const award of giveaway.awards.filter(
       (candidate) =>
         candidate.entryId === entry.id &&
@@ -2769,6 +2974,7 @@ export class TambikeBackend {
         ["pending_verification", "claimable", "verified"].includes(candidate.status),
     )) {
       if (!shouldVoid(award)) continue;
+      affectedPoolIds.add(award.prizePoolId);
       award.isCurrent = false;
       award.status = "voided";
       award.reasonDigest = this.hashGiveawayReason(reason);
@@ -2785,6 +2991,7 @@ export class TambikeBackend {
         reasonDigest: award.reasonDigest,
       });
     }
+    return affectedPoolIds;
   }
 
   private voidIneligibleDirectEntryAwards(
@@ -2793,7 +3000,7 @@ export class TambikeBackend {
     actorUserId: string | undefined,
     reason: string,
   ) {
-    this.voidDirectEntryAwards(giveaway, entry, actorUserId, reason, (award) => {
+    return this.voidDirectEntryAwards(giveaway, entry, actorUserId, reason, (award) => {
       const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
       return !pool || !this.isEntryEligibleForPool(entry, pool);
     });
@@ -2808,6 +3015,8 @@ export class TambikeBackend {
       draw?: GiveawayDrawRecord;
       snapshotEntry?: GiveawaySnapshotEntryRecord;
       rank?: number;
+      directAllocationKey?: string;
+      allocationEligibilityAt?: string;
       predecessorAwardId?: string;
     },
   ) {
@@ -2819,6 +3028,19 @@ export class TambikeBackend {
     }
     if (Boolean(input.draw) !== Boolean(input.snapshotEntry) || Boolean(input.draw) !== Boolean(input.rank)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (input.draw) {
+      if (input.directAllocationKey || input.allocationEligibilityAt) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+    } else if (!input.directAllocationKey || !input.allocationEligibilityAt) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    if (
+      input.directAllocationKey &&
+      giveaway.awards.some((award) => award.directAllocationKey === input.directAllocationKey)
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
     if (input.prizeItem) {
       const conflictingCurrentAward = giveaway.awards.find(
@@ -2839,6 +3061,8 @@ export class TambikeBackend {
       status: input.prizePool.presenceVerificationRequired ? "pending_verification" : "claimable",
       isCurrent: true,
       rank: input.rank,
+      directAllocationKey: input.directAllocationKey,
+      allocationEligibilityAt: input.allocationEligibilityAt,
       opaqueClaimReference: `claim_${randomBytes(16).toString("base64url")}`,
       claimDeadlineAt: giveaway.claimDeadlineAt,
       predecessorAwardId: input.predecessorAwardId,
@@ -3145,7 +3369,11 @@ export class TambikeBackend {
    * Runs only after RSVP/pass/check-in state has been committed. It deliberately
    * ignores paused and locked campaigns so a frozen candidate set cannot change.
    */
-  private reconcileAutomaticEligibilityForEvent(eventId: string, riderId?: string) {
+  private reconcileAutomaticEligibilityForEvent(
+    eventId: string,
+    riderId?: string,
+    options: { reallocate?: boolean } = {},
+  ) {
     const giveawayIds = this.giveaways.giveawayIdsByEventId.get(eventId);
     if (!giveawayIds) return;
 
@@ -3153,9 +3381,11 @@ export class TambikeBackend {
     for (const giveawayId of giveawayIds) {
       const giveaway = this.requireGiveaway(giveawayId);
       if (giveaway.state !== "open" || giveaway.entryMode !== "automatic") continue;
+      let changed = false;
       for (const candidateRiderId of riderIds) {
-        this.reconcileAutomaticEntry(giveaway, candidateRiderId);
+        changed = this.reconcileAutomaticEntry(giveaway, candidateRiderId) || changed;
       }
+      if (changed && options.reallocate !== false) this.reallocateImmediateGiveawayAwards(giveaway);
     }
   }
 
@@ -3183,6 +3413,8 @@ export class TambikeBackend {
         this.voidDirectEntryAwards(giveaway, existing, undefined, "automatic_withdrawal");
         existing.status = "withdrawn";
         existing.qualifiedSourceFingerprint = sourceFingerprint;
+        existing.qualifiedGroupIds = [];
+        existing.qualifiedEligibilityGroupTimings = [];
         existing.updatedAt = new Date().toISOString();
         this.recordAutomaticEntryEvent(
           giveaway,
@@ -3192,9 +3424,22 @@ export class TambikeBackend {
           qualifiedGroups,
           sourceFingerprint,
         );
+        return true;
       }
-      return;
+      return false;
     }
+
+    const timing = reconcileGiveawayEligibilityTimings({
+      previousTimings: existing?.qualifiedEligibilityGroupTimings ?? [],
+      qualifiedGroups: qualifiedGroups.map(({ group, derivedEligibleAt }) => ({
+        groupId: group.id,
+        position: group.position,
+        derivedEligibleAt,
+      })),
+    });
+    if (!timing.eligibilityCycleAt) return false;
+    const nextQualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
+    assertGiveawayEligibilityTimingIntegrity(nextQualifiedGroupIds, timing.qualifiedEligibilityGroupTimings);
 
     if (!existing) {
       const now = new Date().toISOString();
@@ -3203,8 +3448,10 @@ export class TambikeBackend {
         riderId,
         status: "eligible",
         currentWeight: nextWeight,
+        eligibilityCycleAt: timing.eligibilityCycleAt,
         qualifiedSourceFingerprint: sourceFingerprint,
-        qualifiedGroupIds: qualifiedGroups.map(({ group }) => group.id),
+        qualifiedGroupIds: nextQualifiedGroupIds,
+        qualifiedEligibilityGroupTimings: timing.qualifiedEligibilityGroupTimings,
         entryPath: "automatic",
         opaquePublicReference: `entry_${randomBytes(16).toString("base64url")}`,
         createdAt: now,
@@ -3220,15 +3467,16 @@ export class TambikeBackend {
         qualifiedGroups,
         sourceFingerprint,
       );
-      this.allocateEntryTimeAwards(giveaway, entry);
-      return;
+      return true;
     }
 
     if (existing.status === "withdrawn") {
       existing.status = "eligible";
       existing.currentWeight = nextWeight;
+      existing.eligibilityCycleAt = timing.eligibilityCycleAt;
       existing.qualifiedSourceFingerprint = sourceFingerprint;
-      existing.qualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
+      existing.qualifiedGroupIds = nextQualifiedGroupIds;
+      existing.qualifiedEligibilityGroupTimings = timing.qualifiedEligibilityGroupTimings;
       existing.updatedAt = new Date().toISOString();
       this.recordAutomaticEntryEvent(
         giveaway,
@@ -3238,24 +3486,29 @@ export class TambikeBackend {
         qualifiedGroups,
         sourceFingerprint,
       );
-      this.allocateEntryTimeAwards(giveaway, existing);
-      return;
+      return true;
     }
 
     if (existing.status === "eligible") {
-      const nextQualifiedGroupIds = qualifiedGroups.map(({ group }) => group.id);
       const changed =
         existing.currentWeight !== nextWeight ||
         existing.qualifiedSourceFingerprint !== sourceFingerprint ||
-        !this.haveSameGiveawayGroupIds(existing.qualifiedGroupIds, nextQualifiedGroupIds);
+        !this.haveSameGiveawayGroupIds(existing.qualifiedGroupIds, nextQualifiedGroupIds) ||
+        existing.eligibilityCycleAt !== timing.eligibilityCycleAt ||
+        !this.haveSameGiveawayEligibilityTimings(
+          existing.qualifiedEligibilityGroupTimings,
+          timing.qualifiedEligibilityGroupTimings,
+        );
       const weightDelta = nextWeight - existing.currentWeight;
       if (changed) {
         existing.currentWeight = nextWeight;
+        existing.eligibilityCycleAt = timing.eligibilityCycleAt;
         existing.qualifiedSourceFingerprint = sourceFingerprint;
         existing.qualifiedGroupIds = nextQualifiedGroupIds;
+        existing.qualifiedEligibilityGroupTimings = timing.qualifiedEligibilityGroupTimings;
         existing.updatedAt = new Date().toISOString();
       }
-      this.voidIneligibleDirectEntryAwards(
+      const affectedPoolIds = this.voidIneligibleDirectEntryAwards(
         giveaway,
         existing,
         undefined,
@@ -3270,9 +3523,10 @@ export class TambikeBackend {
           qualifiedGroups,
           sourceFingerprint,
         );
-        this.allocateEntryTimeAwards(giveaway, existing);
       }
+      return changed || affectedPoolIds.size > 0;
     }
+    return false;
   }
 
   private calculateQualifiedSourceFingerprint(
@@ -3308,6 +3562,12 @@ export class TambikeBackend {
     );
     const sourceSnapshot = Object.freeze({
       qualifiedGroupIds: Object.freeze(qualifiedGroups.map(({ group }) => group.id)),
+      qualifiedEligibilityGroupTimings: Object.freeze(
+        qualifiedGroups.map(({ group, derivedEligibleAt }) =>
+          Object.freeze({ groupId: group.id, eligibleAt: derivedEligibleAt }),
+        ),
+      ),
+      eligibilityCycleAt: entry.eligibilityCycleAt,
       sourceFingerprint,
       sourceFacts,
       effectiveWeight: qualifiedGroups.length === 0 ? 0 : entry.currentWeight,
@@ -3336,20 +3596,28 @@ export class TambikeBackend {
     eventId: string,
     riderId: string,
     condition: GiveawayEligibilityConditionInput,
-    context: { campaignCode?: boolean; manual?: boolean } = {},
+    context: { campaignCode?: boolean; manual?: boolean; actionAt?: string } = {},
   ): GiveawayConditionEvaluation {
     switch (condition.source) {
       case "active_rsvp_pass": {
         const rsvp = this.rsvps.get(`${eventId}:${riderId}`);
         const pass = this.findPassForEventRider(eventId, riderId);
+        const satisfied = rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled");
+        const eligibleAt = satisfied
+          ? latestGiveawayEligibilityTimestamp([rsvp?.goingAt, pass?.generatedAt])
+          : null;
         return {
-          satisfied: rsvp?.status === "going" && Boolean(pass && pass.status !== "cancelled"),
+          satisfied,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             rsvpStatus: rsvp?.status ?? null,
             attendanceType: rsvp?.attendanceType ?? null,
+            rsvpGoingAt: rsvp?.goingAt ?? null,
             passId: pass?.id ?? null,
             passStatus: pass?.status ?? null,
+            passGeneratedAt: pass?.generatedAt ?? null,
+            eligibleAt,
           },
         };
       }
@@ -3358,15 +3626,22 @@ export class TambikeBackend {
         const confirmedCheckIns = pass
           ? this.confirmedCheckInsForPass(eventId, riderId, pass.id)
           : [];
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          confirmedCheckIns.map((checkIn) => checkIn.confirmedAt ?? checkIn.timestamp),
+        );
         return {
           satisfied: confirmedCheckIns.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             confirmedCheckIns: confirmedCheckIns.map((checkIn) => ({
               id: checkIn.id,
               method: checkIn.method,
               confirmationMethod: checkIn.confirmationMethod ?? null,
+              confirmedAt: checkIn.confirmedAt ?? null,
+              timestamp: checkIn.timestamp,
             })),
+            eligibleAt,
           },
         };
       }
@@ -3381,15 +3656,22 @@ export class TambikeBackend {
                   this.isStaffConfirmationMethod(checkIn.confirmationMethod)),
             )
           : [];
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          staffConfirmedCheckIns.map((checkIn) => checkIn.confirmedAt ?? checkIn.timestamp),
+        );
         return {
           satisfied: staffConfirmedCheckIns.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             staffConfirmedCheckIns: staffConfirmedCheckIns.map((checkIn) => ({
               id: checkIn.id,
               method: checkIn.method,
               confirmationMethod: checkIn.confirmationMethod ?? null,
+              confirmedAt: checkIn.confirmedAt ?? null,
+              timestamp: checkIn.timestamp,
             })),
+            eligibleAt,
           },
         };
       }
@@ -3401,28 +3683,50 @@ export class TambikeBackend {
                 (redemption) =>
                   redemption.perkId === condition.perkId &&
                   redemption.userId === riderId &&
-                  redemption.status === "redeemed",
+                  redemption.status === "redeemed" &&
+                  Boolean(redemption.redeemedAt),
               )
-              .sort((left, right) => left.id.localeCompare(right.id))
+              .sort(
+                (left, right) =>
+                  (left.redeemedAt ?? "").localeCompare(right.redeemedAt ?? "") ||
+                  left.id.localeCompare(right.id),
+              )
           : [];
+        const eligibleAt = earliestGiveawayEligibilityTimestamp(
+          redemptions.map((redemption) => redemption.redeemedAt),
+        );
         return {
           satisfied: redemptions.length > 0,
+          eligibleAt: eligibleAt ?? undefined,
           sourceFact: {
             source: condition.source,
             perkId: condition.perkId,
-            redemptionIds: redemptions.map((redemption) => redemption.id),
+            redemptions: redemptions.map((redemption) => ({
+              id: redemption.id,
+              redeemedAt: redemption.redeemedAt,
+            })),
+            eligibleAt,
           },
         };
       }
       case "campaign_code":
         return {
           satisfied: Boolean(context.campaignCode),
-          sourceFact: { source: condition.source, satisfiedBy: context.campaignCode ? "claim" : null },
+          eligibleAt: context.campaignCode ? context.actionAt : undefined,
+          sourceFact: {
+            source: condition.source,
+            satisfiedBy: context.campaignCode ? "claim" : null,
+            eligibleAt: context.campaignCode ? context.actionAt ?? null : null,
+          },
         };
       case "manual":
         return {
           satisfied: Boolean(context.manual),
-          sourceFact: { source: condition.source },
+          eligibleAt: context.manual ? context.actionAt : undefined,
+          sourceFact: {
+            source: condition.source,
+            eligibleAt: context.manual ? context.actionAt ?? null : null,
+          },
         };
     }
   }
@@ -3436,7 +3740,11 @@ export class TambikeBackend {
           checkIn.userId === riderId &&
           checkIn.status === "confirmed",
       )
-      .sort((left, right) => left.id.localeCompare(right.id));
+      .sort(
+        (left, right) =>
+          (left.confirmedAt ?? left.timestamp).localeCompare(right.confirmedAt ?? right.timestamp) ||
+          left.id.localeCompare(right.id),
+      );
   }
 
   private findPassForEventRider(eventId: string, riderId: string) {

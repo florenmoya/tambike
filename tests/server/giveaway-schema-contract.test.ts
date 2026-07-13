@@ -146,6 +146,107 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
   });
 
+  test("persists canonical eligibility-cycle timing, direct allocation proof, and RSVP going transitions", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const entry = models.get("GiveawayEntry");
+    const award = models.get("GiveawayAward");
+    const rsvp = models.get("RSVP");
+
+    expect(entry?.fields.find((field) => field.name === "eligibilityCycleAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(
+      entry?.fields.find((field) => field.name === "qualifiedEligibilityGroupTimings"),
+    ).toMatchObject({ kind: "scalar", type: "Json" });
+    expect(award?.fields.find((field) => field.name === "allocationEligibilityAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(rsvp?.fields.find((field) => field.name === "goingAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(prismaSchema).toMatch(/eligibilityCycleAt\s+DateTime\s*\n/);
+    expect(prismaSchema).toMatch(/qualifiedEligibilityGroupTimings\s+Json\s*\n/);
+    expect(prismaSchema).toMatch(/allocationEligibilityAt\s+DateTime\?\s*\n/);
+    expect(prismaSchema).toMatch(/goingAt\s+DateTime\?\s*\n/);
+    expect(giveawayMigrationSql).toContain('"eligibilityCycleAt" TIMESTAMP(3) NOT NULL');
+    expect(giveawayMigrationSql).toContain('"qualifiedEligibilityGroupTimings" JSONB NOT NULL');
+    expect(giveawayMigrationSql).toContain('"allocationEligibilityAt" TIMESTAMP(3)');
+    expect(giveawayMigrationSql).toContain('"goingAt" TIMESTAMP(3)');
+    expect(giveawayMigrationSql).toContain('"GiveawayEntry_giveawayId_status_eligibilityCycleAt_id_idx"');
+  });
+
+  test("derives conservative historical RSVP timing and rejects tampered timing priority", () => {
+    const entryTimingGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_entry_provenance"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayEntry_provenance_guard"'),
+    );
+    const snapshotTimingGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_snapshot_entry_parentage"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawaySnapshotEntry_parentage_guard"'),
+    );
+
+    expect(giveawayMigrationSql).toContain(
+      'GREATEST(pass."generatedAt", rsvp."createdAt", rsvp."updatedAt")',
+    );
+    expect(giveawayMigrationSql).toContain('GREATEST("createdAt", "updatedAt")');
+    expect(entryTimingGuard).toContain("::timestamptz");
+    expect(entryTimingGuard).toContain('NEW."eligibilityCycleAt"');
+    expect(entryTimingGuard).toContain("earliest_eligibility_at");
+    expect(snapshotTimingGuard).toContain("::timestamptz");
+    expect(snapshotTimingGuard).toContain('NEW."eligibilityCycleAt"');
+    expect(snapshotTimingGuard).toContain("earliest_eligibility_at");
+  });
+
+  test("freezes entrant-facing configuration after entry history while retaining operational campaign edits", () => {
+    const configurationGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_event_giveaway_entrant_configuration"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "EventGiveaway_entrant_configuration_guard"'),
+    );
+
+    expect(configurationGuard).toContain('giveaway_has_entrant_history(OLD."id")');
+    expect(giveawayMigrationSql).toContain('FROM "GiveawayEntry"');
+    expect(giveawayMigrationSql).toContain('FROM "GiveawayEntryEvent"');
+    expect(configurationGuard).toContain('NEW."title"');
+    expect(configurationGuard).toContain('NEW."visibility"');
+    expect(configurationGuard).toContain('NEW."timeZone"');
+    expect(configurationGuard).toContain('NEW."entryMode"');
+    expect(configurationGuard).toContain('NEW."maxEntriesPerRider"');
+    expect(configurationGuard).toContain('NEW."maxWinsPerRider"');
+    expect(configurationGuard).toContain('NEW."presenceVerificationRequired"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "EventGiveaway_entrant_configuration_guard"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayMechanicsVersion_entrant_configuration_guard"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayEligibilityGroup_entrant_configuration_guard"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayPrizePool_entrant_configuration_guard"');
+    expect(giveawayMigrationSql).toContain('CREATE TRIGGER "GiveawayPrizeItem_entrant_configuration_guard"');
+    expect(giveawayMigrationSql).toContain(
+      'CREATE TRIGGER "GiveawayPrizePoolEligibilityGroup_entrant_configuration_guard"',
+    );
+    const mechanicsGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_mechanics_entrant_configuration"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayMechanicsVersion_entrant_configuration_guard"'),
+    );
+    expect(mechanicsGuard).toContain('NEW."version"');
+    expect(mechanicsGuard).toContain('NEW."checksum"');
+    expect(mechanicsGuard).toContain('NEW."createdByUserId"');
+  });
+
+  test("binds direct award provenance to the entry and pool eligibility priority", () => {
+    const awardGuard = giveawayMigrationSql.slice(
+      giveawayMigrationSql.indexOf('CREATE FUNCTION "validate_giveaway_award_parentage"()'),
+      giveawayMigrationSql.indexOf('CREATE TRIGGER "GiveawayAward_parentage_guard"'),
+    );
+
+    expect(awardGuard).toContain("expected_allocation_eligibility_at");
+    expect(awardGuard).toContain('NEW."allocationEligibilityAt"');
+    expect(awardGuard).toContain("format('direct:%s:%s:%s'");
+    expect(awardGuard).toContain('GiveawayAward direct allocation provenance must match entry and pool priority');
+    expect(awardGuard).toContain("entry_status");
+    expect(awardGuard).toContain('GiveawayAward direct allocations require an eligible entry');
+  });
+
   test("persists the frozen source fingerprint and qualified groups on every snapshot entry", () => {
     const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
     const snapshotEntry = models.get("GiveawaySnapshotEntry");
@@ -359,10 +460,10 @@ describe("giveaway Prisma schema contract", () => {
     expect(giveawayMigrationSql).toContain('CREATE FUNCTION "validate_giveaway_perk_event_parentage"()');
     expect(giveawayMigrationSql).toContain('CREATE TRIGGER "Perk_giveaway_event_parentage_guard"');
     expect(giveawayMigrationSql).toContain(
-      'BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "predecessorAwardId"',
+      'BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"',
     );
     expect(giveawayMigrationSql).toContain(
-      'FUNCTION "prevent_giveaway_scope_reparenting"(\'giveawayId\', \'entryId\', \'drawId\', \'prizePoolId\', \'prizeItemId\', \'snapshotEntryId\', \'winnerUserId\', \'rank\', \'directAllocationKey\', \'predecessorAwardId\')',
+      'FUNCTION "prevent_giveaway_scope_reparenting"(\'giveawayId\', \'entryId\', \'drawId\', \'prizePoolId\', \'prizeItemId\', \'snapshotEntryId\', \'winnerUserId\', \'rank\', \'directAllocationKey\', \'allocationEligibilityAt\', \'predecessorAwardId\')',
     );
   });
 });

@@ -416,6 +416,7 @@ model RSVP {
   eventId        String
   userId         String
   status         RsvpStatus
+  goingAt        DateTime?
   attendanceType AttendanceType
   companions     Int            @default(0)
   clubName       String?
@@ -722,8 +723,10 @@ model GiveawayEntry {
   status                         GiveawayEntryStatus @default(eligible)
   entryPath                      GiveawayEntryPath
   currentWeight                  Int                 @default(1)
+  eligibilityCycleAt             DateTime
   qualifiedSourceFingerprint     String
   qualifiedEligibilityGroupIds   Json
+  qualifiedEligibilityGroupTimings Json
   manualGrantActive              Boolean             @default(false)
   acknowledgedMechanicsVersionId String?
   acknowledgedMechanicsChecksum  String?
@@ -742,6 +745,7 @@ model GiveawayEntry {
 
   @@unique([giveawayId, riderId])
   @@index([giveawayId, status])
+  @@index([giveawayId, status, eligibilityCycleAt, id])
   @@index([riderId])
 }
 
@@ -820,8 +824,10 @@ model GiveawaySnapshotEntry {
   entryId                      String
   opaquePublicReference        String
   frozenWeight                 Int
+  eligibilityCycleAt           DateTime
   qualifiedSourceFingerprint   String
   qualifiedEligibilityGroupIds Json
+  qualifiedEligibilityGroupTimings Json
   rankSourceDigest             String
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
@@ -937,6 +943,7 @@ model GiveawayAward {
   isCurrent            Boolean             @default(true)
   rank                 Int?
   directAllocationKey  String?             @unique
+  allocationEligibilityAt DateTime?
   opaqueClaimReference String              @unique
   claimTokenHash       String?             @unique
   claimDeadlineAt      DateTime?

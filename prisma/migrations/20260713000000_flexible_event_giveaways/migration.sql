@@ -19,6 +19,21 @@ CREATE TYPE "GiveawayClaimVerificationResult" AS ENUM ('verified', 'rejected');
 CREATE TYPE "GiveawayFulfillmentType" AS ENUM ('onsite', 'digital_code', 'delivery', 'manual_contact');
 CREATE TYPE "GiveawayFulfillmentStatus" AS ENUM ('pending', 'fulfilled', 'failed', 'cancelled');
 
+-- RSVP records predate giveaways. Keep the actual transition timestamp when
+-- available, and conservatively derive old going records from their pass or
+-- RSVP creation time without fabricating a newer queue priority.
+ALTER TABLE "RSVP" ADD COLUMN "goingAt" TIMESTAMP(3);
+UPDATE "RSVP" AS rsvp
+SET "goingAt" = GREATEST(pass."generatedAt", rsvp."createdAt", rsvp."updatedAt")
+FROM "Pass" AS pass
+WHERE rsvp."status" = 'going'
+  AND rsvp."goingAt" IS NULL
+  AND pass."rsvpId" = rsvp."id";
+UPDATE "RSVP"
+SET "goingAt" = GREATEST("createdAt", "updatedAt")
+WHERE "status" = 'going'
+  AND "goingAt" IS NULL;
+
 CREATE TABLE "EventGiveaway" (
   "id" TEXT NOT NULL,
   "eventId" TEXT NOT NULL,
@@ -132,8 +147,10 @@ CREATE TABLE "GiveawayEntry" (
   "status" "GiveawayEntryStatus" NOT NULL DEFAULT 'eligible',
   "entryPath" "GiveawayEntryPath" NOT NULL,
   "currentWeight" INTEGER NOT NULL DEFAULT 1,
+  "eligibilityCycleAt" TIMESTAMP(3) NOT NULL,
   "qualifiedSourceFingerprint" TEXT NOT NULL,
   "qualifiedEligibilityGroupIds" JSONB NOT NULL,
+  "qualifiedEligibilityGroupTimings" JSONB NOT NULL,
   "manualGrantActive" BOOLEAN NOT NULL DEFAULT false,
   "acknowledgedMechanicsVersionId" TEXT,
   "acknowledgedMechanicsChecksum" TEXT,
@@ -145,6 +162,7 @@ CREATE TABLE "GiveawayEntry" (
   CONSTRAINT "GiveawayEntry_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "GiveawayEntry_currentWeight_positive" CHECK ("currentWeight" > 0),
   CONSTRAINT "GiveawayEntry_qualifiedEligibilityGroupIds_array" CHECK (jsonb_typeof("qualifiedEligibilityGroupIds") = 'array'),
+  CONSTRAINT "GiveawayEntry_qualifiedEligibilityGroupTimings_array" CHECK (jsonb_typeof("qualifiedEligibilityGroupTimings") = 'array'),
   CONSTRAINT "GiveawayEntry_optIn_acknowledgement" CHECK (
     ("entryPath" = 'opt_in' AND "acknowledgedMechanicsVersionId" IS NOT NULL AND "acknowledgedMechanicsChecksum" IS NOT NULL AND "acknowledgedMechanicsAt" IS NOT NULL)
     OR ("entryPath" <> 'opt_in' AND "acknowledgedMechanicsVersionId" IS NULL AND "acknowledgedMechanicsChecksum" IS NULL AND "acknowledgedMechanicsAt" IS NULL)
@@ -207,8 +225,10 @@ CREATE TABLE "GiveawaySnapshotEntry" (
   "entryId" TEXT NOT NULL,
   "opaquePublicReference" TEXT NOT NULL,
   "frozenWeight" INTEGER NOT NULL,
+  "eligibilityCycleAt" TIMESTAMP(3) NOT NULL,
   "qualifiedSourceFingerprint" TEXT NOT NULL,
   "qualifiedEligibilityGroupIds" JSONB NOT NULL,
+  "qualifiedEligibilityGroupTimings" JSONB NOT NULL,
   "rankSourceDigest" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -309,6 +329,7 @@ CREATE TABLE "GiveawayAward" (
   "isCurrent" BOOLEAN NOT NULL DEFAULT true,
   "rank" INTEGER,
   "directAllocationKey" TEXT,
+  "allocationEligibilityAt" TIMESTAMP(3),
   "opaqueClaimReference" TEXT NOT NULL,
   "claimTokenHash" TEXT,
   "claimDeadlineAt" TIMESTAMP(3),
@@ -320,7 +341,8 @@ CREATE TABLE "GiveawayAward" (
   CONSTRAINT "GiveawayAward_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "GiveawayAward_provenance_paired" CHECK (("drawId" IS NULL) = ("snapshotEntryId" IS NULL)),
   CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0)),
-  CONSTRAINT "GiveawayAward_directAllocation_provenance" CHECK (("drawId" IS NULL) = ("directAllocationKey" IS NOT NULL))
+  CONSTRAINT "GiveawayAward_directAllocation_provenance" CHECK (("drawId" IS NULL) = ("directAllocationKey" IS NOT NULL)),
+  CONSTRAINT "GiveawayAward_directAllocation_timing" CHECK (("directAllocationKey" IS NULL) = ("allocationEligibilityAt" IS NULL))
 );
 
 CREATE TABLE "GiveawayClaimVerification" (
@@ -466,6 +488,8 @@ CREATE INDEX "GiveawayCampaignCode_revokedByUserId_idx" ON "GiveawayCampaignCode
 CREATE INDEX "GiveawayCampaignCodeClaim_riderId_idx" ON "GiveawayCampaignCodeClaim"("riderId");
 CREATE INDEX "GiveawayCampaignCodeClaim_entryId_idx" ON "GiveawayCampaignCodeClaim"("entryId");
 CREATE INDEX "GiveawayEntry_giveawayId_status_idx" ON "GiveawayEntry"("giveawayId", "status");
+CREATE INDEX "GiveawayEntry_giveawayId_status_eligibilityCycleAt_id_idx"
+  ON "GiveawayEntry"("giveawayId", "status", "eligibilityCycleAt", "id");
 CREATE INDEX "GiveawayEntry_riderId_idx" ON "GiveawayEntry"("riderId");
 CREATE INDEX "GiveawayEntryEvent_entryId_idx" ON "GiveawayEntryEvent"("entryId");
 CREATE INDEX "GiveawayEntryEvent_actorUserId_idx" ON "GiveawayEntryEvent"("actorUserId");
@@ -892,6 +916,210 @@ CREATE TRIGGER "EventGiveaway_winner_limits_guard"
 BEFORE UPDATE OF "maxWinsPerRider", "maxWinsTotal" ON "EventGiveaway"
 FOR EACH ROW EXECUTE FUNCTION "validate_event_giveaway_winner_limits"();
 
+-- Once anyone has an entry or entry-ledger event, mechanics are a consent and
+-- fairness record. Operations may still rename, reschedule, retime-zone, or
+-- change visibility with a re-review, but cannot silently alter who can enter
+-- or what an entrant agreed to.
+CREATE FUNCTION "giveaway_has_entrant_history"(target_giveaway_id TEXT)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM "GiveawayEntry" WHERE "giveawayId" = target_giveaway_id
+  ) OR EXISTS (
+    SELECT 1 FROM "GiveawayEntryEvent" WHERE "giveawayId" = target_giveaway_id
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION "validate_event_giveaway_entrant_configuration"()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- These operational fields intentionally remain mutable after entry
+  -- history: NEW."title", NEW."visibility", NEW."timeZone", and schedule.
+  IF NEW."title" IS DISTINCT FROM OLD."title"
+    OR NEW."visibility" IS DISTINCT FROM OLD."visibility"
+    OR NEW."timeZone" IS DISTINCT FROM OLD."timeZone"
+    OR NEW."entryOpensAt" IS DISTINCT FROM OLD."entryOpensAt"
+    OR NEW."entryClosesAt" IS DISTINCT FROM OLD."entryClosesAt"
+    OR NEW."drawAt" IS DISTINCT FROM OLD."drawAt"
+    OR NEW."claimDeadlineAt" IS DISTINCT FROM OLD."claimDeadlineAt" THEN
+    NULL;
+  END IF;
+
+  IF giveaway_has_entrant_history(OLD."id")
+    AND (
+      NEW."kind" IS DISTINCT FROM OLD."kind"
+      OR NEW."entryMode" IS DISTINCT FROM OLD."entryMode"
+      OR NEW."maxEntriesPerRider" IS DISTINCT FROM OLD."maxEntriesPerRider"
+      OR NEW."presenceVerificationRequired" IS DISTINCT FROM OLD."presenceVerificationRequired"
+      OR NEW."maxWinsPerRider" IS DISTINCT FROM OLD."maxWinsPerRider"
+      OR NEW."maxWinsTotal" IS DISTINCT FROM OLD."maxWinsTotal"
+    ) THEN
+    RAISE EXCEPTION 'EventGiveaway entrant-facing configuration cannot change after entry history';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "EventGiveaway_entrant_configuration_guard"
+BEFORE UPDATE ON "EventGiveaway"
+FOR EACH ROW EXECUTE FUNCTION "validate_event_giveaway_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_mechanics_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_giveaway_id TEXT;
+BEGIN
+  target_giveaway_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."giveawayId" ELSE NEW."giveawayId" END;
+  IF TG_OP = 'UPDATE'
+    AND NEW."giveawayId" IS NOT DISTINCT FROM OLD."giveawayId"
+    AND NEW."version" IS NOT DISTINCT FROM OLD."version"
+    AND NEW."mechanics" IS NOT DISTINCT FROM OLD."mechanics"
+    AND NEW."terms" IS NOT DISTINCT FROM OLD."terms"
+    AND NEW."sponsorDisclosure" IS NOT DISTINCT FROM OLD."sponsorDisclosure"
+    AND NEW."checksum" IS NOT DISTINCT FROM OLD."checksum"
+    AND NEW."createdByUserId" IS NOT DISTINCT FROM OLD."createdByUserId"
+    AND NEW."createdAt" IS NOT DISTINCT FROM OLD."createdAt" THEN
+    RETURN NEW;
+  END IF;
+  IF giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway mechanics and terms cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayMechanicsVersion_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayMechanicsVersion"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_mechanics_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_eligibility_group_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_giveaway_id TEXT;
+BEGIN
+  target_giveaway_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."giveawayId" ELSE NEW."giveawayId" END;
+  IF TG_OP = 'UPDATE'
+    AND NEW."position" IS NOT DISTINCT FROM OLD."position"
+    AND NEW."label" IS NOT DISTINCT FROM OLD."label"
+    AND NEW."entryWeight" IS NOT DISTINCT FROM OLD."entryWeight"
+    AND NEW."enabled" IS NOT DISTINCT FROM OLD."enabled" THEN
+    RETURN NEW;
+  END IF;
+  IF giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway eligibility groups cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEligibilityGroup_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayEligibilityGroup"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_eligibility_group_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_eligibility_condition_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_group_id TEXT;
+  target_giveaway_id TEXT;
+BEGIN
+  target_group_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."groupId" ELSE NEW."groupId" END;
+  SELECT "giveawayId" INTO target_giveaway_id
+  FROM "GiveawayEligibilityGroup"
+  WHERE "id" = target_group_id;
+  IF target_giveaway_id IS NOT NULL AND giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway eligibility conditions cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayEligibilityCondition_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayEligibilityCondition"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_eligibility_condition_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_prize_pool_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_giveaway_id TEXT;
+BEGIN
+  target_giveaway_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."giveawayId" ELSE NEW."giveawayId" END;
+  IF TG_OP = 'UPDATE'
+    AND NEW."position" IS NOT DISTINCT FROM OLD."position"
+    AND NEW."title" IS NOT DISTINCT FROM OLD."title"
+    AND NEW."description" IS NOT DISTINCT FROM OLD."description"
+    AND NEW."awardMode" IS NOT DISTINCT FROM OLD."awardMode"
+    AND NEW."fulfillmentType" IS NOT DISTINCT FROM OLD."fulfillmentType"
+    AND NEW."inventoryLimit" IS NOT DISTINCT FROM OLD."inventoryLimit"
+    AND NEW."maxWinsPerRider" IS NOT DISTINCT FROM OLD."maxWinsPerRider"
+    AND NEW."presenceVerificationRequired" IS NOT DISTINCT FROM OLD."presenceVerificationRequired"
+    AND NEW."claimDeadlineAt" IS NOT DISTINCT FROM OLD."claimDeadlineAt" THEN
+    RETURN NEW;
+  END IF;
+  IF giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway prize pool configuration cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizePool_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayPrizePool"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_pool_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_prize_item_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_pool_id TEXT;
+  target_giveaway_id TEXT;
+BEGIN
+  target_pool_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."prizePoolId" ELSE NEW."prizePoolId" END;
+  SELECT "giveawayId" INTO target_giveaway_id
+  FROM "GiveawayPrizePool"
+  WHERE "id" = target_pool_id;
+  IF TG_OP = 'UPDATE'
+    AND NEW."prizePoolId" IS NOT DISTINCT FROM OLD."prizePoolId"
+    AND NEW."position" IS NOT DISTINCT FROM OLD."position"
+    AND NEW."title" IS NOT DISTINCT FROM OLD."title"
+    AND NEW."description" IS NOT DISTINCT FROM OLD."description"
+    AND NEW."digitalSecretCiphertext" IS NOT DISTINCT FROM OLD."digitalSecretCiphertext"
+    AND NEW."digitalSecretIv" IS NOT DISTINCT FROM OLD."digitalSecretIv"
+    AND NEW."digitalSecretAuthTag" IS NOT DISTINCT FROM OLD."digitalSecretAuthTag"
+    AND NEW."encryptionKeyVersion" IS NOT DISTINCT FROM OLD."encryptionKeyVersion" THEN
+    RETURN NEW;
+  END IF;
+  IF target_giveaway_id IS NOT NULL AND giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway prize items cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizeItem_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayPrizeItem"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_prize_item_entrant_configuration"();
+
+CREATE FUNCTION "validate_giveaway_pool_eligibility_entrant_configuration"()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_pool_id TEXT;
+  target_giveaway_id TEXT;
+BEGIN
+  target_pool_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."prizePoolId" ELSE NEW."prizePoolId" END;
+  SELECT "giveawayId" INTO target_giveaway_id
+  FROM "GiveawayPrizePool"
+  WHERE "id" = target_pool_id;
+  IF target_giveaway_id IS NOT NULL AND giveaway_has_entrant_history(target_giveaway_id) THEN
+    RAISE EXCEPTION 'Giveaway pool eligibility cannot change after entry history';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayPrizePoolEligibilityGroup_entrant_configuration_guard"
+BEFORE INSERT OR UPDATE OR DELETE ON "GiveawayPrizePoolEligibilityGroup"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_pool_eligibility_entrant_configuration"();
+
 -- The aggregate stores simple ids rather than duplicating campaign ids on all
 -- children, so join-aware write guards preserve parentage without redundant
 -- scope columns or undocumented composite foreign keys.
@@ -922,9 +1150,14 @@ RETURNS TRIGGER AS $$
 DECLARE
   entry_giveaway_id TEXT;
   entry_rider_id TEXT;
+  entry_status "GiveawayEntryStatus";
+  entry_eligibility_cycle_at TIMESTAMP(3);
+  entry_eligibility_group_timings JSONB;
   draw_giveaway_id TEXT;
   draw_snapshot_id TEXT;
   pool_giveaway_id TEXT;
+  expected_allocation_eligibility_at TIMESTAMP(3);
+  expected_direct_allocation_key TEXT;
   snapshot_entry_giveaway_id TEXT;
   snapshot_entry_snapshot_id TEXT;
   snapshot_entry_entry_id TEXT;
@@ -932,8 +1165,8 @@ DECLARE
   predecessor_giveaway_id TEXT;
   predecessor_pool_id TEXT;
 BEGIN
-  SELECT "giveawayId", "riderId"
-    INTO entry_giveaway_id, entry_rider_id
+  SELECT "giveawayId", "riderId", "status", "eligibilityCycleAt", "qualifiedEligibilityGroupTimings"
+    INTO entry_giveaway_id, entry_rider_id, entry_status, entry_eligibility_cycle_at, entry_eligibility_group_timings
   FROM "GiveawayEntry"
   WHERE "id" = NEW."entryId";
 
@@ -951,9 +1184,15 @@ BEGIN
     IF NEW."rank" IS NOT NULL THEN
       RAISE EXCEPTION 'Entry-time GiveawayAward rows cannot have a draw rank';
     END IF;
+    IF NEW."directAllocationKey" IS NULL OR NEW."allocationEligibilityAt" IS NULL THEN
+      RAISE EXCEPTION 'Entry-time GiveawayAward rows require stable allocation provenance';
+    END IF;
   ELSE
     IF NEW."rank" IS NULL OR NEW."rank" <= 0 THEN
       RAISE EXCEPTION 'Draw-backed GiveawayAward rows require a positive rank';
+    END IF;
+    IF NEW."directAllocationKey" IS NOT NULL OR NEW."allocationEligibilityAt" IS NOT NULL THEN
+      RAISE EXCEPTION 'Draw-backed GiveawayAward rows cannot claim entry-time allocation provenance';
     END IF;
 
     SELECT "giveawayId", "snapshotId"
@@ -973,6 +1212,44 @@ BEGIN
 
   IF NOT FOUND OR pool_giveaway_id <> NEW."giveawayId" THEN
     RAISE EXCEPTION 'GiveawayAward prize pool must belong to the same giveaway';
+  END IF;
+
+  -- A direct (entry-time) award must be reproducibly bound to the exact
+  -- priority that made this entry eligible for this pool. Do not trust a
+  -- caller-provided timestamp/key: derive it from the entry's frozen
+  -- eligibility-group timings and the pool's permitted groups.
+  IF NEW."drawId" IS NULL THEN
+    IF entry_status <> 'eligible' THEN
+      RAISE EXCEPTION 'GiveawayAward direct allocations require an eligible entry';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM "GiveawayPrizePoolEligibilityGroup"
+      WHERE "prizePoolId" = NEW."prizePoolId"
+    ) THEN
+      SELECT MIN(((timing.value ->> 'eligibleAt')::timestamptz AT TIME ZONE 'UTC'))
+        INTO expected_allocation_eligibility_at
+      FROM jsonb_array_elements(entry_eligibility_group_timings) AS timing(value)
+      JOIN "GiveawayPrizePoolEligibilityGroup" AS pool_group
+        ON pool_group."prizePoolId" = NEW."prizePoolId"
+        AND pool_group."eligibilityGroupId" = (timing.value ->> 'groupId');
+    ELSE
+      expected_allocation_eligibility_at := entry_eligibility_cycle_at;
+    END IF;
+
+    IF expected_allocation_eligibility_at IS NULL
+      OR NEW."allocationEligibilityAt" IS DISTINCT FROM expected_allocation_eligibility_at THEN
+      RAISE EXCEPTION 'GiveawayAward direct allocation provenance must match entry and pool priority';
+    END IF;
+
+    expected_direct_allocation_key := format('direct:%s:%s:%s',
+      NEW."entryId",
+      NEW."prizePoolId",
+      to_char(expected_allocation_eligibility_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    );
+    IF NEW."directAllocationKey" IS DISTINCT FROM expected_direct_allocation_key THEN
+      RAISE EXCEPTION 'GiveawayAward direct allocation provenance must match entry and pool priority';
+    END IF;
   END IF;
 
   IF NEW."snapshotEntryId" IS NOT NULL THEN
@@ -1010,7 +1287,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayAward_parentage_guard"
-BEFORE INSERT OR UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "rank", "predecessorAwardId"
+BEFORE INSERT OR UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"
 ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_parentage"();
 
@@ -1071,6 +1348,11 @@ CREATE FUNCTION "validate_giveaway_entry_provenance"()
 RETURNS TRIGGER AS $$
 DECLARE
   mechanics_giveaway_id TEXT;
+  earliest_eligibility_at TIMESTAMP(3);
+  qualified_group_count INTEGER;
+  distinct_qualified_group_count INTEGER;
+  timing_count INTEGER;
+  distinct_timing_group_count INTEGER;
 BEGIN
   IF NEW."acknowledgedMechanicsVersionId" IS NOT NULL THEN
     SELECT "giveawayId"
@@ -1106,12 +1388,93 @@ BEGIN
     RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must belong to the same giveaway';
   END IF;
 
+  SELECT COUNT(*), COUNT(DISTINCT qualified_group_id.value)
+    INTO qualified_group_count, distinct_qualified_group_count
+  FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value);
+  IF qualified_group_count <> distinct_qualified_group_count THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must not contain duplicates';
+  END IF;
+
+  IF COALESCE((
+    SELECT jsonb_agg(eligibility_group."id" ORDER BY eligibility_group."position", eligibility_group."id")
+    FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value)
+    JOIN "GiveawayEligibilityGroup" AS eligibility_group
+      ON eligibility_group."id" = qualified_group_id.value
+      AND eligibility_group."giveawayId" = NEW."giveawayId"
+  ), '[]'::jsonb) IS DISTINCT FROM NEW."qualifiedEligibilityGroupIds" THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility groups must use canonical group order';
+  END IF;
+
+  IF jsonb_typeof(NEW."qualifiedEligibilityGroupTimings") <> 'array' THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility timings must be a JSON array';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value)
+    WHERE jsonb_typeof(timing.value) <> 'object'
+      OR jsonb_typeof(timing.value -> 'groupId') <> 'string'
+      OR jsonb_typeof(timing.value -> 'eligibleAt') <> 'string'
+      OR (SELECT COUNT(*) FROM jsonb_object_keys(
+        CASE WHEN jsonb_typeof(timing.value) = 'object' THEN timing.value ELSE '{}'::jsonb END
+      )) <> 2
+  ) THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility timings must contain group ids and timestamps';
+  END IF;
+
+  SELECT COUNT(*), COUNT(DISTINCT (timing.value ->> 'groupId'))
+    INTO timing_count, distinct_timing_group_count
+  FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value);
+  IF timing_count <> distinct_timing_group_count THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility timings must not contain duplicate groups';
+  END IF;
+
+  IF COALESCE((
+    SELECT jsonb_agg(timing.value ->> 'groupId' ORDER BY timing.ordinality)
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") WITH ORDINALITY AS timing(value, ordinality)
+  ), '[]'::jsonb) IS DISTINCT FROM NEW."qualifiedEligibilityGroupIds" THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility timing groups must exactly match qualified groups';
+  END IF;
+
+  BEGIN
+    SELECT MIN(((timing.value ->> 'eligibleAt')::timestamptz AT TIME ZONE 'UTC'))
+      INTO earliest_eligibility_at
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value);
+  EXCEPTION
+    WHEN SQLSTATE '22007' OR SQLSTATE '22008' THEN
+      RAISE EXCEPTION 'GiveawayEntry qualified eligibility timing timestamps must be valid UTC instants';
+  END;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value)
+    WHERE to_char(
+      ((timing.value ->> 'eligibleAt')::timestamptz AT TIME ZONE 'UTC'),
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    ) <> (timing.value ->> 'eligibleAt')
+  ) THEN
+    RAISE EXCEPTION 'GiveawayEntry qualified eligibility timing timestamps must be canonical UTC instants';
+  END IF;
+
+  IF NEW."status" IN ('eligible', 'locked')
+    AND (qualified_group_count = 0 OR timing_count = 0) THEN
+    RAISE EXCEPTION 'Eligible GiveawayEntry rows require active eligibility timings';
+  END IF;
+  IF NEW."status" = 'withdrawn'
+    AND (qualified_group_count <> 0 OR timing_count <> 0) THEN
+    RAISE EXCEPTION 'Withdrawn GiveawayEntry rows must clear active eligibility timings';
+  END IF;
+  IF timing_count > 0
+    AND NEW."eligibilityCycleAt" IS DISTINCT FROM earliest_eligibility_at THEN
+    RAISE EXCEPTION 'GiveawayEntry eligibility cycle must equal its earliest active eligibility timing';
+  END IF;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawayEntry_provenance_guard"
-BEFORE INSERT OR UPDATE OF "giveawayId", "qualifiedEligibilityGroupIds", "acknowledgedMechanicsVersionId"
+BEFORE INSERT OR UPDATE OF "giveawayId", "status", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings", "eligibilityCycleAt", "acknowledgedMechanicsVersionId"
 ON "GiveawayEntry"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_entry_provenance"();
 
@@ -1175,14 +1538,22 @@ RETURNS TRIGGER AS $$
 DECLARE
   snapshot_giveaway_id TEXT;
   entry_giveaway_id TEXT;
+  entry_eligibility_cycle_at TIMESTAMP(3);
+  entry_eligibility_group_ids JSONB;
+  entry_eligibility_group_timings JSONB;
+  earliest_eligibility_at TIMESTAMP(3);
+  qualified_group_count INTEGER;
+  distinct_qualified_group_count INTEGER;
+  timing_count INTEGER;
+  distinct_timing_group_count INTEGER;
 BEGIN
   SELECT "giveawayId"
     INTO snapshot_giveaway_id
   FROM "GiveawaySnapshot"
   WHERE "id" = NEW."snapshotId";
 
-  SELECT "giveawayId"
-    INTO entry_giveaway_id
+  SELECT "giveawayId", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings"
+    INTO entry_giveaway_id, entry_eligibility_cycle_at, entry_eligibility_group_ids, entry_eligibility_group_timings
   FROM "GiveawayEntry"
   WHERE "id" = NEW."entryId";
 
@@ -1192,12 +1563,110 @@ BEGIN
     RAISE EXCEPTION 'GiveawaySnapshotEntry snapshot and entry must belong to the same giveaway';
   END IF;
 
+  IF NEW."eligibilityCycleAt" IS DISTINCT FROM entry_eligibility_cycle_at
+    OR NEW."qualifiedEligibilityGroupIds" IS DISTINCT FROM entry_eligibility_group_ids
+    OR NEW."qualifiedEligibilityGroupTimings" IS DISTINCT FROM entry_eligibility_group_timings THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry eligibility facts must match its source entry at lock';
+  END IF;
+
+  IF jsonb_typeof(NEW."qualifiedEligibilityGroupIds") <> 'array'
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupIds") AS group_value(value)
+      WHERE jsonb_typeof(group_value.value) <> 'string'
+    ) THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility groups must be a JSON array of ids';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value)
+    LEFT JOIN "GiveawayEligibilityGroup" AS eligibility_group
+      ON eligibility_group."id" = qualified_group_id.value
+    WHERE eligibility_group."id" IS NULL
+      OR eligibility_group."giveawayId" <> snapshot_giveaway_id
+  ) THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility groups must belong to the same giveaway';
+  END IF;
+
+  SELECT COUNT(*), COUNT(DISTINCT qualified_group_id.value)
+    INTO qualified_group_count, distinct_qualified_group_count
+  FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value);
+  IF qualified_group_count <> distinct_qualified_group_count THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility groups must not contain duplicates';
+  END IF;
+
+  IF COALESCE((
+    SELECT jsonb_agg(eligibility_group."id" ORDER BY eligibility_group."position", eligibility_group."id")
+    FROM jsonb_array_elements_text(NEW."qualifiedEligibilityGroupIds") AS qualified_group_id(value)
+    JOIN "GiveawayEligibilityGroup" AS eligibility_group
+      ON eligibility_group."id" = qualified_group_id.value
+      AND eligibility_group."giveawayId" = snapshot_giveaway_id
+  ), '[]'::jsonb) IS DISTINCT FROM NEW."qualifiedEligibilityGroupIds" THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility groups must use canonical group order';
+  END IF;
+
+  IF jsonb_typeof(NEW."qualifiedEligibilityGroupTimings") <> 'array'
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value)
+      WHERE jsonb_typeof(timing.value) <> 'object'
+        OR jsonb_typeof(timing.value -> 'groupId') <> 'string'
+        OR jsonb_typeof(timing.value -> 'eligibleAt') <> 'string'
+        OR (SELECT COUNT(*) FROM jsonb_object_keys(
+          CASE WHEN jsonb_typeof(timing.value) = 'object' THEN timing.value ELSE '{}'::jsonb END
+        )) <> 2
+    ) THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility timings must contain group ids and timestamps';
+  END IF;
+
+  SELECT COUNT(*), COUNT(DISTINCT (timing.value ->> 'groupId'))
+    INTO timing_count, distinct_timing_group_count
+  FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value);
+  IF timing_count <> distinct_timing_group_count THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility timings must not contain duplicate groups';
+  END IF;
+
+  IF COALESCE((
+    SELECT jsonb_agg(timing.value ->> 'groupId' ORDER BY timing.ordinality)
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") WITH ORDINALITY AS timing(value, ordinality)
+  ), '[]'::jsonb) IS DISTINCT FROM NEW."qualifiedEligibilityGroupIds" THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility timing groups must exactly match qualified groups';
+  END IF;
+
+  BEGIN
+    SELECT MIN(((timing.value ->> 'eligibleAt')::timestamptz AT TIME ZONE 'UTC'))
+      INTO earliest_eligibility_at
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value);
+  EXCEPTION
+    WHEN SQLSTATE '22007' OR SQLSTATE '22008' THEN
+      RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility timing timestamps must be valid UTC instants';
+  END;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(NEW."qualifiedEligibilityGroupTimings") AS timing(value)
+    WHERE to_char(
+      ((timing.value ->> 'eligibleAt')::timestamptz AT TIME ZONE 'UTC'),
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    ) <> (timing.value ->> 'eligibleAt')
+  ) THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry qualified eligibility timing timestamps must be canonical UTC instants';
+  END IF;
+
+  IF qualified_group_count = 0 OR timing_count = 0 THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry requires active eligibility timings';
+  END IF;
+  IF NEW."eligibilityCycleAt" IS DISTINCT FROM earliest_eligibility_at THEN
+    RAISE EXCEPTION 'GiveawaySnapshotEntry eligibility cycle must equal its earliest active eligibility timing';
+  END IF;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "GiveawaySnapshotEntry_parentage_guard"
-BEFORE INSERT OR UPDATE OF "snapshotId", "entryId" ON "GiveawaySnapshotEntry"
+BEFORE INSERT OR UPDATE OF "snapshotId", "entryId", "eligibilityCycleAt", "qualifiedEligibilityGroupIds", "qualifiedEligibilityGroupTimings" ON "GiveawaySnapshotEntry"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_snapshot_entry_parentage"();
 
 CREATE FUNCTION "validate_giveaway_eligibility_condition_parentage"()
@@ -1295,9 +1764,9 @@ BEFORE UPDATE OF "giveawayId", "snapshotId" ON "GiveawayDraw"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'snapshotId');
 
 CREATE TRIGGER "GiveawayAward_scope_immutable"
-BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "predecessorAwardId"
+BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"
 ON "GiveawayAward"
-FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'predecessorAwardId');
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'allocationEligibilityAt', 'predecessorAwardId');
 
 CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
 RETURNS TRIGGER AS $$
