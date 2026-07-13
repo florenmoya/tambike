@@ -300,6 +300,7 @@ model User {
   giveawayAwardsWon           GiveawayAward[]             @relation("GiveawayAwardWinner")
   giveawayClaimVerifications  GiveawayClaimVerification[] @relation("GiveawayClaimVerificationStaff")
   giveawayFulfillments        GiveawayFulfillment[]       @relation("GiveawayFulfillmentStaff")
+  giveawayDeliverySubmissions GiveawayDeliveryDetail[]     @relation("GiveawayDeliverySubmitter")
   giveawayOperatorAssignments GiveawayOperator[]          @relation("GiveawayOperatorUser")
   giveawayOperatorGrants      GiveawayOperator[]          @relation("GiveawayOperatorGranter")
   giveawayOperatorRevocations GiveawayOperator[]          @relation("GiveawayOperatorRevoker")
@@ -946,6 +947,8 @@ model GiveawayAward {
   allocationEligibilityAt DateTime?
   opaqueClaimReference String              @unique
   claimTokenHash       String?             @unique
+  claimTokenIssuedAt   DateTime?
+  claimTokenVersion    Int                 @default(0)
   claimDeadlineAt      DateTime?
   reasonDigest         String?
   predecessorAwardId   String?
@@ -976,53 +979,70 @@ model GiveawayAward {
 }
 
 model GiveawayClaimVerification {
-  id               String                          @id @default(cuid())
-  awardId          String
-  method           GiveawayClaimVerificationMethod
-  result           GiveawayClaimVerificationResult
-  staffActorUserId String
-  note             String?
-  createdAt        DateTime                        @default(now())
+  id                  String                          @id @default(cuid())
+  awardId             String
+  method              GiveawayClaimVerificationMethod
+  result              GiveawayClaimVerificationResult
+  operatorActorUserId String
+  idempotencyKey      String
+  requestDigest       String
+  presenceObserved    Boolean                         @default(false)
+  reasonCode          String?
+  reasonDigest        String?
+  createdAt           DateTime                        @default(now())
 
-  award      GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
-  staffActor User          @relation("GiveawayClaimVerificationStaff", fields: [staffActorUserId], references: [id], onDelete: Restrict)
+  award         GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  operatorActor User          @relation("GiveawayClaimVerificationStaff", fields: [operatorActorUserId], references: [id], onDelete: Restrict)
 
+  @@unique([awardId, idempotencyKey])
   @@index([awardId, createdAt])
-  @@index([staffActorUserId])
+  @@index([operatorActorUserId])
 }
 
 model GiveawayFulfillment {
-  id               String                    @id @default(cuid())
-  awardId          String
-  type             GiveawayFulfillmentType
-  status           GiveawayFulfillmentStatus @default(pending)
-  staffActorUserId String
-  reference        String?
-  note             String?
-  fulfilledAt      DateTime?
-  createdAt        DateTime                  @default(now())
-  updatedAt        DateTime                  @updatedAt
+  id                  String                    @id @default(cuid())
+  awardId             String
+  type                GiveawayFulfillmentType
+  status              GiveawayFulfillmentStatus @default(fulfilled)
+  operatorActorUserId String
+  idempotencyKey      String
+  requestDigest       String
+  reference           String?
+  reasonCode          String?
+  reasonDigest        String?
+  fulfilledAt         DateTime                  @default(now())
+  createdAt           DateTime                  @default(now())
 
-  award      GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
-  staffActor User          @relation("GiveawayFulfillmentStaff", fields: [staffActorUserId], references: [id], onDelete: Restrict)
+  award         GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  operatorActor User          @relation("GiveawayFulfillmentStaff", fields: [operatorActorUserId], references: [id], onDelete: Restrict)
 
+  @@unique([awardId, idempotencyKey])
   @@index([awardId, status])
-  @@index([staffActorUserId])
+  @@index([operatorActorUserId])
 }
 
 model GiveawayDeliveryDetail {
   id                   String   @id @default(cuid())
   awardId              String   @unique
-  encryptedPayload     String
-  encryptedIv          String
-  encryptedAuthTag     String
+  submittedByUserId    String
+  consentVersion       String
+  payloadVersion       String
+  aadVersion           String
+  encryptedPayload     String?
+  encryptedIv          String?
+  encryptedAuthTag     String?
   encryptionKeyVersion String
   winnerConsentedAt    DateTime
   retentionExpiresAt   DateTime
+  purgedAt             DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  award GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  award       GiveawayAward @relation(fields: [awardId], references: [id], onDelete: Restrict)
+  submittedBy User          @relation("GiveawayDeliverySubmitter", fields: [submittedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([retentionExpiresAt])
+  @@index([submittedByUserId])
 }
 
 model GiveawayOperator {
@@ -1033,7 +1053,7 @@ model GiveawayOperator {
   grantedAt        DateTime  @default(now())
   revokedByUserId  String?
   revokedAt        DateTime?
-  revocationReason String?
+  revocationReasonDigest String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -1042,7 +1062,7 @@ model GiveawayOperator {
   grantedBy User          @relation("GiveawayOperatorGranter", fields: [grantedByUserId], references: [id], onDelete: Restrict)
   revokedBy User?         @relation("GiveawayOperatorRevoker", fields: [revokedByUserId], references: [id], onDelete: Restrict)
 
-  @@unique([giveawayId, userId])
+  @@index([giveawayId, userId])
   @@index([userId])
   @@index([grantedByUserId])
   @@index([revokedByUserId])

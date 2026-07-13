@@ -131,8 +131,63 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).toContain("GIVEAWAY_DRAW_ENCRYPTION_KEY");
     expect(prismaBackendSource).toContain("buildPublicDrawVerification");
     expect(prismaBackendSource).not.toContain("Math.random");
-    expect(prismaBackendSource).not.toMatch(/async verifyGiveawayClaim\(/);
-    expect(prismaBackendSource).not.toMatch(/async fulfillGiveawayAward\(/);
+    for (const method of [
+      "issueGiveawayClaimToken",
+      "resolveGiveawayClaim",
+      "verifyGiveawayClaim",
+      "fulfillGiveawayAward",
+      "grantGiveawayOperator",
+      "revokeGiveawayOperator",
+      "submitGiveawayDeliveryDetails",
+      "readGiveawayDeliveryDetails",
+      "withdrawGiveawayDeliveryDetails",
+      "expireGiveawayClaims",
+      "settleGiveawayAward",
+      "completeGiveawayClaims",
+      "recoverExpiredDirectGiveawayAward",
+    ]) {
+      expect(prismaBackendSource).toMatch(new RegExp(`async ${method}\\(`));
+    }
+    expect(prismaBackendSource).toContain("hashGiveawayClaimToken");
+    expect(prismaBackendSource).toContain("parseGiveawayClaimQrPayload");
+    expect(prismaBackendSource).toContain("GIVEAWAY_DELIVERY_ENCRYPTION_KEY");
+  });
+
+  test("keeps post-deadline claim recovery explicit, delivery retention live, and rider states truthful", () => {
+    const claimSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async issueGiveawayClaimToken"),
+      prismaBackendSource.indexOf("async createEventDraft"),
+    );
+    const redrawSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async redrawGiveawayAward"),
+      prismaBackendSource.indexOf("async issueGiveawayClaimToken"),
+    );
+    const riderStateSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async toRiderGiveawayState"),
+      prismaBackendSource.indexOf("private async resolveGiveawayAwardByAdministrator"),
+    );
+
+    expect(claimSource).toContain("async recoverExpiredDirectGiveawayAward");
+    expect(claimSource).toContain("reallocateFrozenImmediateGiveawayAwards");
+    expect(claimSource).toContain("retentionExpiresAt.getTime() <= Date.now()");
+    expect(claimSource).toContain('status: { in: ["pending_verification", "claimable"] }');
+    expect(redrawSource).toContain("claimDeadlineAt: parsed.claimDeadlineAt");
+    expect(redrawSource).toContain("GIVEAWAY_AWARD_REDRAWN");
+    expect(riderStateSource).toContain('"pending_verification"');
+    expect(riderStateSource).toContain('"expired"');
+    expect(riderStateSource).toContain("award.status as RiderGiveawayEntryStatus");
+    expect(prismaBackendSource).toContain("requireOpaqueGiveawayLedgerText");
+    expect(giveawayMigrationSql).toContain('"GiveawayClaimVerification_idempotency_opaque"');
+    expect(giveawayMigrationSql).toContain('"GiveawayFulfillment_idempotency_opaque"');
+    expect(giveawayMigrationSql).toContain('"GiveawayFulfillment_reference_nonsecret"');
+    expect(giveawayMigrationSql).toContain('"GiveawayDeliveryDetail_consentVersion_opaque"');
+    expect(giveawayMigrationSql).toContain('AND detail."retentionExpiresAt" > CURRENT_TIMESTAMP');
+    expect(giveawayMigrationSql).toContain("GiveawayDeliveryDetail must belong to a current verified delivery award while claims are open");
+    expect(giveawayMigrationSql).toContain("award_status <> 'verified'");
+    expect(giveawayMigrationSql).toContain("giveaway_status <> 'claims_open'");
+    expect(giveawayMigrationSql).toContain('"GiveawayAward_claimTokenHash_canonical"');
+    expect(giveawayMigrationSql).toContain('char_length("claimTokenHash") = 43');
+    expect(giveawayMigrationSql).not.toContain('"GiveawayState"');
   });
 
   test("finalizes direct awards as historical records and reallocates post-lock capacity from frozen entries", () => {
@@ -241,6 +296,7 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(drawDigestSource).toContain("prizePoolId: actionInput.prizePoolId ?? null");
     expect(drawDigestSource).toContain("riderId: actionInput.riderId ?? null");
     expect(drawDigestSource).toContain("predecessorAwardId: actionInput.predecessorAwardId ?? null");
+    expect(drawDigestSource).toContain("claimDeadlineAt: actionInput.claimDeadlineAt ?? null");
   });
 
   test("keeps giveaway candidates, source facts, token hashes, and audit payloads out of the global snapshot", () => {

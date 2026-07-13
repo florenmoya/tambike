@@ -332,6 +332,8 @@ CREATE TABLE "GiveawayAward" (
   "allocationEligibilityAt" TIMESTAMP(3),
   "opaqueClaimReference" TEXT NOT NULL,
   "claimTokenHash" TEXT,
+  "claimTokenIssuedAt" TIMESTAMP(3),
+  "claimTokenVersion" INTEGER NOT NULL DEFAULT 0,
   "claimDeadlineAt" TIMESTAMP(3),
   "reasonDigest" TEXT,
   "predecessorAwardId" TEXT,
@@ -342,7 +344,18 @@ CREATE TABLE "GiveawayAward" (
   CONSTRAINT "GiveawayAward_provenance_paired" CHECK (("drawId" IS NULL) = ("snapshotEntryId" IS NULL)),
   CONSTRAINT "GiveawayAward_rank_matches_provenance" CHECK (("drawId" IS NULL AND "rank" IS NULL) OR ("drawId" IS NOT NULL AND "rank" IS NOT NULL AND "rank" > 0)),
   CONSTRAINT "GiveawayAward_directAllocation_provenance" CHECK (("drawId" IS NULL) = ("directAllocationKey" IS NOT NULL)),
-  CONSTRAINT "GiveawayAward_directAllocation_timing" CHECK (("directAllocationKey" IS NULL) = ("allocationEligibilityAt" IS NULL))
+  CONSTRAINT "GiveawayAward_directAllocation_timing" CHECK (("directAllocationKey" IS NULL) = ("allocationEligibilityAt" IS NULL)),
+  CONSTRAINT "GiveawayAward_claim_token_lifecycle" CHECK (
+    ("claimTokenHash" IS NULL AND "claimTokenIssuedAt" IS NULL AND "claimTokenVersion" = 0)
+    OR ("claimTokenHash" IS NOT NULL AND "claimTokenIssuedAt" IS NOT NULL AND "claimTokenVersion" > 0)
+  ),
+  CONSTRAINT "GiveawayAward_claimTokenHash_canonical" CHECK (
+    "claimTokenHash" IS NULL OR (
+      char_length("claimTokenHash") = 43
+      AND "claimTokenHash" ~ '^[A-Za-z0-9_-]{43}$'
+      AND "claimTokenHash" !~* '^(tbk_gc1_|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
+    )
+  )
 );
 
 CREATE TABLE "GiveawayClaimVerification" (
@@ -350,42 +363,88 @@ CREATE TABLE "GiveawayClaimVerification" (
   "awardId" TEXT NOT NULL,
   "method" "GiveawayClaimVerificationMethod" NOT NULL,
   "result" "GiveawayClaimVerificationResult" NOT NULL,
-  "staffActorUserId" TEXT NOT NULL,
-  "note" TEXT,
+  "operatorActorUserId" TEXT NOT NULL,
+  "idempotencyKey" TEXT NOT NULL,
+  "requestDigest" TEXT NOT NULL,
+  "presenceObserved" BOOLEAN NOT NULL DEFAULT false,
+  "reasonCode" TEXT,
+  "reasonDigest" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-  CONSTRAINT "GiveawayClaimVerification_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "GiveawayClaimVerification_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "GiveawayClaimVerification_idempotency_nonempty" CHECK (char_length("idempotencyKey") BETWEEN 1 AND 128),
+  CONSTRAINT "GiveawayClaimVerification_idempotency_opaque" CHECK (
+    "idempotencyKey" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND "idempotencyKey" !~* '(tbk_gc1_[A-Za-z0-9_-]{43}|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
+  ),
+  CONSTRAINT "GiveawayClaimVerification_request_digest" CHECK (char_length("requestDigest") = 64),
+  CONSTRAINT "GiveawayClaimVerification_reason_bounded" CHECK (
+    ("reasonCode" IS NULL OR char_length("reasonCode") <= 64)
+    AND ("reasonDigest" IS NULL OR char_length("reasonDigest") = 64)
+  )
 );
 
 CREATE TABLE "GiveawayFulfillment" (
   "id" TEXT NOT NULL,
   "awardId" TEXT NOT NULL,
   "type" "GiveawayFulfillmentType" NOT NULL,
-  "status" "GiveawayFulfillmentStatus" NOT NULL DEFAULT 'pending',
-  "staffActorUserId" TEXT NOT NULL,
+  "status" "GiveawayFulfillmentStatus" NOT NULL DEFAULT 'fulfilled',
+  "operatorActorUserId" TEXT NOT NULL,
+  "idempotencyKey" TEXT NOT NULL,
+  "requestDigest" TEXT NOT NULL,
   "reference" TEXT,
-  "note" TEXT,
-  "fulfilledAt" TIMESTAMP(3),
+  "reasonCode" TEXT,
+  "reasonDigest" TEXT,
+  "fulfilledAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMP(3) NOT NULL,
 
-  CONSTRAINT "GiveawayFulfillment_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "GiveawayFulfillment_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "GiveawayFulfillment_idempotency_nonempty" CHECK (char_length("idempotencyKey") BETWEEN 1 AND 128),
+  CONSTRAINT "GiveawayFulfillment_idempotency_opaque" CHECK (
+    "idempotencyKey" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND "idempotencyKey" !~* '(tbk_gc1_[A-Za-z0-9_-]{43}|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
+  ),
+  CONSTRAINT "GiveawayFulfillment_request_digest" CHECK (char_length("requestDigest") = 64),
+  CONSTRAINT "GiveawayFulfillment_reference_opaque" CHECK (
+    "reference" IS NULL OR "reference" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  ),
+  CONSTRAINT "GiveawayFulfillment_reference_nonsecret" CHECK (
+    "reference" IS NULL
+    OR "reference" !~* '(tbk_gc1_[A-Za-z0-9_-]{43}|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
+  ),
+  CONSTRAINT "GiveawayFulfillment_reason_bounded" CHECK (
+    ("reasonCode" IS NULL OR char_length("reasonCode") <= 64)
+    AND ("reasonDigest" IS NULL OR char_length("reasonDigest") = 64)
+  )
 );
 
 CREATE TABLE "GiveawayDeliveryDetail" (
   "id" TEXT NOT NULL,
   "awardId" TEXT NOT NULL,
-  "encryptedPayload" TEXT NOT NULL,
-  "encryptedIv" TEXT NOT NULL,
-  "encryptedAuthTag" TEXT NOT NULL,
+  "submittedByUserId" TEXT NOT NULL,
+  "consentVersion" TEXT NOT NULL,
+  "payloadVersion" TEXT NOT NULL,
+  "aadVersion" TEXT NOT NULL,
+  "encryptedPayload" TEXT,
+  "encryptedIv" TEXT,
+  "encryptedAuthTag" TEXT,
   "encryptionKeyVersion" TEXT NOT NULL,
   "winnerConsentedAt" TIMESTAMP(3) NOT NULL,
   "retentionExpiresAt" TIMESTAMP(3) NOT NULL,
+  "purgedAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
   CONSTRAINT "GiveawayDeliveryDetail_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "GiveawayDeliveryDetail_retention_after_consent" CHECK ("retentionExpiresAt" > "winnerConsentedAt")
+  CONSTRAINT "GiveawayDeliveryDetail_consentVersion_opaque" CHECK (
+    "consentVersion" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND "consentVersion" !~* '(tbk_gc1_[A-Za-z0-9_-]{43}|TAMBIKE:GIVEAWAY-CLAIM:v1:)'
+  ),
+  CONSTRAINT "GiveawayDeliveryDetail_retention_window" CHECK ("retentionExpiresAt" = "winnerConsentedAt" + INTERVAL '30 days'),
+  CONSTRAINT "GiveawayDeliveryDetail_ciphertext_lifecycle" CHECK (
+    ("purgedAt" IS NULL AND "encryptedPayload" IS NOT NULL AND "encryptedIv" IS NOT NULL AND "encryptedAuthTag" IS NOT NULL)
+    OR ("purgedAt" IS NOT NULL AND "encryptedPayload" IS NULL AND "encryptedIv" IS NULL AND "encryptedAuthTag" IS NULL)
+  )
 );
 
 CREATE TABLE "GiveawayOperator" (
@@ -396,11 +455,19 @@ CREATE TABLE "GiveawayOperator" (
   "grantedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "revokedByUserId" TEXT,
   "revokedAt" TIMESTAMP(3),
-  "revocationReason" TEXT,
+  "revocationReasonDigest" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
-  CONSTRAINT "GiveawayOperator_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "GiveawayOperator_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "GiveawayOperator_revoke_pairing" CHECK (
+    ("revokedAt" IS NULL AND "revokedByUserId" IS NULL AND "revocationReasonDigest" IS NULL)
+    OR (
+      "revokedAt" IS NOT NULL
+      AND "revokedByUserId" IS NOT NULL
+      AND char_length("revocationReasonDigest") = 64
+    )
+  )
 );
 
 CREATE TABLE "GiveawayAuditEvent" (
@@ -457,10 +524,18 @@ CREATE UNIQUE INDEX "GiveawayAward_claimTokenHash_key"
   ON "GiveawayAward"("claimTokenHash");
 CREATE UNIQUE INDEX "GiveawayAward_directAllocationKey_key"
   ON "GiveawayAward"("directAllocationKey");
+CREATE UNIQUE INDEX "GiveawayClaimVerification_awardId_idempotencyKey_key"
+  ON "GiveawayClaimVerification"("awardId", "idempotencyKey");
+CREATE UNIQUE INDEX "GiveawayFulfillment_awardId_idempotencyKey_key"
+  ON "GiveawayFulfillment"("awardId", "idempotencyKey");
+CREATE UNIQUE INDEX "GiveawayFulfillment_one_fulfilled_award_key"
+  ON "GiveawayFulfillment"("awardId")
+  WHERE "status" = 'fulfilled';
 CREATE UNIQUE INDEX "GiveawayDeliveryDetail_awardId_key"
   ON "GiveawayDeliveryDetail"("awardId");
-CREATE UNIQUE INDEX "GiveawayOperator_giveawayId_userId_key"
-  ON "GiveawayOperator"("giveawayId", "userId");
+CREATE UNIQUE INDEX "GiveawayOperator_active_giveawayId_userId_key"
+  ON "GiveawayOperator"("giveawayId", "userId")
+  WHERE "revokedAt" IS NULL;
 CREATE UNIQUE INDEX "GiveawayAuditEvent_giveawayId_sequence_key"
   ON "GiveawayAuditEvent"("giveawayId", "sequence");
 
@@ -512,9 +587,12 @@ CREATE INDEX "GiveawayAward_snapshotEntryId_idx" ON "GiveawayAward"("snapshotEnt
 CREATE INDEX "GiveawayAward_winnerUserId_idx" ON "GiveawayAward"("winnerUserId");
 CREATE INDEX "GiveawayAward_predecessorAwardId_idx" ON "GiveawayAward"("predecessorAwardId");
 CREATE INDEX "GiveawayClaimVerification_awardId_createdAt_idx" ON "GiveawayClaimVerification"("awardId", "createdAt");
-CREATE INDEX "GiveawayClaimVerification_staffActorUserId_idx" ON "GiveawayClaimVerification"("staffActorUserId");
+CREATE INDEX "GiveawayClaimVerification_operatorActorUserId_idx" ON "GiveawayClaimVerification"("operatorActorUserId");
 CREATE INDEX "GiveawayFulfillment_awardId_status_idx" ON "GiveawayFulfillment"("awardId", "status");
-CREATE INDEX "GiveawayFulfillment_staffActorUserId_idx" ON "GiveawayFulfillment"("staffActorUserId");
+CREATE INDEX "GiveawayFulfillment_operatorActorUserId_idx" ON "GiveawayFulfillment"("operatorActorUserId");
+CREATE INDEX "GiveawayDeliveryDetail_retentionExpiresAt_idx" ON "GiveawayDeliveryDetail"("retentionExpiresAt");
+CREATE INDEX "GiveawayDeliveryDetail_submittedByUserId_idx" ON "GiveawayDeliveryDetail"("submittedByUserId");
+CREATE INDEX "GiveawayOperator_giveawayId_userId_idx" ON "GiveawayOperator"("giveawayId", "userId");
 CREATE INDEX "GiveawayOperator_userId_idx" ON "GiveawayOperator"("userId");
 CREATE INDEX "GiveawayOperator_grantedByUserId_idx" ON "GiveawayOperator"("grantedByUserId");
 CREATE INDEX "GiveawayOperator_revokedByUserId_idx" ON "GiveawayOperator"("revokedByUserId");
@@ -646,18 +724,20 @@ ALTER TABLE "GiveawayAward"
 ALTER TABLE "GiveawayClaimVerification"
   ADD CONSTRAINT "GiveawayClaimVerification_awardId_fkey"
   FOREIGN KEY ("awardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-  ADD CONSTRAINT "GiveawayClaimVerification_staffActorUserId_fkey"
-  FOREIGN KEY ("staffActorUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  ADD CONSTRAINT "GiveawayClaimVerification_operatorActorUserId_fkey"
+  FOREIGN KEY ("operatorActorUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "GiveawayFulfillment"
   ADD CONSTRAINT "GiveawayFulfillment_awardId_fkey"
   FOREIGN KEY ("awardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-  ADD CONSTRAINT "GiveawayFulfillment_staffActorUserId_fkey"
-  FOREIGN KEY ("staffActorUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  ADD CONSTRAINT "GiveawayFulfillment_operatorActorUserId_fkey"
+  FOREIGN KEY ("operatorActorUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "GiveawayDeliveryDetail"
   ADD CONSTRAINT "GiveawayDeliveryDetail_awardId_fkey"
-  FOREIGN KEY ("awardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  FOREIGN KEY ("awardId") REFERENCES "GiveawayAward"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "GiveawayDeliveryDetail_submittedByUserId_fkey"
+  FOREIGN KEY ("submittedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "GiveawayOperator"
   ADD CONSTRAINT "GiveawayOperator_giveawayId_fkey"
@@ -710,6 +790,147 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER "GiveawayCampaignCodeClaim_append_only"
 BEFORE UPDATE OR DELETE ON "GiveawayCampaignCodeClaim"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_campaign_code_claim_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_claim_verification_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'GiveawayClaimVerification is append-only';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayClaimVerification_append_only"
+BEFORE UPDATE OR DELETE ON "GiveawayClaimVerification"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_claim_verification_mutation"();
+
+CREATE FUNCTION "prevent_giveaway_fulfillment_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'GiveawayFulfillment is append-only';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayFulfillment_append_only"
+BEFORE UPDATE OR DELETE ON "GiveawayFulfillment"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_fulfillment_mutation"();
+
+-- Claim and fulfilment rows are append-only evidence, so their parent award
+-- must be claimable at insertion time. The application locks the campaign,
+-- pool, item, and award in that order before inserting; these guards remain a
+-- database backstop for direct SQL and concurrent writers.
+CREATE FUNCTION "validate_giveaway_claim_verification_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  award_status "GiveawayAwardStatus";
+  award_is_current BOOLEAN;
+  giveaway_status "GiveawayStatus";
+  presence_required BOOLEAN;
+BEGIN
+  SELECT award."status",
+         award."isCurrent",
+         giveaway."status",
+         (giveaway."presenceVerificationRequired" OR pool."presenceVerificationRequired")
+    INTO award_status, award_is_current, giveaway_status, presence_required
+  FROM "GiveawayAward" AS award
+  JOIN "EventGiveaway" AS giveaway ON giveaway."id" = award."giveawayId"
+  JOIN "GiveawayPrizePool" AS pool ON pool."id" = award."prizePoolId"
+  WHERE award."id" = NEW."awardId";
+
+  IF NOT FOUND
+    OR NOT award_is_current
+    OR giveaway_status <> 'claims_open'
+    OR award_status NOT IN ('pending_verification', 'claimable')
+    OR NEW."result" <> 'verified'
+    OR (presence_required AND NOT NEW."presenceObserved") THEN
+    RAISE EXCEPTION 'GiveawayClaimVerification requires a current claimable award and any required presence attestation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayClaimVerification_parentage_guard"
+BEFORE INSERT OR UPDATE OF "awardId", "method", "result", "operatorActorUserId", "presenceObserved"
+ON "GiveawayClaimVerification"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_claim_verification_parentage"();
+
+CREATE FUNCTION "validate_giveaway_fulfillment_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  award_status "GiveawayAwardStatus";
+  award_is_current BOOLEAN;
+  giveaway_status "GiveawayStatus";
+  pool_type "GiveawayFulfillmentType";
+BEGIN
+  SELECT award."status", award."isCurrent", giveaway."status", pool."fulfillmentType"
+    INTO award_status, award_is_current, giveaway_status, pool_type
+  FROM "GiveawayAward" AS award
+  JOIN "EventGiveaway" AS giveaway ON giveaway."id" = award."giveawayId"
+  JOIN "GiveawayPrizePool" AS pool ON pool."id" = award."prizePoolId"
+  WHERE award."id" = NEW."awardId";
+
+  IF NOT FOUND
+    OR NOT award_is_current
+    OR giveaway_status <> 'claims_open'
+    OR award_status <> 'verified'
+    OR NEW."status" <> 'fulfilled'
+    OR NEW."type" <> pool_type THEN
+    RAISE EXCEPTION 'GiveawayFulfillment requires a current verified award with its pool fulfillment type';
+  END IF;
+
+  IF pool_type = 'delivery' AND NOT EXISTS (
+    SELECT 1
+    FROM "GiveawayDeliveryDetail" AS detail
+    JOIN "GiveawayAward" AS award ON award."id" = detail."awardId"
+    WHERE detail."awardId" = NEW."awardId"
+      AND detail."submittedByUserId" = award."winnerUserId"
+      AND detail."purgedAt" IS NULL
+      AND detail."encryptedPayload" IS NOT NULL
+      AND detail."encryptedIv" IS NOT NULL
+      AND detail."encryptedAuthTag" IS NOT NULL
+      AND detail."retentionExpiresAt" > CURRENT_TIMESTAMP
+  ) THEN
+    RAISE EXCEPTION 'GiveawayFulfillment requires an unpurged delivery detail for delivery awards';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayFulfillment_parentage_guard"
+BEFORE INSERT OR UPDATE OF "awardId", "type", "status", "operatorActorUserId"
+ON "GiveawayFulfillment"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_fulfillment_parentage"();
+
+CREATE FUNCTION "validate_giveaway_award_claim_token_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."claimTokenVersion" < OLD."claimTokenVersion"
+    OR (OLD."claimTokenVersion" > 0 AND NEW."claimTokenVersion" = 0)
+    OR (OLD."claimTokenHash" IS NOT NULL AND NEW."claimTokenHash" IS NULL) THEN
+    RAISE EXCEPTION 'GiveawayAward claim-token lifecycle is one-way';
+  END IF;
+
+  IF NEW."claimTokenVersion" = OLD."claimTokenVersion"
+    AND (
+      NEW."claimTokenHash" IS DISTINCT FROM OLD."claimTokenHash"
+      OR NEW."claimTokenIssuedAt" IS DISTINCT FROM OLD."claimTokenIssuedAt"
+    ) THEN
+    RAISE EXCEPTION 'GiveawayAward claim-token rotation must advance its version';
+  END IF;
+
+  IF NEW."claimTokenVersion" > OLD."claimTokenVersion" + 1 THEN
+    RAISE EXCEPTION 'GiveawayAward claim-token version may advance one step at a time';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayAward_claim_token_one_way"
+BEFORE UPDATE OF "claimTokenHash", "claimTokenIssuedAt", "claimTokenVersion" ON "GiveawayAward"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_award_claim_token_mutation"();
 
 CREATE FUNCTION "prevent_giveaway_snapshot_mutation"()
 RETURNS TRIGGER AS $$
@@ -1744,6 +1965,96 @@ CREATE TRIGGER "GiveawayEligibilityCondition_parentage_guard"
 BEFORE INSERT OR UPDATE OF "groupId", "perkId" ON "GiveawayEligibilityCondition"
 FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_eligibility_condition_parentage"();
 
+CREATE FUNCTION "validate_giveaway_delivery_detail_parentage"()
+RETURNS TRIGGER AS $$
+DECLARE
+  award_winner_user_id TEXT;
+  pool_fulfillment_type "GiveawayFulfillmentType";
+  award_status "GiveawayAwardStatus";
+  award_is_current BOOLEAN;
+  giveaway_status "GiveawayStatus";
+BEGIN
+  SELECT award."winnerUserId", pool."fulfillmentType", award."status", award."isCurrent", giveaway."status"
+    INTO award_winner_user_id, pool_fulfillment_type, award_status, award_is_current, giveaway_status
+  FROM "GiveawayAward" AS award
+  JOIN "GiveawayPrizePool" AS pool ON pool."id" = award."prizePoolId"
+  JOIN "EventGiveaway" AS giveaway ON giveaway."id" = award."giveawayId"
+  WHERE award."id" = NEW."awardId";
+
+  IF NOT FOUND
+    OR award_winner_user_id <> NEW."submittedByUserId"
+    OR pool_fulfillment_type <> 'delivery'
+    OR NOT award_is_current
+    OR award_status <> 'verified'
+    OR giveaway_status <> 'claims_open' THEN
+    RAISE EXCEPTION 'GiveawayDeliveryDetail must belong to a current verified delivery award while claims are open';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayDeliveryDetail_parentage_guard"
+BEFORE INSERT OR UPDATE OF "awardId", "submittedByUserId" ON "GiveawayDeliveryDetail"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_delivery_detail_parentage"();
+
+CREATE FUNCTION "validate_giveaway_delivery_detail_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'GiveawayDeliveryDetail cannot be deleted; purge its ciphertext in place';
+  END IF;
+
+  IF OLD."purgedAt" IS NOT NULL THEN
+    RAISE EXCEPTION 'GiveawayDeliveryDetail cannot be reactivated or changed after purge';
+  END IF;
+
+  IF NEW."purgedAt" IS NULL
+    OR NEW."encryptedPayload" IS NOT NULL
+    OR NEW."encryptedIv" IS NOT NULL
+    OR NEW."encryptedAuthTag" IS NOT NULL
+    OR (to_jsonb(NEW) - 'encryptedPayload' - 'encryptedIv' - 'encryptedAuthTag' - 'purgedAt' - 'updatedAt')
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - 'encryptedPayload' - 'encryptedIv' - 'encryptedAuthTag' - 'purgedAt' - 'updatedAt') THEN
+    RAISE EXCEPTION 'GiveawayDeliveryDetail is immutable except for a one-way ciphertext purge';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayDeliveryDetail_immutable_or_purge"
+BEFORE UPDATE OR DELETE ON "GiveawayDeliveryDetail"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_delivery_detail_mutation"();
+
+CREATE FUNCTION "validate_giveaway_operator_mutation"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'GiveawayOperator assignments are retained after revocation';
+  END IF;
+
+  IF OLD."revokedAt" IS NOT NULL THEN
+    RAISE EXCEPTION 'GiveawayOperator assignments cannot be reactivated or changed after revocation';
+  END IF;
+
+  IF NEW."revokedAt" IS NULL
+    OR NEW."revokedByUserId" IS NULL
+    OR NEW."revocationReasonDigest" IS NULL
+    OR (to_jsonb(NEW) - 'revokedAt' - 'revokedByUserId' - 'revocationReasonDigest' - 'updatedAt')
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - 'revokedAt' - 'revokedByUserId' - 'revocationReasonDigest' - 'updatedAt') THEN
+    RAISE EXCEPTION 'GiveawayOperator is immutable except for one-way revocation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "GiveawayOperator_one_way_revoke"
+BEFORE UPDATE OR DELETE ON "GiveawayOperator"
+FOR EACH ROW EXECUTE FUNCTION "validate_giveaway_operator_mutation"();
+
 -- Child-side parentage guards cannot observe a later update to an owning
 -- scope. Campaign ownership and frozen snapshot links are immutable once set.
 CREATE FUNCTION "prevent_giveaway_scope_reparenting"()
@@ -1805,6 +2116,14 @@ CREATE TRIGGER "GiveawayAward_scope_immutable"
 BEFORE UPDATE OF "giveawayId", "entryId", "drawId", "prizePoolId", "prizeItemId", "snapshotEntryId", "winnerUserId", "rank", "directAllocationKey", "allocationEligibilityAt", "predecessorAwardId"
 ON "GiveawayAward"
 FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'entryId', 'drawId', 'prizePoolId', 'prizeItemId', 'snapshotEntryId', 'winnerUserId', 'rank', 'directAllocationKey', 'allocationEligibilityAt', 'predecessorAwardId');
+
+CREATE TRIGGER "GiveawayDeliveryDetail_scope_immutable"
+BEFORE UPDATE OF "awardId", "submittedByUserId" ON "GiveawayDeliveryDetail"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('awardId', 'submittedByUserId');
+
+CREATE TRIGGER "GiveawayOperator_scope_immutable"
+BEFORE UPDATE OF "giveawayId", "userId", "grantedByUserId", "grantedAt" ON "GiveawayOperator"
+FOR EACH ROW EXECUTE FUNCTION "prevent_giveaway_scope_reparenting"('giveawayId', 'userId', 'grantedByUserId', 'grantedAt');
 
 CREATE FUNCTION "validate_giveaway_perk_event_parentage"()
 RETURNS TRIGGER AS $$

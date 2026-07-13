@@ -1143,10 +1143,10 @@ describe("in-memory event giveaway lifecycle", () => {
       expect(first.verification.seed).toBeUndefined();
       await expect(
         backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
-      ).resolves.toMatchObject({ status: "selected", entryCount: 5, award: expect.any(Object) });
+      ).resolves.toMatchObject({ status: "claimable", entryCount: 5, award: expect.any(Object) });
       await expect(
         backend.getRiderGiveawayState(secondRider.sessionToken, context.giveaway.id),
-      ).resolves.toMatchObject({ status: "selected", entryCount: 1, award: expect.any(Object) });
+      ).resolves.toMatchObject({ status: "claimable", entryCount: 1, award: expect.any(Object) });
       const payload = JSON.stringify(first);
       for (const forbiddenValue of ["seed", "userId", "riderId", "ciphertext", "claimToken"]) {
         expect(payload).not.toContain(forbiddenValue);
@@ -1178,7 +1178,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.optInToGiveaway(guaranteed.rider.sessionToken, guaranteed.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
 
     const firstCome = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
       giveawayInput(eventId, {
@@ -1209,7 +1209,7 @@ describe("in-memory event giveaway lifecycle", () => {
     ]);
     await expect(
       backend.optInToGiveaway(firstCome.rider.sessionToken, firstCome.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     await expect(
       backend.optInToGiveaway(laterRider.sessionToken, firstCome.giveaway.id),
     ).resolves.toEqual({ giveawayId: firstCome.giveaway.id, status: "entered", entryCount: 3 });
@@ -1251,7 +1251,7 @@ describe("in-memory event giveaway lifecycle", () => {
         initialAwardId,
         "Unable to use this prize",
       ),
-    ).resolves.toMatchObject({ status: "entered" });
+    ).resolves.toMatchObject({ status: "declined" });
 
     const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
     const historicalAward = campaign.awards.find((award) => award.id === initialAwardId);
@@ -1262,7 +1262,7 @@ describe("in-memory event giveaway lifecycle", () => {
     expect(replacement?.prizeItemId).toBe(historicalAward?.prizeItemId);
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     expect(await backend.auditCount("GIVEAWAY_AWARD_DECLINED")).toBe(1);
   });
 
@@ -1314,7 +1314,7 @@ describe("in-memory event giveaway lifecycle", () => {
           initialAwardId,
           "Please reassign this prize after lock",
         ),
-      ).resolves.toMatchObject({ status: "entered" });
+      ).resolves.toMatchObject({ status: "declined" });
       const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
       const declinedDirectAward = campaign.awards.find((award) => award.id === initialAwardId);
       expect(declinedDirectAward).toMatchObject({ isCurrent: false, status: "declined" });
@@ -1343,7 +1343,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     await expect(
       backend.getRiderGiveawayState(lateRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "not_eligible", entryCount: 0 });
@@ -1410,12 +1410,12 @@ describe("in-memory event giveaway lifecycle", () => {
           initialAwardId,
           "Frozen provenance restored for direct replacement",
         ),
-      ).resolves.toMatchObject({ status: "entered" });
+      ).resolves.toMatchObject({ status: "declined" });
     });
 
     await expect(
       backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
   });
 
   test("lets an admin void a direct first-come award without leaving its item or winner cap stuck", async () => {
@@ -1453,7 +1453,7 @@ describe("in-memory event giveaway lifecycle", () => {
         initial.award.awardId,
         "Inventory was assigned incorrectly",
       ),
-    ).resolves.toMatchObject({ status: "entered" });
+    ).resolves.toMatchObject({ status: "voided" });
 
     const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
     const historicalAward = campaign.awards.find((award) => award.id === initial.award?.awardId);
@@ -1464,7 +1464,7 @@ describe("in-memory event giveaway lifecycle", () => {
     expect(replacement?.prizeItemId).toBe(historicalAward?.prizeItemId);
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     expect(await backend.auditCount("GIVEAWAY_AWARD_VOIDED")).toBe(1);
   });
 
@@ -1503,17 +1503,17 @@ describe("in-memory event giveaway lifecycle", () => {
         initial.award.awardId,
         "Rider is not eligible for this campaign",
       ),
-    ).resolves.toMatchObject({ status: "entered" });
+    ).resolves.toMatchObject({ status: "disqualified" });
 
     const campaign = internalGiveawayCampaign(backend, context.giveaway.id);
     const historicalAward = campaign.awards.find((award) => award.id === initial.award?.awardId);
     expect(historicalAward).toMatchObject({ isCurrent: false, status: "disqualified" });
     await expect(
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "entered" });
+    ).resolves.toMatchObject({ status: "disqualified" });
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     expect(await backend.auditCount("GIVEAWAY_AWARD_DISQUALIFIED")).toBe(1);
   });
 
@@ -1565,7 +1565,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
   });
 
   test("publishes the committed seed only after publication and redraws the next frozen candidate", async () => {
@@ -1622,7 +1622,7 @@ describe("in-memory event giveaway lifecycle", () => {
           selected.state.award.awardId,
           "Unable to claim this prize",
         ),
-      ).resolves.toMatchObject({ status: "entered" });
+      ).resolves.toMatchObject({ status: "declined" });
       const redrawn = await backend.redrawGiveawayAward(context.organizer.sessionToken, {
         awardId: selected.state.award.awardId,
         idempotencyKey: "redraw-after-decline",
@@ -1648,7 +1648,7 @@ describe("in-memory event giveaway lifecycle", () => {
       });
       await expect(
         backend.getRiderGiveawayState(notSelected.sessionToken, context.giveaway.id),
-      ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+      ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     });
   });
 
@@ -1792,7 +1792,7 @@ describe("in-memory event giveaway lifecycle", () => {
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
       await expect(
         backend.voidGiveawayAward(context.admin.sessionToken, awardId, "Incorrect allocation"),
-      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered" });
+      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "voided" });
       expect(await backend.auditCount("GIVEAWAY_AWARD_VOIDED")).toBe(1);
 
       const replacement = await backend.redrawGiveawayAward(context.organizer.sessionToken, {
@@ -1842,7 +1842,7 @@ describe("in-memory event giveaway lifecycle", () => {
 
       await expect(
         backend.disqualifyGiveawayAward(context.admin.sessionToken, awardId, "Ineligible winner"),
-      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered" });
+      ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "disqualified" });
       expect(await backend.auditCount("GIVEAWAY_AWARD_DISQUALIFIED")).toBe(1);
       await expect(
         backend.redrawGiveawayAward(context.organizer.sessionToken, {
@@ -1979,7 +1979,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected" });
+    ).resolves.toMatchObject({ status: "claimable" });
     await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
       status: "interested",
       attendanceType: "direct",
@@ -1993,7 +1993,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
   });
 
   test("voids and reallocates a direct pool award when a rider keeps global eligibility but loses the pool group", async () => {
@@ -2052,7 +2052,7 @@ describe("in-memory event giveaway lifecycle", () => {
     await expect(
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({
-      status: "selected",
+      status: "claimable",
       entryCount: 2,
       award: { prizePoolTitle: "RSVP-only first-come prize" },
     });
@@ -2065,7 +2065,7 @@ describe("in-memory event giveaway lifecycle", () => {
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({
       giveawayId: context.giveaway.id,
-      status: "selected",
+      status: "claimable",
       entryCount: 1,
       award: { prizePoolTitle: "Check-in-only first-come prize" },
     });
@@ -2078,7 +2078,7 @@ describe("in-memory event giveaway lifecycle", () => {
     await expect(
       backend.getRiderGiveawayState(nextRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({
-      status: "selected",
+      status: "claimable",
       award: { prizePoolTitle: "RSVP-only first-come prize" },
     });
   });
@@ -2115,7 +2115,7 @@ describe("in-memory event giveaway lifecycle", () => {
         riderId: context.rider.user.id,
         reason: "Initial paper entry",
       }),
-    ).resolves.toMatchObject({ status: "selected" });
+    ).resolves.toMatchObject({ status: "claimable" });
     await backend.revokeManualGiveawayEntry(
       context.organizer.sessionToken,
       context.giveaway.id,
@@ -2128,7 +2128,7 @@ describe("in-memory event giveaway lifecycle", () => {
         riderId: nextRider.user.id,
         reason: "Replacement paper entry",
       }),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
   });
 
   test("reallocates paused manual-only direct capacity when the campaign reopens", async () => {
@@ -2176,7 +2176,7 @@ describe("in-memory event giveaway lifecycle", () => {
         firstState.award.awardId,
         "Declined while the manual campaign is paused",
       ),
-    ).resolves.toMatchObject({ status: "entered" });
+    ).resolves.toMatchObject({ status: "declined" });
     await expect(
       backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({ status: "entered" });
@@ -2186,7 +2186,7 @@ describe("in-memory event giveaway lifecycle", () => {
     ).resolves.toMatchObject({ state: "open" });
     await expect(
       backend.getRiderGiveawayState(replacementRider.sessionToken, context.giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
   });
 
   test("does not let organizers publish or redraw a campaign after admin suspension", async () => {
@@ -2383,7 +2383,7 @@ describe("giveaway first-come fairness and entrant-facing configuration freezes"
 
     await expect(
       backend.getRiderGiveawayState(earlierCurrentRider.sessionToken, giveaway.id),
-    ).resolves.toMatchObject({ status: "selected", award: expect.any(Object) });
+    ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     await expect(
       backend.getRiderGiveawayState(laterRequalifiedRider.sessionToken, giveaway.id),
     ).resolves.toEqual({ giveawayId: giveaway.id, status: "entered", entryCount: 3 });
@@ -2450,7 +2450,7 @@ describe("giveaway first-come fairness and entrant-facing configuration freezes"
       backend.getRiderGiveawayState(alreadyEligibleRider.sessionToken, context.giveaway.id),
     ).resolves.toMatchObject({
       giveawayId: context.giveaway.id,
-      status: "selected",
+      status: "claimable",
       award: { prizePoolTitle: "RSVP first-come prize" },
     });
   });

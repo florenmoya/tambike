@@ -218,7 +218,13 @@ export type RiderGiveawayEntryStatus =
   | "eligible"
   | "entered"
   | "selected"
+  | "pending_verification"
+  | "claimable"
+  | "verified"
   | "disqualified"
+  | "declined"
+  | "expired"
+  | "voided"
   | "claimed"
   | "fulfilled";
 
@@ -248,7 +254,52 @@ export interface OperatorGiveawayClaimView {
   fulfilmentMode: GiveawayFulfilmentMode;
   presenceVerificationRequired: boolean;
   claimDeadlineAt?: string;
-  status: "pending" | "verified" | "fulfilled" | "expired" | "voided";
+  status:
+    | "pending_verification"
+    | "claimable"
+    | "verified"
+    | "fulfilled"
+    | "expired"
+    | "voided";
+}
+
+/** Returned exactly once to the authenticated winner; never persist or place this in a URL. */
+export interface IssuedGiveawayClaimToken {
+  awardId: string;
+  token: string;
+  qrPayload: string;
+  version: number;
+}
+
+export type GiveawayClaimScannerMethod = "camera" | "upload" | "manual";
+
+export interface VerifyGiveawayClaimInput {
+  payload: string;
+  method: GiveawayClaimScannerMethod;
+  idempotencyKey: string;
+  /** Required only where the prize pool requires an in-person attestation. */
+  presenceObserved?: boolean;
+}
+
+export interface FulfillGiveawayAwardInput {
+  awardId: string;
+  idempotencyKey: string;
+  /** Optional bounded non-secret operator reference, never a rider delivery address. */
+  reference?: string;
+}
+
+export interface GiveawayDeliveryDetailsInput {
+  consent: true;
+  consentVersion: string;
+  details: Record<string, unknown>;
+}
+
+/** Private, authorized fulfiller/admin response. Never include in global or rider DTOs. */
+export interface PrivateGiveawayDeliveryDetails {
+  awardId: string;
+  consentVersion: string;
+  retentionExpiresAt: string;
+  details: Record<string, unknown>;
 }
 
 /** Public fairness proof. `seed` is omitted until a draw is published. */
