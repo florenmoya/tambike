@@ -5007,7 +5007,11 @@ export class PrismaTambikeBackend {
     } catch {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    if (canonicalDetails.length > 16_384) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    // Canonical JSON includes every nested object key and value, so this also prevents
+    // a raw claim token or QR payload from being retained inside encrypted delivery data.
+    if (canonicalDetails.length > 16_384 || this.hasGiveawayClaimSecretText(canonicalDetails)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
     return {
       consentVersion: this.requireOpaqueGiveawayLedgerText(record.consentVersion),
       details: record.details as Record<string, unknown>,

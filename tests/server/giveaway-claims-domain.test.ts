@@ -468,6 +468,34 @@ describe("in-memory giveaway claim security", () => {
     });
   });
 
+  test("rejects nested raw claim secrets in rider delivery details", async () => {
+    const backend = asClaimBackend(await createTambikeTestBackend());
+    const context = await createClaimableAward(backend, { delivery: true });
+    const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
+
+    await withGiveawayKeys(async () => {
+      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+        payload: claim.qrPayload,
+        method: "manual",
+        idempotencyKey: "verify-nested-secret-guard",
+      });
+
+      await expect(
+        backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
+          consent: true,
+          consentVersion: "delivery-consent-v1",
+          details: {
+            recipientName: "Mina Rider",
+            deliveryNotes: {
+              rawClaimToken: claim.token,
+              scans: [{ rawClaimQr: claim.qrPayload }],
+            },
+          },
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+  });
+
   test("rejects deadline equality and expires claims without automatic redraw", async () => {
     const backend = asClaimBackend(await createTambikeTestBackend());
     const context = await createClaimableAward(backend);

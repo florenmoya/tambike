@@ -219,6 +219,15 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(giveawayMigrationSql).not.toContain('"GiveawayState"');
   });
 
+  test("rejects nested claim secrets before Prisma delivery encryption", () => {
+    const deliveryParserSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private parseGiveawayDeliveryDetailsInput"),
+      prismaBackendSource.indexOf("private isPlainGiveawayDeliveryRecord"),
+    );
+
+    expect(deliveryParserSource).toContain("this.hasGiveawayClaimSecretText(canonicalDetails)");
+  });
+
   test("finalizes direct awards as historical records and reallocates post-lock capacity from frozen entries", () => {
     const declineSource = prismaBackendSource.slice(
       prismaBackendSource.indexOf("async declineGiveawayAward"),
