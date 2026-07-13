@@ -123,7 +123,7 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(getSnapshotSource).not.toContain("campaignCode");
   });
 
-  test("reconciles automatic eligibility only after committed attendance activity and avoids cross-campaign opening locks", () => {
+  test("reconciles qualifying attendance atomically and keeps pending self-review excluded", () => {
     const registerSource = prismaBackendSource.slice(
       prismaBackendSource.indexOf("async registerForEvent"),
       prismaBackendSource.indexOf("async configureCheckIn"),
@@ -140,14 +140,39 @@ describe("Prisma giveaway lifecycle contract", () => {
       prismaBackendSource.indexOf("async openGiveaway"),
       prismaBackendSource.indexOf("async pauseGiveaway"),
     );
+    const registerTransaction = registerSource.slice(
+      registerSource.indexOf("this.prisma.$transaction(async (tx) =>"),
+      registerSource.indexOf("\n    });\n\n    await this.audit"),
+    );
+    const selfCheckInTransaction = selfCheckInSource.slice(
+      selfCheckInSource.indexOf("this.prisma.$transaction(async (tx) =>"),
+      selfCheckInSource.indexOf("\n      });\n\n      await this.audit"),
+    );
+    const scanTransaction = scanSource.slice(
+      scanSource.indexOf("this.prisma.$transaction(async (tx) =>"),
+      scanSource.indexOf("\n      });\n\n      await this.audit"),
+    );
 
-    expect(registerSource).toContain("reconcileAutomaticGiveawayEligibilityAfterEvent(event.id, user.id)");
-    expect(selfCheckInSource).toContain(
-      "if (outcome.status === \"confirmed\") {\n        await this.reconcileAutomaticGiveawayEligibilityAfterEvent",
+    expect(registerTransaction).toContain(
+      "await this.reconcileAutomaticGiveawayEligibility(tx, event.id, user.id)",
     );
-    expect(scanSource).toContain(
-      "await this.reconcileAutomaticGiveawayEligibilityAfterEvent(event.id, pass.userId)",
+    expect(selfCheckInTransaction).toContain(
+      "await this.reconcileAutomaticGiveawayEligibility(tx, event.id, rider.id)",
     );
+    const selfReviewBranch = selfCheckInTransaction.slice(
+      selfCheckInTransaction.indexOf('if (settings.mode === "self_review")'),
+      selfCheckInTransaction.indexOf("const updated = await tx.pass.updateMany"),
+    );
+    expect(selfReviewBranch).not.toContain("reconcileAutomaticGiveawayEligibility");
+    expect(scanTransaction).toContain(
+      "await this.reconcileAutomaticGiveawayEligibility(tx, event.id, pass.userId)",
+    );
+    expect(
+      scanTransaction.match(
+        /await this\.reconcileAutomaticGiveawayEligibility\(tx, event\.id, pass\.userId\)/g,
+      ),
+    ).toHaveLength(2);
+    expect(prismaBackendSource).not.toContain("reconcileAutomaticGiveawayEligibilityAfterEvent");
     expect(openSource).toContain("reconcileAutomaticGiveawayEntry(tx, opened, riderId)");
     expect(openSource).not.toContain("reconcileAutomaticGiveawayEligibility(tx, giveaway.eventId)");
   });

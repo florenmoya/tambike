@@ -1183,10 +1183,9 @@ export class PrismaTambikeBackend {
               },
             }))
           : null;
+      await this.reconcileAutomaticGiveawayEligibility(tx, event.id, user.id);
       return { rsvp, pass };
     });
-
-    await this.reconcileAutomaticGiveawayEligibilityAfterEvent(event.id, user.id);
 
     await this.audit("RSVP_UPDATED", user.id, "Event", event.id);
     const rsvpDto: RSVP & { userId: string } = {
@@ -1390,12 +1389,12 @@ export class PrismaTambikeBackend {
             selfCheckInSessionId,
           },
         });
+        await this.reconcileAutomaticGiveawayEligibility(tx, event.id, rider.id);
         return { status: "confirmed" as const, pass: confirmedPass };
       });
 
       await this.audit("SELF_CHECK_IN_REQUESTED", rider.id, "Event", resolved.event.id);
       if (outcome.status === "confirmed") {
-        await this.reconcileAutomaticGiveawayEligibilityAfterEvent(resolved.event.id, rider.id);
         await this.audit("CHECK_IN_CREATED", rider.id, "CheckIn", outcome.pass.id);
       }
       return { status: outcome.status, pass: this.toPass(outcome.pass) };
@@ -1448,6 +1447,7 @@ export class PrismaTambikeBackend {
             where: { id: pass.id },
             data: { status: "checked_in", checkedInAt: confirmedAt },
           });
+          await this.reconcileAutomaticGiveawayEligibility(tx, event.id, pass.userId);
           return { pass: confirmedPass, confirmation: true };
         }
         if (existing?.status === "confirmed" || pass.status === "checked_in") {
@@ -1474,10 +1474,10 @@ export class PrismaTambikeBackend {
             method: staffMethod,
           },
         });
+        await this.reconcileAutomaticGiveawayEligibility(tx, event.id, pass.userId);
         return { pass: confirmedPass, confirmation: false };
       });
 
-      await this.reconcileAutomaticGiveawayEligibilityAfterEvent(event.id, pass.userId);
       await this.audit(
         outcome.confirmation ? "CHECK_IN_CONFIRMED" : "CHECK_IN_CREATED",
         scanner.id,
@@ -2540,13 +2540,7 @@ export class PrismaTambikeBackend {
     }
   }
 
-  /** Reconciles only open automatic campaigns after committed RSVP/pass/check-in activity. */
-  private async reconcileAutomaticGiveawayEligibilityAfterEvent(eventId: string, riderId: string) {
-    await this.prisma.$transaction(async (tx) => {
-      await this.reconcileAutomaticGiveawayEligibility(tx, eventId, riderId);
-    });
-  }
-
+  /** Reconciles only open automatic campaigns while the source Event row is locked. */
   private async reconcileAutomaticGiveawayEligibility(
     tx: Prisma.TransactionClient,
     eventId: string,

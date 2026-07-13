@@ -5,7 +5,7 @@
 - Added the database-backed campaign configuration, review, lifecycle, public/rider read, and entry APIs to `PrismaTambikeBackend`.
 - Enforced organizer-owner/admin configuration authorization, admin-only compliance review and suspension, rider-only self-entry, and the existing pre-award owner/admin cancellation behavior.
 - Added interactive transactions with documented lock order: campaign, campaign code, entry, pool, item, then award. Campaign creation and configuration replacement pre-lock the Event row.
-- Implemented automatic qualification at campaign open and in a separate post-commit giveaway transaction after RSVP/pass changes and confirmed self/staff check-ins. Pending self-review arrivals do not reconcile.
+- Implemented automatic qualification at campaign open and atomically inside the RSVP/pass and confirmed self/staff check-in Event transactions. Pending self-review arrivals do not reconcile.
 - Implemented eligibility parity for active RSVP/pass, confirmed check-in, staff-confirmed check-in, perk redemption, campaign code, and audited manual entry.
 - Implemented immediate unlimited `guaranteed` and ordered finite `first_come` direct awards, including void, item release, and chronological reallocation after qualification changes.
 - Added canonical hash-chained giveaway audit writes and kept private source facts, code hashes, audit payloads, and entrants out of public/rider DTOs and `getSnapshot`.
