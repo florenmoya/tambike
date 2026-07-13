@@ -960,7 +960,7 @@ model GiveawayAward {
   recoveryClosedAt     DateTime?
   recoveryClosedReasonDigest String?
   recoverySourceAwardId String?            @unique
-  predecessorAwardId   String?
+  predecessorAwardId   String?             @unique
   publicWinnerAlias    String?
   winnerAliasOptedInAt DateTime?
   winnerAliasRevokedAt DateTime?
@@ -977,7 +977,7 @@ model GiveawayAward {
   recoverySource     GiveawayAward?              @relation("GiveawayAwardRecovery", fields: [recoverySourceAwardId], references: [id], onDelete: Restrict)
   recoverySuccessor  GiveawayAward?              @relation("GiveawayAwardRecovery")
   predecessor        GiveawayAward?              @relation("GiveawayAwardPredecessor", fields: [predecessorAwardId], references: [id], onDelete: Restrict)
-  redrawSuccessors   GiveawayAward[]             @relation("GiveawayAwardPredecessor")
+  redrawSuccessor    GiveawayAward?              @relation("GiveawayAwardPredecessor")
   claimVerifications GiveawayClaimVerification[]
   fulfillments       GiveawayFulfillment[]
   deliveryDetail     GiveawayDeliveryDetail?
@@ -990,7 +990,6 @@ model GiveawayAward {
   @@index([snapshotEntryId])
   @@index([winnerUserId])
   @@index([recoveryClosedAt])
-  @@index([predecessorAwardId])
 }
 
 model GiveawayClaimVerification {

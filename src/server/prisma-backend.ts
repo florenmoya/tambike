@@ -19,6 +19,7 @@ import type {
   GiveawayFulfilmentMode,
   GiveawayLifecycleAdvanceResult,
   GiveawayManualEntryCandidate,
+  GiveawayManualAwardReplacementOptions,
   GiveawayManualSelectionCandidate,
   GiveawayNotification,
   GiveawayNotificationKind,
@@ -31,6 +32,7 @@ import type {
   IssuedGiveawayCampaignCode,
   GrantManualGiveawayEntryInput,
   OrganizerGiveawayWorkspace,
+  OrganizerGiveawayOperations,
   OperatorGiveawayClaimView,
   OrganizerGiveawayReport,
   PrivateGiveawayDeliveryDetails,
@@ -43,6 +45,7 @@ import type {
   RiderGiveawayClaimContext,
   RiderGiveawayEntryStatus,
   RiderGiveawayState,
+  ReplaceManualGiveawayAwardInput,
   SelectManualGiveawayAwardInput,
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
@@ -215,10 +218,11 @@ type ElapsedDirectGiveawayRecoveryReservation = {
 };
 
 type GiveawayDrawActionInput = {
-  action: "initial_random_draw" | "manual_selection" | "redraw";
+  action: "initial_random_draw" | "manual_selection" | "redraw" | "manual_replacement";
   reasonDigest: string | null;
   prizePoolId?: string;
   riderId?: string;
+  snapshotEntryId?: string;
   predecessorAwardId?: string;
   claimDeadlineAt?: string;
 };
@@ -770,6 +774,130 @@ export class PrismaTambikeBackend {
   }
 
   /**
+   * Server-owned operational state for an organizer/admin workspace. This is
+   * deliberately separate from editable mechanics and aggregate reports so a
+   * reload never loses valid actions, while entrants and claim data stay out
+   * of the DTO.
+   */
+  async getOrganizerGiveawayOperations(
+    sessionToken: string,
+    giveawayId: string,
+  ): Promise<OrganizerGiveawayOperations> {
+    const user = await this.requireUser(sessionToken);
+    const giveaway = await this.requireGiveawayCampaign(giveawayId);
+    this.requireGiveawayConfigurator(user, giveaway.event);
+    const [awards, draws] = await Promise.all([
+      this.prisma.giveawayAward.findMany({
+        where: { giveawayId: giveaway.id },
+        select: {
+          id: true,
+          drawId: true,
+          prizePoolId: true,
+          prizeItemId: true,
+          snapshotEntryId: true,
+          predecessorAwardId: true,
+          status: true,
+          isCurrent: true,
+          recoveryClosedAt: true,
+          claimDeadlineAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+      this.prisma.giveawayDraw.findMany({
+        where: { giveawayId: giveaway.id },
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          sequence: true,
+          algorithmVersion: true,
+        },
+        orderBy: [{ sequence: "asc" }, { id: "asc" }],
+      }),
+    ]);
+    const drawsById = new Map(draws.map((draw) => [draw.id, draw]));
+    const recoverableAwards: OrganizerGiveawayOperations["recoverableAwards"] = [];
+    for (const award of awards) {
+      const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+      if (!pool || !["declined", "voided", "disqualified", "expired"].includes(award.status)) {
+        continue;
+      }
+      const draw = award.drawId ? drawsById.get(award.drawId) : undefined;
+      const isDirectAward = !award.drawId && !award.snapshotEntryId;
+      if (
+        !isDirectAward &&
+        ["drawing", "claims_open"].includes(giveaway.status) &&
+        award.isCurrent &&
+        award.drawId &&
+        award.snapshotEntryId &&
+        draw?.algorithmVersion === "hmac-sha256-v1" &&
+        pool.awardMode === "random_draw"
+      ) {
+        recoverableAwards.push({
+          awardId: award.id,
+          label: `Random redraw for ${pool.title}`,
+          status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
+          recoveryKind: "random_redraw",
+        });
+        continue;
+      }
+      if (
+        !isDirectAward &&
+        giveaway.status === "claims_open" &&
+        award.isCurrent &&
+        award.drawId &&
+        award.snapshotEntryId &&
+        draw?.algorithmVersion === "manual-selection-v1" &&
+        pool.awardMode === "manual_selection" &&
+        award.prizeItemId &&
+        !awards.some((candidate) => candidate.predecessorAwardId === award.id)
+      ) {
+        recoverableAwards.push({
+          awardId: award.id,
+          label: `Manual replacement for ${pool.title}`,
+          status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
+          recoveryKind: "manual_replacement",
+        });
+        continue;
+      }
+      if (
+        isDirectAward &&
+        giveaway.status === "claims_open" &&
+        !award.isCurrent &&
+        !award.recoveryClosedAt &&
+        this.isGiveawayClaimDeadlineElapsed(award) &&
+        ["first_come", "guaranteed"].includes(pool.awardMode)
+      ) {
+        recoverableAwards.push({
+          awardId: award.id,
+          label: `Direct re-offer for ${pool.title}`,
+          status: award.status as OrganizerGiveawayOperations["recoverableAwards"][number]["status"],
+          recoveryKind: "direct_reoffer",
+        });
+      }
+    }
+    const publishableDraw = draws
+      .filter((draw) => draw.status === "completed")
+      .sort((left, right) => right.sequence - left.sequence || right.id.localeCompare(left.id))[0];
+    return {
+      giveawayId: giveaway.id,
+      canCancel:
+        awards.length === 0 && ["draft", "scheduled", "open", "paused"].includes(giveaway.status),
+      canRunInitialRandomDraw:
+        ["locked", "drawing"].includes(giveaway.status) &&
+        giveaway.prizePools.some((pool) => pool.awardMode === "random_draw") &&
+        !draws.some(
+          (draw) => draw.type === "initial" && draw.algorithmVersion === "hmac-sha256-v1",
+        ),
+      publishableDrawId: publishableDraw?.id ?? null,
+      recoverableAwards: recoverableAwards.sort(
+        (left, right) => left.label.localeCompare(right.label) || left.awardId.localeCompare(right.awardId),
+      ),
+    };
+  }
+
+  /**
    * Authorized configuration inventory only. This deliberately selects none
    * of the raw-code, hash, claimant, or creator fields.
    */
@@ -929,6 +1057,78 @@ export class PrismaTambikeBackend {
         });
       }
       return candidates;
+    });
+  }
+
+  /**
+   * Returns only opaque frozen entries that can replace one terminal manual
+   * award. The source is derived server-side, so callers cannot swap pools,
+   * prize items, or rider facts.
+   */
+  async listManualGiveawayReplacementCandidates(
+    sessionToken: string,
+    sourceAwardId: string,
+  ): Promise<GiveawayManualAwardReplacementOptions> {
+    const user = await this.requireUser(sessionToken);
+    const normalizedSourceAwardId = this.requireOpaqueGiveawayLedgerText(sourceAwardId);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: normalizedSourceAwardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      this.requireGiveawayConfigurator(user, giveaway.event);
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const sourceAward = await tx.giveawayAward.findUnique({
+        where: { id: normalizedSourceAwardId },
+      });
+      if (
+        giveaway.status !== "claims_open" ||
+        !sourceAward ||
+        sourceAward.giveawayId !== giveaway.id ||
+        !sourceAward.isCurrent
+      ) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const { pool } = await this.requireManualGiveawayReplacementSource(
+        tx,
+        giveaway,
+        snapshot,
+        sourceAward,
+      );
+      const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id);
+      this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
+      const entriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
+      const candidates: GiveawayManualSelectionCandidate[] = [];
+      for (const snapshotEntry of snapshot.entries) {
+        const entry = entriesById.get(snapshotEntry.entryId);
+        if (!entry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+        if (
+          entry.status !== "locked" ||
+          !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+          !(await this.canCreateDrawGiveawayAward(
+            tx,
+            giveaway,
+            pool,
+            entry.riderId,
+            sourceAward.id,
+          ))
+        ) {
+          continue;
+        }
+        candidates.push({
+          snapshotEntryId: snapshotEntry.id,
+          label: `Locked entry ${snapshotEntry.opaquePublicReference}`,
+        });
+      }
+      return {
+        sourceAwardId: sourceAward.id,
+        label: `Manual replacement for ${pool.title}`,
+        status: sourceAward.status as GiveawayManualAwardReplacementOptions["status"],
+        claimDeadlineRequired: !this.hasUsableGiveawayReplacementDeadline(giveaway),
+        candidates,
+      };
     });
   }
 
@@ -2368,6 +2568,7 @@ export class PrismaTambikeBackend {
         // The API accepts only a snapshot reference; the persisted draw digest
         // remains tied to the resolved frozen rider identity for replay safety.
         riderId: entry.riderId,
+        snapshotEntryId: snapshotEntry.id,
       };
       const inputDigest = this.calculateGiveawayDrawInputDigest(
         giveaway,
@@ -2804,6 +3005,187 @@ export class PrismaTambikeBackend {
         });
       }
       return this.toGiveawayDrawResult(giveaway, snapshot, completedDraw);
+    });
+  }
+
+  /**
+   * Replaces one terminal, published manual-selection award. This deliberately
+   * does not use the HMAC redraw path: an organizer selects a new opaque
+   * frozen entry, the old terminal award remains truthful history, and the
+   * committed seed is neither generated nor rerolled.
+   */
+  async replaceManualGiveawayAward(
+    sessionToken: string,
+    input: unknown,
+  ): Promise<GiveawayDrawResult> {
+    const parsed = this.parseManualGiveawayReplacementInput(input);
+    const organizer = await this.requireUser(sessionToken);
+    const location = await this.prisma.giveawayAward.findUnique({
+      where: { id: parsed.sourceAwardId },
+      select: { giveawayId: true },
+    });
+    if (!location) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, location.giveawayId);
+      this.requireGiveawayConfigurator(organizer, giveaway.event);
+      const snapshot = await this.requireGiveawaySnapshot(tx, giveaway.id);
+      const publishedAt = snapshot.seedRevealedAt;
+      const sourceAward = await tx.giveawayAward.findUnique({ where: { id: parsed.sourceAwardId } });
+      if (!sourceAward || sourceAward.giveawayId !== giveaway.id || !publishedAt) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const { originalDraw, pool, prizeItem: sourcePrizeItem } =
+        await this.requireManualGiveawayReplacementSource(tx, giveaway, snapshot, sourceAward);
+      const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id);
+      this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
+      const entriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
+      const snapshotEntry = snapshot.entries.find((entry) => entry.id === parsed.snapshotEntryId);
+      const entry = snapshotEntry ? entriesById.get(snapshotEntry.entryId) : undefined;
+      if (!snapshotEntry || !entry || entry.status !== "locked") {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const actionInput: GiveawayDrawActionInput = {
+        action: "manual_replacement",
+        reasonDigest: this.hashGiveawayReason(parsed.reason),
+        prizePoolId: pool.id,
+        riderId: entry.riderId,
+        snapshotEntryId: snapshotEntry.id,
+        predecessorAwardId: sourceAward.id,
+        claimDeadlineAt: parsed.claimDeadlineAt,
+      };
+      const inputDigest = this.calculateGiveawayDrawInputDigest(
+        giveaway,
+        snapshot,
+        "manual-selection-v1",
+        actionInput,
+      );
+      const replay = await tx.giveawayDraw.findUnique({
+        where: {
+          giveawayId_idempotencyKey: {
+            giveawayId: giveaway.id,
+            idempotencyKey: parsed.idempotencyKey,
+          },
+        },
+      });
+      if (replay) {
+        this.assertGiveawayDrawReplayInput(replay, inputDigest);
+        return this.toGiveawayDrawResult(giveaway, snapshot, replay);
+      }
+      if (giveaway.status !== "claims_open" || !sourceAward.isCurrent) {
+        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      }
+      const existingSuccessor = await tx.giveawayAward.findFirst({
+        where: { predecessorAwardId: sourceAward.id },
+        select: { id: true },
+      });
+      if (existingSuccessor) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      if (
+        !this.isSnapshotEntryEligibleForPool(snapshotEntry, pool) ||
+        !(await this.canCreateDrawGiveawayAward(
+          tx,
+          giveaway,
+          pool,
+          entry.riderId,
+          sourceAward.id,
+        ))
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const replacementDeadline = this.resolveGiveawayReplacementClaimDeadline(
+        giveaway,
+        parsed.claimDeadlineAt,
+      );
+      await this.lockGiveawayPrizePool(tx, pool.id);
+      const prizeItem = await this.lockGiveawayPrizeItem(tx, sourcePrizeItem.id);
+      if (!prizeItem || prizeItem.prizePoolId !== pool.id || prizeItem.status !== "reserved") {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const currentAward = await this.lockGiveawayAward(tx, sourceAward.id);
+      if (!currentAward || !currentAward.isCurrent) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const currentSource = await this.requireManualGiveawayReplacementSource(
+        tx,
+        giveaway,
+        snapshot,
+        currentAward,
+      );
+      if (
+        currentSource.originalDraw.id !== originalDraw.id ||
+        currentSource.pool.id !== pool.id ||
+        currentSource.prizeItem.id !== prizeItem.id
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const draw = await tx.giveawayDraw.create({
+        data: {
+          id: `giveaway-draw-${randomUUID()}`,
+          giveawayId: giveaway.id,
+          snapshotId: snapshot.id,
+          sequence: await this.nextGiveawayDrawSequence(tx, giveaway.id),
+          type: "redraw",
+          status: "published",
+          idempotencyKey: parsed.idempotencyKey,
+          algorithmVersion: "manual-selection-v1",
+          inputDigest,
+          initiatedByUserId: organizer.id,
+          reasonDigest: actionInput.reasonDigest,
+          completedAt: new Date(),
+          publishedAt,
+        },
+      });
+      // Preserve the terminal outcome and reason digest. Only the current
+      // allocation pointer changes so the same reserved item can have one
+      // successor under the partial current-prize-item constraint.
+      await tx.giveawayAward.update({
+        where: { id: currentAward.id },
+        data: { isCurrent: false },
+      });
+      const replacement = await this.createDrawGiveawayAward(tx, giveaway, pool, {
+        entry,
+        draw,
+        snapshotEntry,
+        prizeItemId: prizeItem.id,
+        rank: 1,
+        predecessorAwardId: currentAward.id,
+        reservePrizeItem: false,
+        claimDeadlineAt: replacementDeadline,
+      });
+      const resultDigest = this.calculateGiveawayDrawResultDigest(giveaway.id, draw, [
+        {
+          prizePoolId: replacement.prizePoolId,
+          prizeItemId: replacement.prizeItemId,
+          snapshotEntryId: replacement.snapshotEntryId,
+          rank: replacement.rank,
+          predecessorAwardId: replacement.predecessorAwardId,
+        },
+      ]);
+      const publishedDraw = await tx.giveawayDraw.update({
+        where: { id: draw.id },
+        data: { resultDigest },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        organizer.id,
+        "GIVEAWAY_MANUAL_AWARD_REPLACED",
+        "award",
+        replacement.id,
+        {
+          awardId: replacement.id,
+          predecessorAwardId: currentAward.id,
+          drawId: draw.id,
+          originalDrawId: originalDraw.id,
+          reasonDigest: draw.reasonDigest,
+          claimDeadlineAt: replacementDeadline?.toISOString() ?? null,
+        },
+      );
+      await this.notifyGiveaway(tx, giveaway, replacement.winnerUserId, "giveaway_winner", {
+        awardId: replacement.id,
+      });
+      return this.toGiveawayDrawResult(giveaway, snapshot, publishedDraw);
     });
   }
 
@@ -4690,6 +5072,41 @@ export class PrismaTambikeBackend {
     };
   }
 
+  private parseManualGiveawayReplacementInput(
+    input: unknown,
+  ): ReplaceManualGiveawayAwardInput {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (key) =>
+          !["sourceAwardId", "snapshotEntryId", "reason", "idempotencyKey", "claimDeadlineAt"].includes(
+            key,
+          ),
+      ) ||
+      (record.claimDeadlineAt !== undefined &&
+        (typeof record.claimDeadlineAt !== "string" || !record.claimDeadlineAt.trim()))
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    for (const field of ["sourceAwardId", "snapshotEntryId", "idempotencyKey"] as const) {
+      if (typeof record[field] !== "string" || !record[field].trim()) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+    }
+    return {
+      sourceAwardId: this.requireOpaqueGiveawayLedgerText(record.sourceAwardId),
+      snapshotEntryId: this.requireOpaqueGiveawayLedgerText(record.snapshotEntryId),
+      idempotencyKey: this.requireOpaqueGiveawayLedgerText(record.idempotencyKey),
+      reason: this.requireGiveawayReason(record.reason),
+      ...(typeof record.claimDeadlineAt === "string"
+        ? { claimDeadlineAt: this.resolveExplicitGiveawayClaimDeadline(record.claimDeadlineAt) }
+        : {}),
+    };
+  }
+
   private requireGiveawayReason(reason: unknown) {
     if (typeof reason !== "string" || !reason.trim()) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
@@ -4922,6 +5339,7 @@ export class PrismaTambikeBackend {
           reasonDigest: actionInput.reasonDigest,
           prizePoolId: actionInput.prizePoolId ?? null,
           riderId: actionInput.riderId ?? null,
+          snapshotEntryId: actionInput.snapshotEntryId ?? null,
           predecessorAwardId: actionInput.predecessorAwardId ?? null,
           claimDeadlineAt: actionInput.claimDeadlineAt ?? null,
           prizePools: giveaway.prizePools.map((pool) => ({
@@ -6538,6 +6956,48 @@ export class PrismaTambikeBackend {
       allowedGroupIds.length === 0 ||
       allowedGroupIds.some((groupId) => qualifiedGroupIds.includes(groupId))
     );
+  }
+
+  /**
+   * Resolves the immutable lineage that a manual replacement is allowed to
+   * use. Callers separately decide whether the source must still be current
+   * so an idempotent replay remains possible after success made it historical.
+   */
+  private async requireManualGiveawayReplacementSource(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    snapshot: GiveawaySnapshotWithEntries,
+    sourceAward: GiveawayAwardRecord,
+  ) {
+    const [originalDraw, prizeItem] = await Promise.all([
+      sourceAward.drawId
+        ? tx.giveawayDraw.findUnique({ where: { id: sourceAward.drawId } })
+        : Promise.resolve(null),
+      sourceAward.prizeItemId
+        ? tx.giveawayPrizeItem.findUnique({ where: { id: sourceAward.prizeItemId } })
+        : Promise.resolve(null),
+    ]);
+    const pool = giveaway.prizePools.find((candidate) => candidate.id === sourceAward.prizePoolId);
+    if (
+      !snapshot.seedRevealedAt ||
+      !["declined", "voided", "disqualified", "expired"].includes(sourceAward.status) ||
+      this.isDirectGiveawayAward(sourceAward) ||
+      !sourceAward.drawId ||
+      !sourceAward.snapshotEntryId ||
+      !sourceAward.prizeItemId ||
+      !originalDraw ||
+      originalDraw.status !== "published" ||
+      originalDraw.snapshotId !== snapshot.id ||
+      originalDraw.algorithmVersion !== "manual-selection-v1" ||
+      !pool ||
+      pool.awardMode !== "manual_selection" ||
+      !prizeItem ||
+      prizeItem.prizePoolId !== pool.id ||
+      prizeItem.status !== "reserved"
+    ) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    return { originalDraw, pool, prizeItem };
   }
 
   /**

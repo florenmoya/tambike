@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { Prisma } from "@prisma/client";
@@ -16,6 +16,20 @@ const giveawayMigrationSql = readFileSync(
   ),
   "utf8",
 );
+const manualReplacementMigrationDirectory = readdirSync(
+  resolve(process.cwd(), "prisma/migrations"),
+).find((directory) => directory.includes("manual_giveaway_award_replacement"));
+const manualReplacementMigrationSql = manualReplacementMigrationDirectory
+  ? readFileSync(
+      resolve(
+        process.cwd(),
+        "prisma/migrations",
+        manualReplacementMigrationDirectory,
+        "migration.sql",
+      ),
+      "utf8",
+    )
+  : "";
 
 function dmmfModel(name: string) {
   return Prisma.dmmf.datamodel.models.find((model) => model.name === name);
@@ -500,5 +514,97 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(openSource).toContain(
       "await this.revalidateDirectGiveawayAwardsForLockedEntries(tx, opened, lockedEntries)",
     );
+  });
+
+  test("declares the static Prisma manual-replacement lineage and privacy contract", () => {
+    const optionsSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async listManualGiveawayReplacementCandidates"),
+      prismaBackendSource.indexOf("async listAdminGiveaways"),
+    );
+    const replacementSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async replaceManualGiveawayAward"),
+      prismaBackendSource.indexOf("async issueGiveawayClaimToken"),
+    );
+    const lineageSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async requireManualGiveawayReplacementSource"),
+      prismaBackendSource.indexOf("private async hasAwardableManualSelectionCandidates"),
+    );
+
+    expect(prismaBackendSource).toMatch(/async listManualGiveawayReplacementCandidates\(/);
+    expect(prismaBackendSource).toMatch(/async replaceManualGiveawayAward\(/);
+    expect(optionsSource).toContain("requireGiveawayConfigurator");
+    expect(optionsSource).toContain('giveaway.status !== "claims_open"');
+    expect(optionsSource).toContain("snapshot.entries");
+    expect(optionsSource).toContain("opaquePublicReference");
+    expect(optionsSource).not.toContain("displayName");
+    expect(optionsSource).not.toContain("riderIdsWithGiveawayActivity");
+
+    expect(replacementSource).toContain('giveaway.status !== "claims_open"');
+    expect(lineageSource).toContain('["declined", "voided", "disqualified", "expired"]');
+    expect(lineageSource).toContain("!snapshot.seedRevealedAt");
+    expect(lineageSource).toContain('originalDraw.status !== "published"');
+    expect(lineageSource).toContain('originalDraw.algorithmVersion !== "manual-selection-v1"');
+    expect(lineageSource).toContain('pool.awardMode !== "manual_selection"');
+    expect(replacementSource).toContain("giveawayId_idempotencyKey");
+    expect(replacementSource).toContain("assertGiveawayDrawReplayInput");
+    expect(replacementSource).toContain('type: "redraw"');
+    expect(replacementSource).toContain('status: "published"');
+    expect(replacementSource).toContain('algorithmVersion: "manual-selection-v1"');
+    expect(replacementSource).toContain("predecessorAwardId: currentAward.id");
+    expect(replacementSource).toContain("reservePrizeItem: false");
+    expect(replacementSource).toContain("GIVEAWAY_MANUAL_AWARD_REPLACED");
+    expect(replacementSource).toContain("await this.notifyGiveaway");
+    expect(replacementSource).not.toContain('status: "superseded"');
+
+    expect(prismaSchema).toContain("predecessorAwardId   String?             @unique");
+    expect(manualReplacementMigrationSql).toContain(
+      'GiveawayAward predecessor successor duplicate preflight failed',
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      'CREATE UNIQUE INDEX "GiveawayAward_predecessorAwardId_key"',
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      'DROP INDEX "GiveawayAward_predecessorAwardId_idx"',
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      'CREATE FUNCTION "validate_giveaway_award_predecessor_recovery"()',
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      'GiveawayAward predecessor successor must use the same prize item and frozen snapshot',
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      "predecessor_draw_status NOT IN ('completed', 'published')",
+    );
+    expect(manualReplacementMigrationSql).toContain(
+      "successor_draw_status NOT IN ('completed', 'published')",
+    );
+    expect(manualReplacementMigrationSql).toContain("predecessor_draw_status <> 'published'");
+    expect(manualReplacementMigrationSql).toContain("successor_draw_status <> 'published'");
+  });
+
+  test("declares the static safe organizer operations contract", () => {
+    const operationsSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async getOrganizerGiveawayOperations"),
+      prismaBackendSource.indexOf("async listGiveawayCampaignCodes"),
+    );
+
+    expect(prismaBackendSource).toMatch(/async getOrganizerGiveawayOperations\(/);
+    expect(operationsSource).toContain("requireGiveawayConfigurator");
+    expect(operationsSource).toContain('awardMode === "random_draw"');
+    expect(operationsSource).toContain('algorithmVersion === "hmac-sha256-v1"');
+    expect(operationsSource).toContain('awardMode === "manual_selection"');
+    expect(operationsSource).toContain('algorithmVersion === "manual-selection-v1"');
+    expect(operationsSource).toContain('["drawing", "claims_open"].includes(giveaway.status)');
+    expect(operationsSource).toContain('giveaway.status === "claims_open"');
+    expect(operationsSource).not.toContain('award.status !== "expired"');
+    expect(operationsSource).toContain("recoveryClosedAt");
+    expect(operationsSource).toContain("isGiveawayClaimDeadlineElapsed");
+    expect(operationsSource).toContain('draw.status === "completed"');
+    expect(operationsSource).toContain("canRunInitialRandomDraw");
+    expect(operationsSource).toContain("canCancel");
+    expect(operationsSource).toContain("publishableDrawId");
+    expect(operationsSource).not.toContain("displayName");
+    expect(operationsSource).not.toContain("claimTokenHash");
+    expect(operationsSource).not.toContain("encryptedSeed");
   });
 });
