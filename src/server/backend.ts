@@ -1279,7 +1279,7 @@ export class TambikeBackend {
     if (giveaway.state !== "open" || giveaway.entryMode !== "manual_only") return [];
 
     const actionAt = new Date().toISOString();
-    const candidates: GiveawayManualEntryCandidate[] = [];
+    const candidatesByRiderId = new Map<string, GiveawayManualEntryCandidate>();
     for (const riderId of this.riderIdsWithEventActivity(giveaway.eventId)) {
       const rider = this.users.get(riderId);
       if (!rider || rider.role !== "rider" || rider.verificationStatus === "SUSPENDED") continue;
@@ -1288,9 +1288,27 @@ export class TambikeBackend {
         actionAt,
       });
       if (qualification.weight <= 0) continue;
-      candidates.push({ riderId: rider.id, label: rider.displayName.trim() || "Unnamed rider" });
+      candidatesByRiderId.set(rider.id, {
+        riderId: rider.id,
+        label: rider.displayName.trim() || "Unnamed rider",
+      });
     }
-    return candidates.sort(
+    for (const entry of giveaway.entriesByRider.values()) {
+      if (
+        entry.entryPath !== "manual" ||
+        entry.status !== "eligible" ||
+        !entry.manualGrantActive
+      ) {
+        continue;
+      }
+      const rider = this.users.get(entry.riderId);
+      if (!rider) continue;
+      candidatesByRiderId.set(rider.id, {
+        riderId: rider.id,
+        label: rider.displayName.trim() || "Unnamed rider",
+      });
+    }
+    return [...candidatesByRiderId.values()].sort(
       (left, right) => left.label.localeCompare(right.label) || left.riderId.localeCompare(right.riderId),
     );
   }
@@ -1718,7 +1736,12 @@ export class TambikeBackend {
     this.requireGiveawayEntryMode(giveaway, "manual_only");
     const normalizedReason = this.requireGiveawayReason(reason);
     const entry = giveaway.entriesByRider.get(riderId);
-    if (!entry || entry.entryPath !== "manual" || entry.status !== "eligible") {
+    if (
+      !entry ||
+      entry.entryPath !== "manual" ||
+      entry.status !== "eligible" ||
+      !entry.manualGrantActive
+    ) {
       throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
     }
     const now = new Date().toISOString();

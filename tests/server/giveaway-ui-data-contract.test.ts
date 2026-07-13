@@ -434,6 +434,115 @@ describe("giveaway UI data contracts", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  test("keeps an active manual entry selectable for revocation after the rider is suspended", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "manual_only");
+    const unenteredRider = await backend.signUpRider({
+      displayName: "Suspended without manual entry",
+      email: "suspended-without-manual-entry@example.com",
+      password: "password123",
+      area: "Antipolo",
+    });
+    await Promise.all([
+      backend.registerForEvent(context.rider.sessionToken, context.event.id, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+      backend.registerForEvent(unenteredRider.sessionToken, context.event.id, {
+        status: "going",
+        attendanceType: "direct",
+      }),
+    ]);
+    await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: context.rider.user.id,
+      reason: "Accepted paper entry before account review",
+    });
+
+    const store = backend as unknown as {
+      users: Map<string, { verificationStatus: string }>;
+      giveaways: {
+        campaignsById: Map<
+          string,
+          {
+            entriesByRider: Map<
+              string,
+              { status: string; manualGrantActive?: boolean }
+            >;
+          }
+        >;
+      };
+    };
+    for (const riderId of [context.rider.user.id, unenteredRider.user.id]) {
+      const rider = store.users.get(riderId);
+      if (!rider) throw new Error("TEST_RIDER_MISSING");
+      rider.verificationStatus = "SUSPENDED";
+    }
+
+    await expect(
+      backend.listGiveawayManualEntryCandidates(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toEqual([{ riderId: context.rider.user.id, label: context.rider.user.displayName }]);
+
+    await expect(
+      backend.revokeManualGiveawayEntry(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        context.rider.user.id,
+        "Withdraw manual entry after account suspension",
+      ),
+    ).resolves.toMatchObject({
+      giveawayId: context.giveaway.id,
+      status: "not_eligible",
+      entryCount: 0,
+    });
+    const entry = store.giveaways.campaignsById
+      .get(context.giveaway.id)
+      ?.entriesByRider.get(context.rider.user.id);
+    expect(entry).toMatchObject({ status: "withdrawn", manualGrantActive: false });
+  });
+
+  test("does not revoke a manually deactivated entry with a stale eligible status", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const context = await createOpenEntryGiveaway(backend, "manual_only");
+    await backend.registerForEvent(context.rider.sessionToken, context.event.id, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    await backend.grantManualGiveawayEntry(context.organizer.sessionToken, {
+      giveawayId: context.giveaway.id,
+      riderId: context.rider.user.id,
+      reason: "Accepted paper entry for the rider",
+    });
+    const store = backend as unknown as {
+      giveaways: {
+        campaignsById: Map<
+          string,
+          {
+            entriesByRider: Map<
+              string,
+              { status: string; manualGrantActive?: boolean }
+            >;
+          }
+        >;
+      };
+    };
+    const entry = store.giveaways.campaignsById
+      .get(context.giveaway.id)
+      ?.entriesByRider.get(context.rider.user.id);
+    if (!entry) throw new Error("TEST_MANUAL_ENTRY_MISSING");
+    entry.manualGrantActive = false;
+
+    await expect(
+      backend.revokeManualGiveawayEntry(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        context.rider.user.id,
+        "Reject stale deactivated manual entry",
+      ),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_NOT_ELIGIBLE" });
+    expect(entry).toMatchObject({ status: "eligible", manualGrantActive: false });
+  });
+
   test("rejects a suspended rider even when an authorized organizer submits a direct manual grant", async () => {
     const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
     const context = await createOpenEntryGiveaway(backend, "manual_only");

@@ -826,19 +826,34 @@ export class PrismaTambikeBackend {
     this.requireGiveawayConfigurator(user, giveaway.event);
     if (giveaway.status !== "open" || giveaway.entryMode !== "manual_only") return [];
 
-    const riderIds = await this.riderIdsWithGiveawayActivity(this.prisma, giveaway.eventId);
+    const [activityRiderIds, activeManualEntries] = await Promise.all([
+      this.riderIdsWithGiveawayActivity(this.prisma, giveaway.eventId),
+      this.prisma.giveawayEntry.findMany({
+        where: {
+          giveawayId: giveaway.id,
+          entryPath: "manual",
+          status: "eligible",
+          manualGrantActive: true,
+        },
+        select: { riderId: true },
+      }),
+    ]);
+    const activeManualRiderIds = new Set(activeManualEntries.map((entry) => entry.riderId));
+    const riderIds = [...new Set([...activityRiderIds, ...activeManualRiderIds])];
     if (riderIds.length === 0) return [];
     const riders = await this.prisma.user.findMany({
       where: {
         id: { in: riderIds },
-        role: "rider",
-        verificationStatus: { not: "SUSPENDED" },
       },
-      select: { id: true, displayName: true },
+      select: { id: true, displayName: true, role: true, verificationStatus: true },
     });
     const actionAt = new Date();
     const candidates = await Promise.all(
       riders.map(async (rider) => {
+        if (activeManualRiderIds.has(rider.id)) {
+          return { riderId: rider.id, label: rider.displayName.trim() || "Unnamed rider" };
+        }
+        if (rider.role !== "rider" || rider.verificationStatus === "SUSPENDED") return null;
         const qualification = await this.evaluateGiveawayEntryQualification(
           this.prisma,
           giveaway,
