@@ -9,6 +9,7 @@ import { createTambikeTestBackend } from "../../src/server/testing";
 import type { OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData } from "../../src/features/giveaways/types";
 import {
   buildGiveawayLifecycleRoute,
+  CampaignEntryOperations,
   OrganizerGiveawayWorkspace,
   toOrganizerGiveawayEditorDraft,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
@@ -147,5 +148,69 @@ describe("organizer giveaway lifecycle route", () => {
 
     expect(markup).toContain("Giveaways");
     expect(markup).toContain(`/organizer/events/${event.id}/giveaways`);
+  });
+
+  test("keeps campaign-code and audited-manual entry controls mode-specific and secret-safe", () => {
+    const codeMarkup = renderToStaticMarkup(
+      React.createElement(CampaignEntryOperations, {
+        campaignId: "giveaway-code",
+        entryMode: "claim_code",
+        state: "open",
+        codeSummaries: [
+          {
+            id: "code-summary-1",
+            maxUses: 30,
+            usedUses: 12,
+            expiresAt: "2026-08-18T12:00:00.000Z",
+            createdAt: "2026-08-17T12:00:00.000Z",
+            status: "active",
+          },
+        ],
+        manualCandidates: [],
+        issuedCode: {
+          id: "code-summary-2",
+          code: "gwy_visible_once",
+          maxUses: 3,
+          expiresAt: "2026-08-19T12:00:00.000Z",
+        },
+        isPending: false,
+        onCreateCode: () => undefined,
+        onDismissIssuedCode: () => undefined,
+        onGrantManualEntry: () => undefined,
+        onRevokeManualEntry: () => undefined,
+      }),
+    );
+
+    expect(codeMarkup).toContain("Campaign-code access");
+    expect(codeMarkup).toContain("Create campaign code");
+    expect(codeMarkup).toContain("12 of 30 uses");
+    expect(codeMarkup).toContain("gwy_visible_once");
+    expect(codeMarkup).toContain("cannot be shown again");
+    expect(codeMarkup).not.toContain("Audited manual entry");
+    expect(codeMarkup).not.toContain("tokenHash");
+
+    const manualMarkup = renderToStaticMarkup(
+      React.createElement(CampaignEntryOperations, {
+        campaignId: "giveaway-manual",
+        entryMode: "manual_only",
+        state: "open",
+        codeSummaries: [],
+        manualCandidates: [{ riderId: "rider-1", label: "Rider One" }],
+        issuedCode: null,
+        isPending: false,
+        onCreateCode: () => undefined,
+        onDismissIssuedCode: () => undefined,
+        onGrantManualEntry: () => undefined,
+        onRevokeManualEntry: () => undefined,
+      }),
+    );
+
+    expect(manualMarkup).toContain("Audited manual entry");
+    expect(manualMarkup).toContain("Rider One");
+    expect(manualMarkup).toContain("Grant entry");
+    expect(manualMarkup).toContain("Revoke entry");
+    expect(manualMarkup).toContain("Reason for the audit trail");
+    expect(manualMarkup).not.toContain("Campaign-code access");
+    expect(manualMarkup).not.toContain("gwy_visible_once");
   });
 });

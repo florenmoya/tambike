@@ -32,32 +32,41 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   createGiveawayAction,
+  createGiveawayCampaignCodeAction,
   getOrganizerGiveawayWorkspaceAction,
   getOrganizerGiveawayReportAction,
+  grantManualGiveawayEntryAction,
+  listGiveawayCampaignCodesAction,
+  listGiveawayManualEntryCandidatesAction,
   listOrganizerGiveawaysAction,
   lockGiveawayAction,
   openGiveawayAction,
   pauseGiveawayAction,
   publishGiveawayDrawAction,
   redrawGiveawayAwardAction,
+  revokeManualGiveawayEntryAction,
   runGiveawayDrawAction,
   scheduleGiveawayAction,
   submitGiveawayForReviewAction,
   updateGiveawayAction,
 } from "@/server/giveaway-actions";
 import type {
+  CreateGiveawayCampaignCodeInput,
   CreateGiveawayInput,
   GiveawayAwardMode,
   GiveawayCampaignListItem,
+  GiveawayCampaignCodeSummary,
   GiveawayComplianceStatus,
   GiveawayEligibilityConditionInput,
   GiveawayEligibilityGroupInput,
   GiveawayEntryMode,
   GiveawayFulfilmentMode,
   GiveawayKind,
+  GiveawayManualEntryCandidate,
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
+  IssuedGiveawayCampaignCode,
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
   OrganizerGiveawayReport,
   UpdateGiveawayInput,
@@ -162,6 +171,13 @@ type GiveawayEditorDraft = {
 
 type DrawState = Record<string, string | undefined>;
 
+type EntryOperationsInventoryStatus = "idle" | "loading" | "ready" | "error";
+
+type IssuedCampaignCodeState = {
+  campaignId: string;
+  value: IssuedGiveawayCampaignCode;
+};
+
 type OrganizerGiveawayWorkspaceProps = {
   eventId: string;
   /**
@@ -223,10 +239,20 @@ export function OrganizerGiveawayWorkspace({
   const [redrawAwardId, setRedrawAwardId] = React.useState("");
   const [redrawReason, setRedrawReason] = React.useState("");
   const [notice, setNotice] = React.useState<{ tone: "error" | "success"; text: string } | null>(null);
+  const [operationalEntryModes, setOperationalEntryModes] = React.useState<Record<string, GiveawayEntryMode>>({});
+  const [campaignCodes, setCampaignCodes] = React.useState<Record<string, GiveawayCampaignCodeSummary[]>>({});
+  const [manualEntryCandidates, setManualEntryCandidates] = React.useState<Record<string, GiveawayManualEntryCandidate[]>>({});
+  const [entryOperationsInventoryStatus, setEntryOperationsInventoryStatus] = React.useState<
+    Record<string, EntryOperationsInventoryStatus>
+  >({});
+  const [issuedCampaignCode, setIssuedCampaignCode] = React.useState<IssuedCampaignCodeState | null>(null);
   const [isPending, startTransition] = React.useTransition();
 
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null;
   const selectedDraft = selectedCampaign ? draftsByCampaignId[selectedCampaign.id] : undefined;
+  const selectedOperationalEntryMode = selectedCampaign
+    ? operationalEntryModes[selectedCampaign.id]
+    : undefined;
 
   const refreshCampaigns = React.useCallback(async () => {
     const result = await listOrganizerGiveawaysAction(eventId);
@@ -289,9 +315,14 @@ export function OrganizerGiveawayWorkspace({
         const result = await getOrganizerGiveawayWorkspaceAction(selectedCampaignIdForConfiguration);
         if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
         if (cancelled) return;
+        const workspace = result.data as OrganizerGiveawayWorkspaceData;
         setDraftsByCampaignId((current) => ({
           ...current,
-          [selectedCampaignIdForConfiguration]: toOrganizerGiveawayEditorDraft(result.data),
+          [selectedCampaignIdForConfiguration]: toOrganizerGiveawayEditorDraft(workspace),
+        }));
+        setOperationalEntryModes((current) => ({
+          ...current,
+          [selectedCampaignIdForConfiguration]: workspace.entryMode,
         }));
       } catch {
         if (!cancelled) {
@@ -325,6 +356,45 @@ export function OrganizerGiveawayWorkspace({
     };
   }, [selectedCampaignIdForReport]);
 
+  const refreshEntryOperationsInventory = React.useCallback(
+    async (giveawayId: string, entryMode: GiveawayEntryMode) => {
+      if (entryMode !== "claim_code" && entryMode !== "manual_only") return;
+      setEntryOperationsInventoryStatus((current) => ({ ...current, [giveawayId]: "loading" }));
+      try {
+        if (entryMode === "claim_code") {
+          const result = await listGiveawayCampaignCodesAction(giveawayId);
+          if (!result.ok) throw new Error("GIVEAWAY_CODE_INVENTORY_UNAVAILABLE");
+          setCampaignCodes((current) => ({
+            ...current,
+            [giveawayId]: result.data as GiveawayCampaignCodeSummary[],
+          }));
+        } else {
+          const result = await listGiveawayManualEntryCandidatesAction(giveawayId);
+          if (!result.ok) throw new Error("GIVEAWAY_MANUAL_CANDIDATES_UNAVAILABLE");
+          setManualEntryCandidates((current) => ({
+            ...current,
+            [giveawayId]: result.data as GiveawayManualEntryCandidate[],
+          }));
+        }
+        setEntryOperationsInventoryStatus((current) => ({ ...current, [giveawayId]: "ready" }));
+      } catch (error) {
+        setEntryOperationsInventoryStatus((current) => ({ ...current, [giveawayId]: "error" }));
+        throw error;
+      }
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!selectedCampaign || !selectedOperationalEntryMode) return;
+    if (selectedOperationalEntryMode !== "claim_code" && selectedOperationalEntryMode !== "manual_only") {
+      return;
+    }
+    void Promise.resolve()
+      .then(() => refreshEntryOperationsInventory(selectedCampaign.id, selectedOperationalEntryMode))
+      .catch(() => undefined);
+  }, [refreshEntryOperationsInventory, selectedCampaign, selectedOperationalEntryMode]);
+
   const runWorkspaceAction = React.useCallback(
     (successText: string, action: () => Promise<{ ok: boolean }>) => {
       setNotice(null);
@@ -345,10 +415,73 @@ export function OrganizerGiveawayWorkspace({
     [refreshCampaigns, startTransition],
   );
 
+  const createCampaignCode = React.useCallback(
+    (input: CreateGiveawayCampaignCodeInput) => {
+      if (!selectedCampaign || selectedOperationalEntryMode !== "claim_code") return;
+      setNotice(null);
+      startTransition(async () => {
+        try {
+          const result = await createGiveawayCampaignCodeAction(selectedCampaign.id, input);
+          if (!result.ok) throw new Error("GIVEAWAY_CODE_CREATE_UNAVAILABLE");
+          const issued = result.data as IssuedGiveawayCampaignCode;
+          setIssuedCampaignCode({ campaignId: selectedCampaign.id, value: issued });
+          await refreshEntryOperationsInventory(selectedCampaign.id, "claim_code").catch(() => undefined);
+          setNotice({
+            tone: "success",
+            text: "Campaign code created. Copy it from the confirmation now; it cannot be shown again after dismissal.",
+          });
+        } catch {
+          setNotice({
+            tone: "error",
+            text: "Campaign code was not created. Confirm this campaign uses campaign-code entry, is in an allowed stage, and that you have organizer access.",
+          });
+        }
+      });
+    },
+    [refreshEntryOperationsInventory, selectedCampaign, selectedOperationalEntryMode, startTransition],
+  );
+
+  const changeManualEntry = React.useCallback(
+    (operation: "grant" | "revoke", riderId: string, reason: string) => {
+      if (!selectedCampaign || selectedOperationalEntryMode !== "manual_only") return;
+      setNotice(null);
+      startTransition(async () => {
+        try {
+          const result = operation === "grant"
+            ? await grantManualGiveawayEntryAction({
+                giveawayId: selectedCampaign.id,
+                riderId,
+                reason,
+              })
+            : await revokeManualGiveawayEntryAction({
+                giveawayId: selectedCampaign.id,
+                riderId,
+                reason,
+              });
+          if (!result.ok) throw new Error("GIVEAWAY_MANUAL_ENTRY_UNAVAILABLE");
+          await refreshEntryOperationsInventory(selectedCampaign.id, "manual_only").catch(() => undefined);
+          setNotice({
+            tone: "success",
+            text: operation === "grant"
+              ? "Audited manual entry granted. The campaign record has been updated."
+              : "Audited manual entry revoked. The campaign record has been updated.",
+          });
+        } catch {
+          setNotice({
+            tone: "error",
+            text: "Manual entry was not changed. It is available only while this campaign is open and you have organizer access.",
+          });
+        }
+      });
+    },
+    [refreshEntryOperationsInventory, selectedCampaign, selectedOperationalEntryMode, startTransition],
+  );
+
   const selectCampaign = React.useCallback(
     (campaign: OrganizerGiveawayCampaign) => {
       setSelectedCampaignId(campaign.id);
       setEditorDraft(draftsByCampaignId[campaign.id] ?? createEmptyDraft());
+      setIssuedCampaignCode(null);
       setNotice(null);
     },
     [draftsByCampaignId],
@@ -364,6 +497,7 @@ export function OrganizerGiveawayWorkspace({
           if (!result.ok) throw new Error("GIVEAWAY_CREATE_UNAVAILABLE");
           const campaign = result.data as OrganizerGiveawayCampaign;
           setDraftsByCampaignId((current) => ({ ...current, [campaign.id]: editorDraft }));
+          setOperationalEntryModes((current) => ({ ...current, [campaign.id]: editorDraft.entryMode }));
           setSelectedCampaignId(campaign.id);
           await refreshCampaigns();
           setNotice({ tone: "success", text: "Campaign saved as a draft. Submit it for compliance review when the policy is final." });
@@ -382,6 +516,11 @@ export function OrganizerGiveawayWorkspace({
         const result = await updateGiveawayAction(input);
         if (!result.ok) throw new Error("GIVEAWAY_UPDATE_UNAVAILABLE");
         setDraftsByCampaignId((current) => ({ ...current, [selectedCampaign.id]: selectedDraft }));
+        setOperationalEntryModes((current) => ({
+          ...current,
+          [selectedCampaign.id]: selectedDraft.entryMode,
+        }));
+        if (selectedDraft.entryMode !== "claim_code") setIssuedCampaignCode(null);
         await refreshCampaigns();
         setNotice({ tone: "success", text: "Campaign policy and terms were saved. Compliance review is required again after policy changes." });
       } catch (error) {
@@ -474,6 +613,7 @@ export function OrganizerGiveawayWorkspace({
             setSelectedCampaignId(null);
             setEditorDraft(createEmptyDraft());
             setReport(null);
+            setIssuedCampaignCode(null);
             setNotice(null);
           }}
           onSelect={selectCampaign}
@@ -511,6 +651,28 @@ export function OrganizerGiveawayWorkspace({
                   : "loading"
             }
           />
+
+          {selectedCampaign && selectedOperationalEntryMode ? (
+            <CampaignEntryOperations
+              key={`${selectedCampaign.id}:${selectedOperationalEntryMode}`}
+              campaignId={selectedCampaign.id}
+              entryMode={selectedOperationalEntryMode}
+              state={selectedCampaign.state}
+              codeSummaries={campaignCodes[selectedCampaign.id] ?? []}
+              manualCandidates={manualEntryCandidates[selectedCampaign.id] ?? []}
+              issuedCode={
+                issuedCampaignCode?.campaignId === selectedCampaign.id
+                  ? issuedCampaignCode.value
+                  : null
+              }
+              inventoryStatus={entryOperationsInventoryStatus[selectedCampaign.id] ?? "idle"}
+              isPending={isPending}
+              onCreateCode={createCampaignCode}
+              onDismissIssuedCode={() => setIssuedCampaignCode(null)}
+              onGrantManualEntry={(riderId, reason) => changeManualEntry("grant", riderId, reason)}
+              onRevokeManualEntry={(riderId, reason) => changeManualEntry("revoke", riderId, reason)}
+            />
+          ) : null}
 
           {selectedCampaign ? (
             <div className="grid gap-4 lg:grid-cols-2">
@@ -830,6 +992,307 @@ function CampaignEditor({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Entry-mode-specific organizer controls. The raw campaign code exists only
+ * in the creation response held by the client; the inventory below accepts
+ * safe summaries and never has access to a code hash or claimant facts.
+ */
+export function CampaignEntryOperations({
+  campaignId,
+  entryMode,
+  state,
+  codeSummaries,
+  manualCandidates,
+  issuedCode,
+  inventoryStatus = "idle",
+  isPending,
+  onCreateCode,
+  onDismissIssuedCode,
+  onGrantManualEntry,
+  onRevokeManualEntry,
+}: {
+  campaignId: string;
+  entryMode: GiveawayEntryMode;
+  state: GiveawayState;
+  codeSummaries: GiveawayCampaignCodeSummary[];
+  manualCandidates: GiveawayManualEntryCandidate[];
+  issuedCode: IssuedGiveawayCampaignCode | null;
+  inventoryStatus?: EntryOperationsInventoryStatus;
+  isPending: boolean;
+  onCreateCode: (input: CreateGiveawayCampaignCodeInput) => void;
+  onDismissIssuedCode: () => void;
+  onGrantManualEntry: (riderId: string, reason: string) => void;
+  onRevokeManualEntry: (riderId: string, reason: string) => void;
+}) {
+  if (entryMode === "claim_code") {
+    return (
+      <CampaignCodeControls
+        campaignId={campaignId}
+        state={state}
+        codeSummaries={codeSummaries}
+        issuedCode={issuedCode}
+        inventoryStatus={inventoryStatus}
+        isPending={isPending}
+        onCreateCode={onCreateCode}
+        onDismissIssuedCode={onDismissIssuedCode}
+      />
+    );
+  }
+
+  if (entryMode === "manual_only") {
+    return (
+      <ManualEntryControls
+        campaignId={campaignId}
+        state={state}
+        candidates={manualCandidates}
+        inventoryStatus={inventoryStatus}
+        isPending={isPending}
+        onGrant={onGrantManualEntry}
+        onRevoke={onRevokeManualEntry}
+      />
+    );
+  }
+
+  return null;
+}
+
+function CampaignCodeControls({
+  campaignId,
+  state,
+  codeSummaries,
+  issuedCode,
+  inventoryStatus,
+  isPending,
+  onCreateCode,
+  onDismissIssuedCode,
+}: {
+  campaignId: string;
+  state: GiveawayState;
+  codeSummaries: GiveawayCampaignCodeSummary[];
+  issuedCode: IssuedGiveawayCampaignCode | null;
+  inventoryStatus: EntryOperationsInventoryStatus;
+  isPending: boolean;
+  onCreateCode: (input: CreateGiveawayCampaignCodeInput) => void;
+  onDismissIssuedCode: () => void;
+}) {
+  const [maxUsesInput, setMaxUsesInput] = React.useState("1");
+  const [expiresAtInput, setExpiresAtInput] = React.useState("");
+  const [inputError, setInputError] = React.useState<string | null>(null);
+  const canCreate = ["draft", "scheduled", "open", "paused"].includes(state);
+
+  const createCode = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const maxUses = Number(maxUsesInput);
+    const expiresAt = optionalLocalDateTimeToIso(expiresAtInput);
+    if (!Number.isInteger(maxUses) || maxUses < 1) {
+      setInputError("Enter a whole number of uses greater than zero.");
+      return;
+    }
+    if (expiresAtInput && !expiresAt) {
+      setInputError("Enter a valid future expiry time or leave it blank for the 24-hour default.");
+      return;
+    }
+    setInputError(null);
+    onCreateCode({ maxUses, ...(expiresAt ? { expiresAt } : {}) });
+  };
+
+  return (
+    <Card className="border-primary/20">
+      <CardHeader>
+        <CardTitle>Campaign-code access</CardTitle>
+        <CardDescription>
+          Create a rider-facing campaign code and monitor only its safe capacity and expiry. Existing code values are never recovered from this workspace.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {issuedCode ? (
+          <section
+            aria-live="polite"
+            className="grid gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950"
+          >
+            <div className="grid gap-1">
+              <span className="text-sm font-semibold">Copy this new code now</span>
+              <p className="text-sm">
+                It is shown only in this confirmation and cannot be shown again after dismissal.
+              </p>
+            </div>
+            <Field label="New code (shown once)">
+              <Input
+                aria-label="New campaign code shown once"
+                value={issuedCode.code}
+                readOnly
+                className="font-mono text-xs"
+              />
+            </Field>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span>{issuedCode.maxUses} allowed uses</span>
+              <span aria-hidden="true">•</span>
+              <span>Expires {formatEntryOperationsDateTime(issuedCode.expiresAt)}</span>
+            </div>
+            <Button type="button" variant="outline" className="w-fit" onClick={onDismissIssuedCode}>
+              I copied this code
+            </Button>
+          </section>
+        ) : null}
+
+        <form className="grid gap-3 rounded-lg border bg-muted/20 p-3" onSubmit={createCode}>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] md:items-end">
+            <Field label="Maximum uses">
+              <Input
+                min={1}
+                inputMode="numeric"
+                type="number"
+                value={maxUsesInput}
+                onChange={(event) => setMaxUsesInput(event.target.value)}
+                disabled={isPending || !canCreate}
+              />
+            </Field>
+            <Field label="Expiry (your local time, optional)">
+              <Input
+                type="datetime-local"
+                value={expiresAtInput}
+                onChange={(event) => setExpiresAtInput(event.target.value)}
+                disabled={isPending || !canCreate}
+              />
+            </Field>
+            <Button type="submit" disabled={isPending || !canCreate}>
+              {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+              Create campaign code
+            </Button>
+          </div>
+          {inputError ? <p role="alert" className="text-sm text-destructive">{inputError}</p> : null}
+          {!canCreate ? (
+            <p className="text-xs text-muted-foreground">
+              Campaign codes can be created only in draft, scheduled, open, or paused campaigns. This campaign is {formatState(state)}.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Leave expiry blank to use the server-controlled 24-hour default.</p>
+          )}
+        </form>
+
+        <section aria-labelledby={`${campaignId}-code-status`} className="grid gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id={`${campaignId}-code-status`} className="text-sm font-semibold">Safe code status</h3>
+            <span className="text-xs text-muted-foreground">No code values, hashes, or claimant details are listed.</span>
+          </div>
+          {inventoryStatus === "loading" || inventoryStatus === "idle" ? (
+            <p className="text-sm text-muted-foreground">Loading code capacity and expiry…</p>
+          ) : null}
+          {inventoryStatus === "error" ? (
+            <p role="alert" className="text-sm text-destructive">
+              Code status could not be loaded. Confirm organizer access and that this campaign still uses campaign-code entry.
+            </p>
+          ) : null}
+          {inventoryStatus === "ready" && codeSummaries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No campaign codes have been created yet.</p>
+          ) : null}
+          {codeSummaries.length > 0 ? (
+            <ul className="grid gap-2">
+              {codeSummaries.map((code, index) => (
+                <li key={code.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background px-3 py-2 text-sm">
+                  <span className="font-medium">Code {index + 1} · {formatState(code.status)}</span>
+                  <span className="text-muted-foreground">
+                    {code.usedUses} of {code.maxUses} uses · Expires {formatEntryOperationsDateTime(code.expiresAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ManualEntryControls({
+  campaignId,
+  state,
+  candidates,
+  inventoryStatus,
+  isPending,
+  onGrant,
+  onRevoke,
+}: {
+  campaignId: string;
+  state: GiveawayState;
+  candidates: GiveawayManualEntryCandidate[];
+  inventoryStatus: EntryOperationsInventoryStatus;
+  isPending: boolean;
+  onGrant: (riderId: string, reason: string) => void;
+  onRevoke: (riderId: string, reason: string) => void;
+}) {
+  const [riderId, setRiderId] = React.useState(candidates[0]?.riderId ?? "");
+  const [reason, setReason] = React.useState("");
+  const canManage = state === "open";
+  const selectedRiderId = candidates.some((candidate) => candidate.riderId === riderId)
+    ? riderId
+    : candidates[0]?.riderId ?? "";
+  const canSubmit = canManage && !isPending && Boolean(selectedRiderId) && Boolean(reason.trim());
+
+  return (
+    <Card className="border-primary/20">
+      <CardHeader>
+        <CardTitle>Audited manual entry</CardTitle>
+        <CardDescription>
+          Select an eligible rider by display label, record a reason, then grant or revoke a manual campaign entry. This does not check anyone in or redeem a perk.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {!canManage ? (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            Manual entry is available only while the campaign is open. Current state: {formatState(state)}.
+          </p>
+        ) : null}
+        {inventoryStatus === "loading" || inventoryStatus === "idle" ? (
+          <p className="text-sm text-muted-foreground">Loading eligible rider labels…</p>
+        ) : null}
+        {inventoryStatus === "error" ? (
+          <p role="alert" className="text-sm text-destructive">
+            Eligible rider labels could not be loaded. Confirm organizer access and that this campaign is manual-only.
+          </p>
+        ) : null}
+        {inventoryStatus === "ready" && candidates.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No eligible rider labels are available for manual entry right now.</p>
+        ) : null}
+
+        <fieldset className="grid gap-3 rounded-lg border bg-muted/20 p-3" disabled={!canManage || isPending || candidates.length === 0}>
+          <Field label="Eligible rider">
+            <select
+              id={`${campaignId}-manual-rider`}
+              className={selectClassName}
+              value={selectedRiderId}
+              onChange={(event) => setRiderId(event.target.value)}
+            >
+              {candidates.map((candidate) => (
+                <option key={candidate.riderId} value={candidate.riderId}>{candidate.label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Reason for the audit trail">
+            <textarea
+              className={textareaClassName}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Explain why this manual entry should change."
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">A non-empty reason is required for both grant and revoke actions.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={() => onGrant(selectedRiderId, reason.trim())} disabled={!canSubmit}>
+              {isPending ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <CheckCircle2Icon data-icon="inline-start" />}
+              Grant entry
+            </Button>
+            <Button type="button" variant="outline" onClick={() => onRevoke(selectedRiderId, reason.trim())} disabled={!canSubmit}>
+              <RotateCcwIcon data-icon="inline-start" />
+              Revoke entry
+            </Button>
+          </div>
+        </fieldset>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1216,6 +1679,21 @@ function numberOr(fallback: number, value: string) {
 
 function formatState(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function optionalLocalDateTimeToIso(value: string) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function formatEntryOperationsDateTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "an invalid time";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 const selectClassName = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
