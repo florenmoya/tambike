@@ -529,6 +529,9 @@ describe("Prisma giveaway lifecycle contract", () => {
       prismaBackendSource.indexOf("private async requireManualGiveawayReplacementSource"),
       prismaBackendSource.indexOf("private async hasAwardableManualSelectionCandidates"),
     );
+    const replayPosition = replacementSource.indexOf(
+      "const replay = await tx.giveawayDraw.findUnique",
+    );
 
     expect(prismaBackendSource).toMatch(/async listManualGiveawayReplacementCandidates\(/);
     expect(prismaBackendSource).toMatch(/async replaceManualGiveawayAward\(/);
@@ -545,8 +548,20 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(lineageSource).toContain('originalDraw.status !== "published"');
     expect(lineageSource).toContain('originalDraw.algorithmVersion !== "manual-selection-v1"');
     expect(lineageSource).toContain('pool.awardMode !== "manual_selection"');
+    expect(lineageSource).toContain('lineage.prizeItem.status !== "reserved"');
     expect(replacementSource).toContain("giveawayId_idempotencyKey");
     expect(replacementSource).toContain("assertGiveawayDrawReplayInput");
+    expect(replayPosition).toBeGreaterThanOrEqual(0);
+    const relaxedLineagePosition = replacementSource.indexOf(
+      "requireManualGiveawayReplacementLineage",
+    );
+    const strictLineagePosition = replacementSource.indexOf(
+      "requireManualGiveawayReplacementSource",
+      replayPosition,
+    );
+    expect(relaxedLineagePosition).toBeGreaterThanOrEqual(0);
+    expect(relaxedLineagePosition).toBeLessThan(replayPosition);
+    expect(strictLineagePosition).toBeGreaterThan(replayPosition);
     expect(replacementSource).toContain('type: "redraw"');
     expect(replacementSource).toContain('status: "published"');
     expect(replacementSource).toContain('algorithmVersion: "manual-selection-v1"');

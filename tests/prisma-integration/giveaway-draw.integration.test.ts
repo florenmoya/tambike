@@ -605,6 +605,7 @@ describe("Prisma giveaway draw concurrency", () => {
               isCurrent: true,
             },
             select: {
+              id: true,
               prizeItemId: true,
               snapshotEntryId: true,
               predecessorAwardId: true,
@@ -641,6 +642,36 @@ describe("Prisma giveaway draw concurrency", () => {
         status: "published",
         algorithmVersion: "manual-selection-v1",
       });
+      if (!currentManualAward) throw new Error("INTEGRATION_MANUAL_SUCCESSOR_MISSING");
+      const successorRiderSession =
+        currentManualAward.winnerUserId === riderId ? riderSession : secondRiderSession;
+      const successorClaim = await backendClients.primary.backend.issueGiveawayClaimToken(
+        successorRiderSession,
+        currentManualAward.id,
+      );
+      await backendClients.primary.backend.verifyGiveawayClaim(adminSession, {
+        payload: successorClaim.qrPayload,
+        method: "manual",
+        presenceObserved: true,
+        idempotencyKey: `manual-replacement-verify-${suffix}`,
+      });
+      await backendClients.primary.backend.fulfillGiveawayAward(adminSession, {
+        awardId: currentManualAward.id,
+        idempotencyKey: `manual-replacement-fulfill-${suffix}`,
+        reference: "desk:manual-replacement",
+      });
+      expect(
+        await rawClients.primary.giveawayPrizeItem.findUnique({
+          where: { id: originalManualAward.prizeItemId },
+          select: { status: true },
+        }),
+      ).toMatchObject({ status: "fulfilled" });
+      expect(
+        await backendClients.primary.backend.replaceManualGiveawayAward(
+          organizerSession,
+          manualReplacementInput,
+        ),
+      ).toEqual(firstManualReplacement);
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;

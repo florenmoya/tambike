@@ -3040,8 +3040,16 @@ export class PrismaTambikeBackend {
       if (!sourceAward || sourceAward.giveawayId !== giveaway.id || !publishedAt) {
         throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
       }
-      const { originalDraw, pool, prizeItem: sourcePrizeItem } =
-        await this.requireManualGiveawayReplacementSource(tx, giveaway, snapshot, sourceAward);
+      // Resolve only immutable lineage before looking up an idempotent replay.
+      // A successful successor may have fulfilled the shared prize item since
+      // the first request, so its historical result must remain replayable
+      // without accepting that fulfilled item for a fresh replacement.
+      const replayLineage = await this.requireManualGiveawayReplacementLineage(
+        tx,
+        giveaway,
+        snapshot,
+        sourceAward,
+      );
       const lockedEntries = await this.lockGiveawayEntries(tx, giveaway.id);
       this.assertFrozenDirectEntryProvenance(snapshot, lockedEntries);
       const entriesById = new Map(lockedEntries.map((entry) => [entry.id, entry]));
@@ -3053,7 +3061,7 @@ export class PrismaTambikeBackend {
       const actionInput: GiveawayDrawActionInput = {
         action: "manual_replacement",
         reasonDigest: this.hashGiveawayReason(parsed.reason),
-        prizePoolId: pool.id,
+        prizePoolId: replayLineage.pool.id,
         riderId: entry.riderId,
         snapshotEntryId: snapshotEntry.id,
         predecessorAwardId: sourceAward.id,
@@ -3077,6 +3085,8 @@ export class PrismaTambikeBackend {
         this.assertGiveawayDrawReplayInput(replay, inputDigest);
         return this.toGiveawayDrawResult(giveaway, snapshot, replay);
       }
+      const { originalDraw, pool, prizeItem: sourcePrizeItem } =
+        await this.requireManualGiveawayReplacementSource(tx, giveaway, snapshot, sourceAward);
       if (giveaway.status !== "claims_open" || !sourceAward.isCurrent) {
         throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
       }
@@ -6975,6 +6985,29 @@ export class PrismaTambikeBackend {
     snapshot: GiveawaySnapshotWithEntries,
     sourceAward: GiveawayAwardRecord,
   ) {
+    const lineage = await this.requireManualGiveawayReplacementLineage(
+      tx,
+      giveaway,
+      snapshot,
+      sourceAward,
+    );
+    if (lineage.prizeItem.status !== "reserved") {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    return lineage;
+  }
+
+  /**
+   * Immutable post-publication lineage used to bind an idempotent replacement
+   * replay. Unlike a fresh replacement, it deliberately tolerates a later
+   * prize-item fulfillment so the original result remains recoverable.
+   */
+  private async requireManualGiveawayReplacementLineage(
+    tx: Prisma.TransactionClient,
+    giveaway: GiveawayConfiguration,
+    snapshot: GiveawaySnapshotWithEntries,
+    sourceAward: GiveawayAwardRecord,
+  ) {
     const [originalDraw, prizeItem] = await Promise.all([
       sourceAward.drawId
         ? tx.giveawayDraw.findUnique({ where: { id: sourceAward.drawId } })
@@ -6998,8 +7031,7 @@ export class PrismaTambikeBackend {
       !pool ||
       pool.awardMode !== "manual_selection" ||
       !prizeItem ||
-      prizeItem.prizePoolId !== pool.id ||
-      prizeItem.status !== "reserved"
+      prizeItem.prizePoolId !== pool.id
     ) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
