@@ -1,0 +1,212 @@
+.stage {
+  --asphalt: #050506;
+  --concrete: #f7f4ef;
+  --signal-amber: #ffbe45;
+  --chrome: #d7dee2;
+  --fuel-green: #20b26b;
+  --brake-red: #e63b2e;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--asphalt);
+  color: var(--concrete);
+  font-family: var(--font-geist-sans), Geist, Arial, sans-serif;
+}
+
+.stageShell {
+  box-sizing: border-box;
+  display: grid;
+  min-height: 100dvh;
+  grid-template-rows: auto 1fr auto;
+  width: min(100%, 90rem);
+  margin-inline: auto;
+  padding: clamp(1.25rem, 3vw, 3rem) clamp(1rem, 5vw, 5rem) clamp(1.5rem, 4vw, 4rem);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--chrome);
+  font-family: var(--font-geist-mono), "Courier New", monospace;
+  font-size: clamp(0.68rem, 1.2vw, 0.82rem);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.marker::before {
+  width: 2.6rem;
+  height: 0.26rem;
+  background: var(--signal-amber);
+  content: "";
+}
+
+.stageMain {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  width: 100%;
+  padding-block: clamp(2rem, 6vh, 5rem);
+  text-align: center;
+}
+
+.campaignTitle {
+  max-width: 58rem;
+  margin: 0 0 clamp(1.75rem, 4vh, 3.5rem);
+  color: var(--chrome);
+  font-size: clamp(0.8rem, 1.7vw, 1.05rem);
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.prizePool {
+  margin: 0 0 0.45rem;
+  color: var(--signal-amber);
+  font-family: var(--font-geist-mono), "Courier New", monospace;
+  font-size: clamp(0.68rem, 1.2vw, 0.84rem);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.prizeTitle {
+  max-width: 66rem;
+  margin: 0 0 clamp(1.6rem, 4vh, 3rem);
+  font-family: "Arial Black", Impact, sans-serif;
+  font-size: clamp(1.6rem, 4.4vw, 4.4rem);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+  text-wrap: balance;
+  text-transform: uppercase;
+}
+
+.reelFrame {
+  position: relative;
+  box-sizing: border-box;
+  width: min(100%, 72rem);
+  height: clamp(7.5rem, 18vw, 12.5rem);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chrome) 40%, transparent);
+  border-inline-width: clamp(0.55rem, 1.4vw, 1.1rem);
+  background: #0d0d0f;
+  box-shadow: inset 0 0 0 1px #000;
+}
+
+.reelFrame::before,
+.reelFrame::after {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: var(--signal-amber);
+  content: "";
+  pointer-events: none;
+}
+
+.reelFrame::before {
+  top: calc(50% - clamp(3.7rem, 8.5vw, 5.9rem));
+}
+
+.reelFrame::after {
+  bottom: calc(50% - clamp(3.7rem, 8.5vw, 5.9rem));
+}
+
+.reelTrack {
+  will-change: transform;
+}
+
+.reelRow,
+.reelWinner,
+.reelIdle {
+  box-sizing: border-box;
+  display: grid;
+  height: clamp(7.5rem, 18vw, 12.5rem);
+  place-items: center;
+  padding-inline: clamp(0.75rem, 3vw, 2.5rem);
+  font-family: "Arial Black", Impact, sans-serif;
+  font-size: clamp(2.1rem, 7vw, 7.2rem);
+  font-weight: 900;
+  letter-spacing: -0.045em;
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+.reelRow {
+  color: var(--chrome);
+}
+
+.reelWinner {
+  color: var(--concrete);
+}
+
+.reelIdle {
+  color: color-mix(in srgb, var(--chrome) 55%, var(--asphalt));
+  font-family: var(--font-geist-mono), "Courier New", monospace;
+  font-size: clamp(0.8rem, 2vw, 1.25rem);
+  letter-spacing: 0.18em;
+}
+
+.progress {
+  margin: clamp(1.5rem, 4vh, 2.75rem) 0 0;
+  color: var(--chrome);
+  font-family: var(--font-geist-mono), "Courier New", monospace;
+  font-size: clamp(0.72rem, 1.4vw, 0.92rem);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.statusBar {
+  display: flex;
+  min-height: 2.6rem;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1rem;
+  font-family: var(--font-geist-mono), "Courier New", monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.complete {
+  color: var(--fuel-green);
+}
+
+.disconnected {
+  color: var(--brake-red);
+}
+
+.fullscreenButton {
+  border: 1px solid var(--signal-amber);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--signal-amber);
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0.65rem 0.9rem;
+  text-transform: uppercase;
+}
+
+.fullscreenButton:focus-visible {
+  outline: 3px solid var(--concrete);
+  outline-offset: 3px;
+}
+
+@media (max-width: 42rem) {
+  .stageShell {
+    padding-inline: 1rem;
+  }
+
+  .reelFrame {
+    border-inline-width: 0.4rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reelTrack {
+    transform: none !important;
+  }
+}
