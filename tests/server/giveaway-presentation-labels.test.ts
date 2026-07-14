@@ -73,6 +73,47 @@ describe("giveaway live presentation labels", () => {
     ]);
   });
 
+  test("continues past an eight-character collision and keeps duplicate consented suffixes unique", () => {
+    const references = ["entry_collision_probe_9305", "entry_collision_probe_25309"];
+    const masked = deriveGiveawayPresentationLabels(
+      references.map((opaquePublicReference, index) => ({
+        entryId: `masked-${index}`,
+        displayName: "…",
+        opaquePublicReference,
+        optedIn: false,
+      })),
+    );
+    const consented = deriveGiveawayPresentationLabels(
+      references.map((opaquePublicReference, index) => ({
+        entryId: `consented-${index}`,
+        displayName: index === 0 ? "Mina Rivera" : "mina Reyes",
+        opaquePublicReference,
+        optedIn: true,
+      })),
+    );
+
+    expect(masked.map((entry) => entry.presentationLabel)).toEqual([
+      "Rider EF4BEF06B6",
+      "Rider EF4BEF06F9",
+    ]);
+    expect(consented.map((entry) => entry.presentationLabel)).toEqual([
+      "Mina R. · EF4BEF06B6",
+      "mina R. · EF4BEF06F9",
+    ]);
+    for (const entry of [...masked, ...consented]) {
+      expect(Array.from(entry.presentationLabel).length).toBeLessThanOrEqual(40);
+    }
+  });
+
+  test("fails closed when a masked collision cannot fit the 40-character label cap", () => {
+    expect(() =>
+      deriveGiveawayPresentationLabels([
+        { entryId: "collision-a", displayName: "A", opaquePublicReference: "same-reference", optedIn: false },
+        { entryId: "collision-b", displayName: "B", opaquePublicReference: "same-reference", optedIn: false },
+      ]),
+    ).toThrow("GIVEAWAY_PRESENTATION_LABEL_CODE_CAP_EXCEEDED");
+  });
+
   test("suffixes every case-insensitive duplicate consented label with its resolved masked code", () => {
     const labels = deriveGiveawayPresentationLabels([
       { entryId: "entry-a", displayName: "Mina Rivera", opaquePublicReference: "duplicate-a", optedIn: true },

@@ -16,6 +16,11 @@ export type DerivedGiveawayPresentationLabel = {
 };
 
 const MAX_PRESENTATION_LABEL_CHARACTERS = 40;
+const MASKED_LABEL_PREFIX = "Rider ";
+const MASKED_CODE_INITIAL_LENGTH = 4;
+const MASKED_CODE_LENGTH_STEP = 2;
+const MAX_MASKED_CODE_CHARACTERS =
+  MAX_PRESENTATION_LABEL_CHARACTERS - Array.from(MASKED_LABEL_PREFIX).length;
 const safeUnicodeNameTokenPattern = /^\p{L}[\p{L}\p{M}\p{Pd}'\u2019.]*$/u;
 
 /** Removes non-rendering controls and canonicalizes visible spacing without changing name case. */
@@ -42,21 +47,31 @@ export function deriveGiveawayPresentationLabels(
   const hashes = entries.map((entry) =>
     createHash("sha256").update(entry.opaquePublicReference).digest("hex").toUpperCase(),
   );
-  const codeLengths = entries.map(() => 4);
+  const codeLengths = entries.map(() => MASKED_CODE_INITIAL_LENGTH);
 
-  for (const nextLength of [6, 8]) {
+  for (
+    let nextLength = MASKED_CODE_INITIAL_LENGTH + MASKED_CODE_LENGTH_STEP;
+    nextLength <= Math.min(hashes[0]?.length ?? 0, MAX_MASKED_CODE_CHARACTERS);
+    nextLength += MASKED_CODE_LENGTH_STEP
+  ) {
     const indexesByCode = new Map<string, number[]>();
     for (let index = 0; index < hashes.length; index += 1) {
       const code = hashes[index].slice(0, codeLengths[index]);
       indexesByCode.set(code, [...(indexesByCode.get(code) ?? []), index]);
     }
+    let hasCollidingCodes = false;
     for (const indexes of indexesByCode.values()) {
       if (indexes.length < 2) continue;
+      hasCollidingCodes = true;
       for (const index of indexes) codeLengths[index] = nextLength;
     }
+    if (!hasCollidingCodes) break;
   }
 
   const maskedCodes = hashes.map((hash, index) => hash.slice(0, codeLengths[index]));
+  if (new Set(maskedCodes).size !== maskedCodes.length) {
+    throw new Error("GIVEAWAY_PRESENTATION_LABEL_CODE_CAP_EXCEEDED");
+  }
   const consentedBases = entries.map((entry) =>
     entry.optedIn ? consentedBaseLabel(entry.displayName) : undefined,
   );
@@ -75,7 +90,7 @@ export function deriveGiveawayPresentationLabels(
     if (!consentedLabel) {
       return {
         entryId: entry.entryId,
-        presentationLabel: `Rider ${maskedCodes[index]}`,
+        presentationLabel: `${MASKED_LABEL_PREFIX}${maskedCodes[index]}`,
         presentationLabelKind: "masked",
       };
     }
