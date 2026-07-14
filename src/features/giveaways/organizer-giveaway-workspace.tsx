@@ -187,6 +187,18 @@ type GiveawayEditorDraft = {
   prizePools: GiveawayPrizePoolInput[];
 };
 
+export function applyOrganizerGiveawayDraftUpdate(
+  draftsByCampaignId: Record<string, GiveawayEditorDraft>,
+  campaignId: string,
+  update: React.SetStateAction<GiveawayEditorDraft>,
+) {
+  const currentDraft = draftsByCampaignId[campaignId];
+  if (!currentDraft) return draftsByCampaignId;
+  const nextDraft = typeof update === "function" ? update(currentDraft) : update;
+  if (nextDraft === currentDraft) return draftsByCampaignId;
+  return { ...draftsByCampaignId, [campaignId]: nextDraft };
+}
+
 export type EntryOperationsInventoryStatus = "idle" | "loading" | "ready" | "error";
 
 export type GiveawayPublicationMode = "random_presentation" | "manual_direct" | "unknown";
@@ -513,6 +525,20 @@ export function OrganizerGiveawayWorkspace({
         status: "loading" as const,
       }
     : null;
+  const changeSelectedCampaignDraft = React.useCallback<
+    React.Dispatch<React.SetStateAction<GiveawayEditorDraft>>
+  >(
+    (update) => {
+      if (!selectedCampaignId) {
+        setEditorDraft(update);
+        return;
+      }
+      setDraftsByCampaignId((current) =>
+        applyOrganizerGiveawayDraftUpdate(current, selectedCampaignId, update),
+      );
+    },
+    [selectedCampaignId],
+  );
 
   const refreshCampaigns = React.useCallback(async () => {
     const result = await listOrganizerGiveawaysAction(eventId);
@@ -1404,7 +1430,7 @@ export function OrganizerGiveawayWorkspace({
 
           <CampaignEditor
             draft={selectedDraft ?? editorDraft}
-            onChange={setEditorDraft}
+            onChange={changeSelectedCampaignDraft}
             onSave={createOrSaveCampaign}
             isPending={isPending}
             isExisting={Boolean(selectedCampaign)}

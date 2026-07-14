@@ -12,6 +12,7 @@ import type {
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
 } from "../../src/features/giveaways/types";
 import {
+  applyOrganizerGiveawayDraftUpdate,
   acknowledgeOrganizerGiveawayPresentationPublication,
   buildGiveawayLifecycleRoute,
   canRunOrganizerInitialRandomDraw,
@@ -145,7 +146,9 @@ describe("organizer giveaway lifecycle route", () => {
       ],
     };
 
-    expect(toOrganizerGiveawayEditorDraft(workspace)).toMatchObject({
+    const draft = toOrganizerGiveawayEditorDraft(workspace);
+
+    expect(draft).toMatchObject({
       title: "Rider helmet draw",
       entryMode: "claim_code",
       entryOpensAt: "2026-08-17T17:30",
@@ -155,6 +158,16 @@ describe("organizer giveaway lifecycle route", () => {
       eligibilityGroups: [expect.objectContaining({ id: "group-1", weight: 2 })],
       prizePools: [expect.objectContaining({ id: "pool-1", title: "Helmet pool" })],
     });
+
+    const draftsByCampaignId = { [workspace.id]: draft };
+    const updatedDrafts = applyOrganizerGiveawayDraftUpdate(
+      draftsByCampaignId,
+      workspace.id,
+      (current) => ({ ...current, entryOpensAt: "2026-08-19T09:00" }),
+    );
+
+    expect(updatedDrafts[workspace.id]?.entryOpensAt).toBe("2026-08-19T09:00");
+    expect(draftsByCampaignId[workspace.id]?.entryOpensAt).toBe("2026-08-17T17:30");
   });
 
   test("places Giveaways beside scanner and report links for the selected event", async () => {
