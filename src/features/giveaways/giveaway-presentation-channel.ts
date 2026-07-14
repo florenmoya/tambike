@@ -153,9 +153,11 @@ function parseSafePresentation(value: unknown): OrganizerGiveawayPresentation | 
     !Number.isInteger(value.candidateCount) ||
     (value.candidateCount as number) < 0 ||
     !Array.isArray(value.labelBank) ||
+    !hasExactArrayIndexKeys(value.labelBank) ||
     value.labelBank.length > 24 ||
     !value.labelBank.every((label) => isSafeText(label, 40)) ||
-    !Array.isArray(value.slides)
+    !Array.isArray(value.slides) ||
+    !hasExactArrayIndexKeys(value.slides)
   ) {
     return null;
   }
@@ -219,4 +221,9 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function hasExactArrayIndexKeys(value: readonly unknown[]) {
+  const keys = Object.keys(value);
+  return keys.length === value.length && keys.every((key, index) => key === String(index));
 }

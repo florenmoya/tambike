@@ -155,6 +155,35 @@ describe("giveaway presentation BroadcastChannel protocol", () => {
     }
   });
 
+  test("rejects structured-clone extras on safe-label and slide array containers", () => {
+    const expected = {
+      channelId,
+      eventId: presentation.eventId,
+      giveawayId: presentation.giveawayId,
+      drawId: presentation.drawId,
+      resultDigest: presentation.resultDigest,
+    };
+    const labelBankWithRiderId = Object.assign([...presentation.labelBank], {
+      riderId: "sensitive-rider",
+    });
+    const slidesWithEmail = Object.assign([...presentation.slides], {
+      email: "sensitive@example.test",
+    });
+    const clonedLabelMessage = structuredClone({
+      ...message,
+      presentation: { ...presentation, labelBank: labelBankWithRiderId },
+    });
+    const clonedSlidesMessage = structuredClone({
+      ...message,
+      presentation: { ...presentation, slides: slidesWithEmail },
+    });
+
+    expect(Object.hasOwn(clonedLabelMessage.presentation.labelBank, "riderId")).toBe(true);
+    expect(Object.hasOwn(clonedSlidesMessage.presentation.slides, "email")).toBe(true);
+    expect(parseGiveawayPresentationControllerStateMessage(clonedLabelMessage, expected)).toBeNull();
+    expect(parseGiveawayPresentationControllerStateMessage(clonedSlidesMessage, expected)).toBeNull();
+  });
+
   test("uses a 2-second heartbeat and marks the stage disconnected after 6 seconds", () => {
     expect(GIVEAWAY_PRESENTATION_HEARTBEAT_INTERVAL_MS).toBe(2_000);
     expect(GIVEAWAY_PRESENTATION_STAGE_DISCONNECT_AFTER_MS).toBe(6_000);
