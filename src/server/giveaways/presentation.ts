@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { sanitizeGiveawayPresentationText } from "@/features/giveaways/giveaway-presentation-text";
 import type { OrganizerGiveawayPresentation } from "@/features/giveaways/types";
 import { deriveGiveawayPresentationLabels } from "./presentation-labels";
 
@@ -151,8 +152,8 @@ export function buildOrganizerGiveawayPresentation(
           awardId: award.id,
           poolPosition: pool.position,
           itemPosition: item.position,
-          prizePoolTitle: pool.title,
-          prizeItemTitle: item.title,
+          prizePoolTitle: sanitizeGiveawayPresentationText(pool.title, "Prize pool"),
+          prizeItemTitle: sanitizeGiveawayPresentationText(item.title, "Prize"),
           winnerLabel,
         },
       ];
@@ -168,7 +169,7 @@ export function buildOrganizerGiveawayPresentation(
     giveawayId: source.giveawayId,
     eventId: source.eventId,
     drawId: source.draw.id,
-    giveawayTitle: source.giveawayTitle,
+    giveawayTitle: sanitizeGiveawayPresentationText(source.giveawayTitle, "Giveaway"),
     drawStatus: source.draw.status as OrganizerGiveawayPresentation["drawStatus"],
     resultDigest,
     candidateCount: source.snapshot.candidateCount,

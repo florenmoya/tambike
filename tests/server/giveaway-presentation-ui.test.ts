@@ -11,6 +11,7 @@ import {
   GiveawayPresentationControllerView,
   canPublishGiveawayPresentation,
   getGiveawayPresentationControllerViewModel,
+  isGiveawayPresentationControllerConnectionActionable,
   isGiveawayPresentationOperationCurrent,
 } from "../../src/features/giveaways/giveaway-presentation-controller";
 import { GiveawayPresentationStageView } from "../../src/features/giveaways/giveaway-presentation-stage";
@@ -107,6 +108,17 @@ function controllerMessage(
 }
 
 describe("private giveaway presentation controller", () => {
+  test("does not treat a stage heartbeat as actionable when its payload cannot be sent", () => {
+    expect(isGiveawayPresentationControllerConnectionActionable(true, presentation)).toBe(true);
+    expect(
+      isGiveawayPresentationControllerConnectionActionable(true, {
+        ...presentation,
+        giveawayTitle: "X".repeat(501),
+      }),
+    ).toBe(false);
+    expect(isGiveawayPresentationControllerConnectionActionable(false, presentation)).toBe(false);
+  });
+
   test("uses a fail-closed publication gate", () => {
     const base = {
       presentation,

@@ -25,6 +25,7 @@ import {
   GIVEAWAY_PRESENTATION_CHANNEL_VERSION,
   GIVEAWAY_PRESENTATION_HEARTBEAT_INTERVAL_MS,
   getGiveawayPresentationChannelName,
+  isGiveawayPresentationSafeForChannel,
   isGiveawayPresentationStageDisconnected,
   parseGiveawayPresentationControllerStateMessage,
   type GiveawayPresentationControllerStateMessage,
@@ -89,6 +90,13 @@ export function canPublishGiveawayPresentation(input: PublicationGateInput) {
 
 export function canResetGiveawayPresentation(state: GiveawayPresentationRuntimeState) {
   return state.phase !== "spinning";
+}
+
+export function isGiveawayPresentationControllerConnectionActionable(
+  connected: boolean,
+  presentation: OrganizerGiveawayPresentation,
+) {
+  return connected && isGiveawayPresentationSafeForChannel(presentation);
 }
 
 export type GiveawayPresentationOperationIdentity = {
@@ -450,7 +458,9 @@ export function GiveawayPresentationController({
     presentation.drawId,
     presentation.resultDigest,
   );
-  const connectedForIdentity = channelId !== null && connected;
+  const connectedForIdentity =
+    channelId !== null &&
+    isGiveawayPresentationControllerConnectionActionable(connected, presentation);
   const popupBlocked = popupBlock?.identity === identity && popupBlock.blocked;
   const fullscreenRequestId =
     fullscreenRequest?.identity === identity ? fullscreenRequest.value : null;

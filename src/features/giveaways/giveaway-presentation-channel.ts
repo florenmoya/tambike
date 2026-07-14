@@ -1,4 +1,5 @@
 import type { OrganizerGiveawayPresentation } from "./types";
+import { isGiveawayPresentationSafeText } from "./giveaway-presentation-text";
 import {
   isGiveawayPresentationRuntimeStateValid,
   type GiveawayPresentationRuntimeState,
@@ -129,6 +130,12 @@ export function parseGiveawayPresentationControllerStateMessage(
   return value as GiveawayPresentationControllerStateMessage;
 }
 
+export function isGiveawayPresentationSafeForChannel(
+  value: unknown,
+): value is OrganizerGiveawayPresentation {
+  return parseSafePresentation(value) !== null;
+}
+
 function parseSafePresentation(value: unknown): OrganizerGiveawayPresentation | null {
   if (
     !isRecord(value) ||
@@ -146,7 +153,7 @@ function parseSafePresentation(value: unknown): OrganizerGiveawayPresentation | 
     !isSafeOpaqueId(value.giveawayId) ||
     !isSafeOpaqueId(value.eventId) ||
     !isSafeOpaqueId(value.drawId) ||
-    !isSafeText(value.giveawayTitle, 500) ||
+    !isGiveawayPresentationSafeText(value.giveawayTitle, 500) ||
     !["completed", "published"].includes(value.drawStatus as string) ||
     typeof value.resultDigest !== "string" ||
     !/^[0-9a-f]{64}$/i.test(value.resultDigest) ||
@@ -155,7 +162,7 @@ function parseSafePresentation(value: unknown): OrganizerGiveawayPresentation | 
     !Array.isArray(value.labelBank) ||
     !hasExactArrayIndexKeys(value.labelBank) ||
     value.labelBank.length > 24 ||
-    !value.labelBank.every((label) => isSafeText(label, 40)) ||
+    !value.labelBank.every((label) => isGiveawayPresentationSafeText(label, 40)) ||
     !Array.isArray(value.slides) ||
     !hasExactArrayIndexKeys(value.slides)
   ) {
@@ -168,9 +175,9 @@ function parseSafePresentation(value: unknown): OrganizerGiveawayPresentation | 
       !isRecord(slide) ||
       !hasExactKeys(slide, ["position", "prizePoolTitle", "prizeItemTitle", "winnerLabel"]) ||
       slide.position !== index + 1 ||
-      !isSafeText(slide.prizePoolTitle, 500) ||
-      !isSafeText(slide.prizeItemTitle, 500) ||
-      !isSafeText(slide.winnerLabel, 40)
+      !isGiveawayPresentationSafeText(slide.prizePoolTitle, 500) ||
+      !isGiveawayPresentationSafeText(slide.prizeItemTitle, 500) ||
+      !isGiveawayPresentationSafeText(slide.winnerLabel, 40)
     ) {
       return null;
     }
@@ -201,15 +208,6 @@ function isSafeOpaqueId(value: unknown): value is string {
     value.length > 0 &&
     value.length <= 200 &&
     !/[\p{Cc}\p{Cf}\s]/u.test(value)
-  );
-}
-
-function isSafeText(value: unknown, maximumCharacters: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    Array.from(value).length <= maximumCharacters &&
-    !/[\p{Cc}\p{Cf}]/u.test(value)
   );
 }
 

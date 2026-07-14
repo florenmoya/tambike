@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, test } from "vitest";
 
+import {
+  GIVEAWAY_PRESENTATION_CHANNEL_VERSION,
+  parseGiveawayPresentationControllerStateMessage,
+} from "../../src/features/giveaways/giveaway-presentation-channel";
 import { buildOrganizerGiveawayPresentation } from "../../src/server/giveaways/presentation";
 
 function source(overrides: Record<string, unknown> = {}) {
@@ -30,6 +34,100 @@ function source(overrides: Record<string, unknown> = {}) {
 }
 
 describe("organizer giveaway presentation model", () => {
+  test("makes historical persisted titles safe and sendable without leaking truncated data", () => {
+    const forbiddenTail = "riderId=private-rider-after-the-channel-cap";
+    const entry = {
+      id: "snapshot-entry-a",
+      giveawayId: "giveaway-a",
+      entryId: "entry-a",
+      riderId: "rider-a",
+      opaquePublicReference: "opaque-a",
+      presentationLabel: "Rider SAFE",
+    };
+    const presentation = buildOrganizerGiveawayPresentation(
+      source({
+        giveawayTitle: `Night\u0000 ride\u202e ${"G".repeat(600)}${forbiddenTail}`,
+        draw: {
+          id: "draw-a",
+          snapshotId: "snapshot-a",
+          type: "initial",
+          status: "completed",
+          algorithmVersion: "hmac-sha256-v1",
+          resultDigest: "a".repeat(64),
+        },
+        snapshot: {
+          id: "snapshot-a",
+          giveawayId: "giveaway-a",
+          candidateCount: 1,
+          entries: [entry],
+        },
+        prizePools: [
+          {
+            id: "pool-a",
+            position: 0,
+            title: `Helmet\u0007 pool ${"P".repeat(600)}${forbiddenTail}`,
+            awardMode: "random_draw",
+            items: [
+              {
+                id: "item-a",
+                position: 0,
+                title: `${"\u0000\u200b".repeat(300)}`,
+              },
+            ],
+          },
+        ],
+        awards: [
+          {
+            id: "award-a",
+            giveawayId: "giveaway-a",
+            drawId: "draw-a",
+            entryId: "entry-a",
+            winnerUserId: "rider-a",
+            snapshotEntryId: "snapshot-entry-a",
+            prizePoolId: "pool-a",
+            prizeItemId: "item-a",
+          },
+        ],
+      }),
+    );
+    const slide = presentation.slides[0]!;
+    for (const title of [
+      presentation.giveawayTitle,
+      slide.prizePoolTitle,
+      slide.prizeItemTitle,
+    ]) {
+      expect(title.trim()).not.toBe("");
+      expect(Array.from(title).length).toBeLessThanOrEqual(500);
+      expect(title).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+      expect(title).not.toContain(forbiddenTail);
+    }
+
+    const channelId = "123e4567-e89b-42d3-a456-426614174000";
+    const message = {
+      version: GIVEAWAY_PRESENTATION_CHANNEL_VERSION,
+      type: "controller-state" as const,
+      channelId,
+      eventId: presentation.eventId,
+      giveawayId: presentation.giveawayId,
+      drawId: presentation.drawId,
+      resultDigest: presentation.resultDigest,
+      state: { phase: "ready" as const, slideIndex: 0, mode: "normal" as const, soundEnabled: false },
+      presentation,
+    };
+    expect(
+      parseGiveawayPresentationControllerStateMessage(message, {
+        channelId,
+        eventId: presentation.eventId,
+        giveawayId: presentation.giveawayId,
+        drawId: presentation.drawId,
+        resultDigest: presentation.resultDigest,
+      }),
+    ).toEqual(message);
+    expect(slide.prizeItemTitle).toBe("Prize");
+    expect(JSON.stringify(presentation)).not.toContain(forbiddenTail);
+    expect(JSON.stringify(presentation)).not.toContain("rider-a");
+  });
+
   test("samples a deterministic label bank by digest and caps it at 24 labels", () => {
     const entries = Array.from({ length: 30 }, (_, index) => ({
       id: `snapshot-entry-${index.toString().padStart(2, "0")}`,
