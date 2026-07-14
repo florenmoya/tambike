@@ -2588,6 +2588,12 @@ describe("in-memory event giveaway lifecycle", () => {
 
   test("blocks mixed-pool publication until every still-awardable manual choice is recorded", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const operationsBackend = backend as unknown as {
+      getOrganizerGiveawayOperations(
+        sessionToken: string,
+        giveawayId: string,
+      ): Promise<OrganizerGiveawayOperations>;
+    };
     const context = await createApprovedOpenCustomGiveaway(backend, (eventId) =>
       giveawayInput(eventId, {
         winnerLimits: { perRider: 2, total: 4 },
@@ -2666,15 +2672,30 @@ describe("in-memory event giveaway lifecycle", () => {
         giveawayId: context.giveaway.id,
         idempotencyKey: "mixed-random-draw",
       });
-      await expect(
-        backend.selectManualGiveawayAward(context.organizer.sessionToken, {
+      const manualAfterRandom = await backend.selectManualGiveawayAward(
+        context.organizer.sessionToken,
+        {
           giveawayId: context.giveaway.id,
           prizePoolId: manualPool.id,
           snapshotEntryId: secondCandidate.snapshotEntryId,
           reason: "Manual award after random draw",
           idempotencyKey: "mixed-manual-after-random",
-        }),
-      ).resolves.toMatchObject({ drawId: expect.any(String) });
+        },
+      );
+      const operationsAfterManual = await operationsBackend.getOrganizerGiveawayOperations(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+      );
+      expect(operationsAfterManual).toMatchObject({
+        presentationDrawId: random.drawId,
+        publishableDrawId: manualAfterRandom.drawId,
+      });
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toEqual(operationsAfterManual);
       await expect(
         backend.publishGiveawayDraw(
           context.organizer.sessionToken,
@@ -2696,6 +2717,15 @@ describe("in-memory event giveaway lifecycle", () => {
         context.giveaway.id,
         random.drawId,
       );
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: random.drawId,
+        publishableDrawId: null,
+      });
       await expect(
         backend.selectManualGiveawayAward(context.organizer.sessionToken, {
           giveawayId: context.giveaway.id,
@@ -3605,6 +3635,99 @@ describe("giveaway first-come fairness and entrant-facing configuration freezes"
 });
 
 describe("organizer giveaway operations read model", () => {
+  test("keeps the initial random presentation draw stable through reload and publication", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const operationsBackend = backend as unknown as {
+      getOrganizerGiveawayOperations(
+        sessionToken: string,
+        giveawayId: string,
+      ): Promise<OrganizerGiveawayOperations>;
+    };
+    const context = await createApprovedOpenGiveaway(backend);
+    await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+
+    await withDrawEncryptionKey(async () => {
+      await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: null,
+        publishableDrawId: null,
+      });
+
+      const randomDraw = await backend.runGiveawayDraw(context.organizer.sessionToken, {
+        giveawayId: context.giveaway.id,
+        idempotencyKey: "operations-presentation-random-only",
+      });
+      const completed = await operationsBackend.getOrganizerGiveawayOperations(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+      );
+      expect(completed).toMatchObject({
+        presentationDrawId: randomDraw.drawId,
+        publishableDrawId: randomDraw.drawId,
+      });
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toEqual(completed);
+
+      await backend.publishGiveawayDraw(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+        randomDraw.drawId,
+      );
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: randomDraw.drawId,
+        publishableDrawId: null,
+      });
+
+      const store = backend as unknown as {
+        giveaways: {
+          campaignsById: Map<
+            string,
+            {
+              draws: Array<{
+                id: string;
+                sequence: number;
+                type: string;
+                status: string;
+                algorithmVersion: string;
+              }>;
+            }
+          >;
+        };
+      };
+      const campaign = store.giveaways.campaignsById.get(context.giveaway.id);
+      const initialDraw = campaign?.draws.find((draw) => draw.id === randomDraw.drawId);
+      if (!campaign || !initialDraw) throw new Error("TEST_PRESENTATION_DRAW_MISSING");
+      campaign.draws.push({
+        ...initialDraw,
+        id: "corrupt-second-initial-random-draw",
+        sequence: initialDraw.sequence + 1,
+      });
+      await expect(
+        operationsBackend.getOrganizerGiveawayOperations(
+          context.organizer.sessionToken,
+          context.giveaway.id,
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+    });
+  });
+
   test("keeps manual-first draw controls reload-safe and hides cancellation after an award exists", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
     const operationsBackend = backend as unknown as {
@@ -3664,6 +3787,7 @@ describe("organizer giveaway operations read model", () => {
         canCancel: false,
         canRunInitialRandomDraw: true,
         publishableDrawId: null,
+        presentationDrawId: null,
         recoverableAwards: [],
       });
 
@@ -3694,6 +3818,7 @@ describe("organizer giveaway operations read model", () => {
         canCancel: false,
         canRunInitialRandomDraw: true,
         publishableDrawId: manualSelection.drawId,
+        presentationDrawId: null,
       });
       expect(
         await operationsBackend.getOrganizerGiveawayOperations(
@@ -3715,6 +3840,7 @@ describe("organizer giveaway operations read model", () => {
       ).resolves.toMatchObject({
         canRunInitialRandomDraw: false,
         publishableDrawId: randomDraw.drawId,
+        presentationDrawId: randomDraw.drawId,
       });
     });
 

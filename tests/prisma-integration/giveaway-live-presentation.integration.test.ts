@@ -24,7 +24,7 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
     mechanics: "Each eligible synthetic rider receives one entry.",
     terms: "Synthetic integration-test terms.",
     timeZone: "Asia/Manila",
-    winnerLimits: { perRider: 1, total: 1 },
+    winnerLimits: { perRider: 2, total: 2 },
     organizerAttestation: true,
     publicVisibility: "hidden",
     eligibilityGroups: [
@@ -44,12 +44,20 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Synthetic prize item" }],
       },
+      {
+        id: "manual-prize",
+        title: "Synthetic manual recognition",
+        awardMode: "manual_selection",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Synthetic manual prize item" }],
+      },
     ],
   };
 }
 
 describe("Prisma live giveaway presentation", () => {
-  test("persists rider-owned consent and freezes its privacy-safe label at lock", async () => {
+  test("persists frozen labels and a stable presentation draw through later draws and publication", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createPrismaIntegrationClientPair(
       process.env,
@@ -325,6 +333,15 @@ describe("Prisma live giveaway presentation", () => {
         organizerSession,
         giveaway.id,
       );
+      await expect(
+        backendClients.secondary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: null,
+        publishableDrawId: null,
+      });
       const frozenEntry = await rawClients.primary.giveawaySnapshotEntry.findFirstOrThrow({
         where: { entryId: entry.id, snapshot: { is: { giveawayId: giveaway.id } } },
         select: { presentationLabel: true, presentationLabelKind: true },
@@ -360,6 +377,51 @@ describe("Prisma live giveaway presentation", () => {
         giveawayId: giveaway.id,
         idempotencyKey: "persisted-organizer-presentation",
       });
+      await expect(
+        backendClients.secondary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: draw.drawId,
+        publishableDrawId: draw.drawId,
+      });
+      const manualPool = await rawClients.primary.giveawayPrizePool.findFirstOrThrow({
+        where: { giveawayId: giveaway.id, awardMode: "manual_selection" },
+        select: { id: true },
+      });
+      const [manualCandidate] =
+        await backendClients.primary.backend.listGiveawayManualSelectionCandidates(
+          organizerSession,
+          giveaway.id,
+          manualPool.id,
+        );
+      if (!manualCandidate) throw new Error("PRESENTATION_MANUAL_CANDIDATE_MISSING");
+      const laterManualDraw = await backendClients.primary.backend.selectManualGiveawayAward(
+        organizerSession,
+        {
+          giveawayId: giveaway.id,
+          prizePoolId: manualPool.id,
+          snapshotEntryId: manualCandidate.snapshotEntryId,
+          reason: "Synthetic manual award after the presentation draw",
+          idempotencyKey: "persisted-manual-after-presentation",
+        },
+      );
+      const operationsAfterManual =
+        await backendClients.secondary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        );
+      expect(operationsAfterManual).toMatchObject({
+        presentationDrawId: draw.drawId,
+        publishableDrawId: laterManualDraw.drawId,
+      });
+      await expect(
+        backendClients.primary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        ),
+      ).resolves.toEqual(operationsAfterManual);
       const primaryPresentation =
         await backendClients.primary.backend.getOrganizerGiveawayPresentation(
           organizerSession,
@@ -422,12 +484,41 @@ describe("Prisma live giveaway presentation", () => {
         draw.drawId,
       );
       await expect(
+        backendClients.secondary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        ),
+      ).resolves.toMatchObject({
+        presentationDrawId: draw.drawId,
+        publishableDrawId: null,
+      });
+      await expect(
         backendClients.secondary.backend.getOrganizerGiveawayPresentation(
           organizerSession,
           giveaway.id,
           draw.drawId,
         ),
       ).resolves.toEqual({ ...primaryPresentation, drawStatus: "published" });
+
+      const persistedInitialDraw = await rawClients.primary.giveawayDraw.findUniqueOrThrow({
+        where: { id: draw.drawId },
+      });
+      await rawClients.primary.giveawayDraw.create({
+        data: {
+          ...persistedInitialDraw,
+          id: `corrupt-second-presentation-draw-${suffix}`,
+          sequence: persistedInitialDraw.sequence + 100,
+          idempotencyKey: `corrupt-second-presentation-draw-${suffix}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      await expect(
+        backendClients.secondary.backend.getOrganizerGiveawayOperations(
+          organizerSession,
+          giveaway.id,
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;

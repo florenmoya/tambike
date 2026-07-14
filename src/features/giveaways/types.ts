@@ -400,6 +400,8 @@ export interface OrganizerGiveawayOperations {
   giveawayId: string;
   canCancel: boolean;
   canRunInitialRandomDraw: boolean;
+  /** The unique initial random draw used for live presentation and replay. */
+  presentationDrawId: string | null;
   /** A server-selected completed draw that may be published after reload. */
   publishableDrawId: string | null;
   /** Only current, authorized, actionable awards are included. */

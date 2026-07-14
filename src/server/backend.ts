@@ -1548,6 +1548,15 @@ export class TambikeBackend {
     const publishableDraw = giveaway.draws
       .filter((draw) => draw.status === "completed")
       .sort((left, right) => right.sequence - left.sequence || right.id.localeCompare(left.id))[0];
+    const presentationDraws = giveaway.draws.filter(
+      (draw) =>
+        draw.type === "initial" &&
+        draw.algorithmVersion === "hmac-sha256-v1" &&
+        ["completed", "published"].includes(draw.status),
+    );
+    if (presentationDraws.length > 1) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
     return {
       giveawayId: giveaway.id,
       canCancel: giveaway.awards.length === 0 && ["draft", "scheduled", "open", "paused"].includes(giveaway.state),
@@ -1557,6 +1566,7 @@ export class TambikeBackend {
         !giveaway.draws.some(
           (draw) => draw.type === "initial" && draw.algorithmVersion === "hmac-sha256-v1",
         ),
+      presentationDrawId: presentationDraws[0]?.id ?? null,
       publishableDrawId: publishableDraw?.id ?? null,
       recoverableAwards: recoverableAwards.sort(
         (left, right) => left.label.localeCompare(right.label) || left.awardId.localeCompare(right.awardId),

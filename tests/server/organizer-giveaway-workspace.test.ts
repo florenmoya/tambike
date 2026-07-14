@@ -327,6 +327,7 @@ describe("organizer giveaway lifecycle route", () => {
           giveawayId: "giveaway-manual",
           canCancel: false,
           canRunInitialRandomDraw: false,
+          presentationDrawId: null,
           publishableDrawId: null,
           recoverableAwards: [],
         },
@@ -354,6 +355,7 @@ describe("organizer giveaway lifecycle route", () => {
       giveawayId: "giveaway-manual",
       canCancel: false,
       canRunInitialRandomDraw: true,
+      presentationDrawId: "draw-opaque",
       publishableDrawId: "draw-opaque",
       recoverableAwards: [],
     };
