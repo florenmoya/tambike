@@ -1634,22 +1634,26 @@ export class TambikeBackend {
       );
       return { ...award, giveawayId: awardOwner.id };
     });
-    const canonicalAwardsForDraw = [...this.giveaways.awardsById.values()].filter(
-      (award) => award.drawId === draw.id,
-    );
-    for (const award of canonicalAwardsForDraw) {
+    const storedAwardsForDraw = [
+      ...new Set([
+        ...this.giveaways.awardsById.values(),
+        ...campaigns.flatMap((candidate) => candidate.awards),
+      ]),
+    ].filter((award) => award.drawId === draw.id);
+    for (const award of storedAwardsForDraw) {
       requireCurrentOwner(
         campaigns.filter((candidate) => candidate.awards.includes(award)),
         "GIVEAWAY_AWARD_INVALID",
       );
       if (
         !drawAwardIds.has(award.id) ||
+        this.giveaways.awardsById.get(award.id) !== award ||
         giveaway.awards.find((candidate) => candidate.id === award.id) !== award
       ) {
         throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
       }
     }
-    if (canonicalAwardsForDraw.length !== drawAwardIds.size) {
+    if (storedAwardsForDraw.length !== drawAwardIds.size) {
       throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     }
 

@@ -587,6 +587,30 @@ describe("organizer giveaway presentation read", () => {
     }
   });
 
+  test("rejects an aggregate-only draw-linked award absent from the canonical map and draw awardIds", async () => {
+    const scenario = await createScenario();
+    const store = internalStore(scenario.backend);
+    const giveaway = store.campaignsById.get(scenario.giveawayId)!;
+    const sourceAward = giveaway.awards.find((award) => award.drawId === scenario.drawId)!;
+    const extraAward: InternalAward = {
+      ...sourceAward,
+      id: "aggregate-only-unreferenced-draw-award",
+      opaqueClaimReference: "aggregate-only-unreferenced-claim",
+    };
+    giveaway.awards.push(extraAward);
+    try {
+      await expect(
+        scenario.backend.getOrganizerGiveawayPresentation(
+          scenario.organizer.sessionToken,
+          scenario.giveawayId,
+          scenario.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    } finally {
+      giveaway.awards.pop();
+    }
+  });
+
   test("rejects a canonical foreign-campaign award carrying the requested draw id", async () => {
     const scenario = await createScenario();
     const other = await createCompletedCampaign({
