@@ -56,6 +56,7 @@ describe("giveaway action and API contracts", () => {
     );
 
     expect(source).toContain("presentationLoadsByKey");
+    expect(source).toContain("presentationRequestsByCampaignId");
     expect(source).toContain("loadGiveawayPresentation");
     expect(source).toContain("selectedPresentationLoadState");
     expect(source).toContain("<CampaignGiveawayPresentationPanel");
@@ -67,6 +68,7 @@ describe("giveaway action and API contracts", () => {
     expect(source).not.toContain("The initial draw is ready for review");
     expect(source).not.toContain("GIVEAWAY_DRAW_RESPONSE_INVALID");
     expect(source).toContain("refreshCampaignOperations(selectedCampaign.id).catch");
+    expect(source).toContain("acknowledgeOrganizerGiveawayPresentationPublication(");
   });
 
   test("admin export awaits Next params and protects raw CSV response data", async () => {

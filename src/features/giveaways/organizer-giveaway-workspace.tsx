@@ -237,7 +237,9 @@ export function resolveGiveawayManualSelectionGate(
   manualPools: ReadonlyArray<Pick<GiveawayPrizePoolInput, "id" | "awardMode">>,
   inventoryStatusByPool: Readonly<Record<string, EntryOperationsInventoryStatus>>,
   candidatesByPool: Readonly<Record<string, readonly GiveawayManualSelectionCandidate[]>>,
+  configurationLoaded = true,
 ): GiveawayManualSelectionGateResult {
+  if (!configurationLoaded) return { gate: "checking", reason: "inventory_checking" };
   if (manualPools.length === 0) return { gate: "clear", reason: "none" };
   if (
     manualPools.some((pool) => {
@@ -286,13 +288,66 @@ export function resolveOrganizerGiveawayPresentationRequest(
   eventId: string,
   giveawayId: string,
   operations: OrganizerGiveawayOperations | undefined,
+  retainedRequest: OrganizerGiveawayPresentationRequest | null = null,
 ): OrganizerGiveawayPresentationRequest | null {
-  if (!operations || operations.giveawayId !== giveawayId) return null;
-  return createOrganizerGiveawayPresentationRequest(
-    eventId,
-    giveawayId,
-    operations.presentationDrawId,
+  const serverRequest =
+    operations?.giveawayId === giveawayId
+      ? createOrganizerGiveawayPresentationRequest(
+          eventId,
+          giveawayId,
+          operations.presentationDrawId,
+        )
+      : null;
+  if (serverRequest) return serverRequest;
+  return retainedRequest?.eventId === eventId && retainedRequest.giveawayId === giveawayId
+    ? retainedRequest
+    : null;
+}
+
+export function canRunOrganizerInitialRandomDraw(
+  operations: OrganizerGiveawayOperations | undefined,
+  presentationRequest: OrganizerGiveawayPresentationRequest | null,
+) {
+  return Boolean(operations?.canRunInitialRandomDraw && !presentationRequest);
+}
+
+function hasMatchingPresentationRequest(
+  state: CampaignGiveawayPresentationLoadState | undefined,
+  request: OrganizerGiveawayPresentationRequest,
+) {
+  return (
+    state?.request.eventId === request.eventId &&
+    state.request.giveawayId === request.giveawayId &&
+    state.request.drawId === request.drawId
   );
+}
+
+export function resolveGiveawayPresentationLoadStartState(
+  current: CampaignGiveawayPresentationLoadState | undefined,
+  request: OrganizerGiveawayPresentationRequest,
+  preserveReady: boolean,
+): CampaignGiveawayPresentationLoadState {
+  return preserveReady && current?.status === "ready" && hasMatchingPresentationRequest(current, request)
+    ? current
+    : { request, status: "loading" };
+}
+
+export function resolveGiveawayPresentationLoadFailureState(
+  current: CampaignGiveawayPresentationLoadState | undefined,
+  request: OrganizerGiveawayPresentationRequest,
+  preserveReady: boolean,
+): CampaignGiveawayPresentationLoadState {
+  return preserveReady && current?.status === "ready" && hasMatchingPresentationRequest(current, request)
+    ? current
+    : { request, status: "error" };
+}
+
+export function acknowledgeOrganizerGiveawayPresentationPublication(
+  resolve: (succeeded: boolean) => void,
+  revalidate: () => Promise<unknown>,
+) {
+  resolve(true);
+  void Promise.resolve().then(revalidate).catch(() => undefined);
 }
 
 export async function readOrganizerGiveawayPresentation(
@@ -390,6 +445,9 @@ export function OrganizerGiveawayWorkspace({
   const [presentationLoadsByKey, setPresentationLoadsByKey] = React.useState<
     Record<string, CampaignGiveawayPresentationLoadState>
   >({});
+  const [presentationRequestsByCampaignId, setPresentationRequestsByCampaignId] = React.useState<
+    Record<string, OrganizerGiveawayPresentationRequest>
+  >({});
   const [recoveryReason, setRecoveryReason] = React.useState("");
   const [recoveryClaimDeadlineAt, setRecoveryClaimDeadlineAt] = React.useState("");
   const [cancellationReason, setCancellationReason] = React.useState("");
@@ -427,11 +485,28 @@ export function OrganizerGiveawayWorkspace({
     selectedManualSelectionPools,
     manualSelectionInventoryStatusByPool,
     manualSelectionCandidatesByPool,
+    Boolean(selectedDraft),
   );
-  const publicationMode = getGiveawayPublicationMode(selectedDraft?.prizePools, selectedOperations);
   const selectedPresentationRequest = selectedCampaign
-    ? resolveOrganizerGiveawayPresentationRequest(eventId, selectedCampaign.id, selectedOperations)
+    ? resolveOrganizerGiveawayPresentationRequest(
+        eventId,
+        selectedCampaign.id,
+        selectedOperations,
+        presentationRequestsByCampaignId[selectedCampaign.id] ?? null,
+      )
     : null;
+  const publicationMode = selectedPresentationRequest
+    ? "random_presentation"
+    : getGiveawayPublicationMode(selectedDraft?.prizePools, selectedOperations);
+  const selectedHeaderOperations = selectedOperations
+    ? {
+        ...selectedOperations,
+        canRunInitialRandomDraw: canRunOrganizerInitialRandomDraw(
+          selectedOperations,
+          selectedPresentationRequest,
+        ),
+      }
+    : undefined;
   const selectedPresentationLoadState = selectedPresentationRequest
     ? presentationLoadsByKey[presentationRequestKey(selectedPresentationRequest)] ?? {
         request: selectedPresentationRequest,
@@ -534,13 +609,20 @@ export function OrganizerGiveawayWorkspace({
   }, []);
 
   const loadGiveawayPresentation = React.useCallback(
-    async (request: OrganizerGiveawayPresentationRequest) => {
+    async (
+      request: OrganizerGiveawayPresentationRequest,
+      options: { preserveReady?: boolean } = {},
+    ) => {
       const key = presentationRequestKey(request);
       const requestVersion = (presentationRequestVersionByKeyRef.current.get(key) ?? 0) + 1;
       presentationRequestVersionByKeyRef.current.set(key, requestVersion);
       setPresentationLoadsByKey((current) => ({
         ...current,
-        [key]: { request, status: "loading" },
+        [key]: resolveGiveawayPresentationLoadStartState(
+          current[key],
+          request,
+          Boolean(options.preserveReady),
+        ),
       }));
       try {
         const presentation = await readOrganizerGiveawayPresentation(request);
@@ -556,7 +638,11 @@ export function OrganizerGiveawayWorkspace({
         if (presentationRequestVersionByKeyRef.current.get(key) === requestVersion) {
           setPresentationLoadsByKey((current) => ({
             ...current,
-            [key]: { request, status: "error" },
+            [key]: resolveGiveawayPresentationLoadFailureState(
+              current[key],
+              request,
+              Boolean(options.preserveReady),
+            ),
           }));
         }
         return null;
@@ -566,7 +652,7 @@ export function OrganizerGiveawayWorkspace({
   );
 
   const refreshCampaignOperations = React.useCallback(
-    async (giveawayId: string) => {
+    async (giveawayId: string, options: { preservePresentation?: boolean } = {}) => {
       const value = await loadCampaignOperations(giveawayId);
       setOperationsByCampaignId((current) => ({ ...current, [giveawayId]: value }));
       const presentationRequest = resolveOrganizerGiveawayPresentationRequest(
@@ -575,7 +661,13 @@ export function OrganizerGiveawayWorkspace({
         value,
       );
       if (presentationRequest) {
-        await loadGiveawayPresentation(presentationRequest);
+        setPresentationRequestsByCampaignId((current) => ({
+          ...current,
+          [giveawayId]: presentationRequest,
+        }));
+        await loadGiveawayPresentation(presentationRequest, {
+          preserveReady: options.preservePresentation,
+        });
       }
       return value;
     },
@@ -618,6 +710,10 @@ export function OrganizerGiveawayWorkspace({
             value,
           );
           if (presentationRequest) {
+            setPresentationRequestsByCampaignId((current) => ({
+              ...current,
+              [selectedCampaignIdForOperations]: presentationRequest,
+            }));
             void loadGiveawayPresentation(presentationRequest);
           }
         }
@@ -915,7 +1011,12 @@ export function OrganizerGiveawayWorkspace({
   }, [editorDraft, eventId, refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
 
   const runInitialDraw = React.useCallback(() => {
-    if (!selectedCampaign || !selectedOperations?.canRunInitialRandomDraw) return;
+    if (
+      !selectedCampaign ||
+      !canRunOrganizerInitialRandomDraw(selectedOperations, selectedPresentationRequest)
+    ) {
+      return;
+    }
     const submission = resolveInitialDrawSubmission(
       initialDrawSubmissionRef.current,
       selectedCampaign.id,
@@ -935,6 +1036,12 @@ export function OrganizerGiveawayWorkspace({
           selectedCampaign.id,
           (result.data as { drawId?: unknown }).drawId,
         );
+        if (presentationRequest) {
+          setPresentationRequestsByCampaignId((current) => ({
+            ...current,
+            [selectedCampaign.id]: presentationRequest,
+          }));
+        }
         const presentation = presentationRequest
           ? await loadGiveawayPresentation(presentationRequest)
           : null;
@@ -964,6 +1071,7 @@ export function OrganizerGiveawayWorkspace({
     refreshCampaigns,
     selectedCampaign,
     selectedOperations,
+    selectedPresentationRequest,
     startTransition,
   ]);
 
@@ -1101,16 +1209,19 @@ export function OrganizerGiveawayWorkspace({
           try {
             const succeeded = await publishOrganizerGiveawayPresentation(presentation);
             if (!succeeded) throw new Error("GIVEAWAY_PRESENTATION_PUBLISH_UNAVAILABLE");
-            await Promise.all([
-              refreshCampaigns().catch(() => undefined),
-              refreshCampaignOperations(presentation.giveawayId).catch(() => undefined),
-              refreshCampaignReport(presentation.giveawayId).catch(() => undefined),
-            ]);
             setNotice({
               tone: "success",
               text: "Raffle published and winners notified. Claim status is now available to each winner.",
             });
-            resolve(true);
+            acknowledgeOrganizerGiveawayPresentationPublication(resolve, async () => {
+              await Promise.all([
+                refreshCampaigns().catch(() => undefined),
+                refreshCampaignOperations(presentation.giveawayId, {
+                  preservePresentation: true,
+                }).catch(() => undefined),
+                refreshCampaignReport(presentation.giveawayId).catch(() => undefined),
+              ]);
+            });
           } catch {
             setNotice({
               tone: "error",
@@ -1256,7 +1367,7 @@ export function OrganizerGiveawayWorkspace({
             <CampaignOperationalHeader
               campaign={selectedCampaign}
               isPending={isPending}
-              operations={selectedOperations}
+              operations={selectedHeaderOperations}
               publicationMode={publicationMode}
               manualSelectionGate={manualSelectionGateResult.gate}
               manualSelectionGateReason={manualSelectionGateResult.reason}

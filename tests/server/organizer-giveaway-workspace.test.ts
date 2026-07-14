@@ -12,7 +12,9 @@ import type {
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
 } from "../../src/features/giveaways/types";
 import {
+  acknowledgeOrganizerGiveawayPresentationPublication,
   buildGiveawayLifecycleRoute,
+  canRunOrganizerInitialRandomDraw,
   CampaignCancellationPanel,
   CampaignEntryOperations,
   CampaignGiveawayPresentationPanel,
@@ -23,6 +25,8 @@ import {
   OrganizerGiveawayWorkspace,
   publishOrganizerGiveawayPresentation,
   readOrganizerGiveawayPresentation,
+  resolveGiveawayPresentationLoadFailureState,
+  resolveGiveawayPresentationLoadStartState,
   resolveGiveawayManualSelectionGate,
   resolveOrganizerGiveawayPresentationRequest,
   RecoveryQueuePanel,
@@ -427,6 +431,10 @@ describe("organizer giveaway lifecycle route", () => {
       gate: "clear",
       reason: "none",
     });
+    expect(resolveGiveawayManualSelectionGate([], {}, {}, false)).toEqual({
+      gate: "checking",
+      reason: "inventory_checking",
+    });
     expect(
       resolveGiveawayManualSelectionGate(
         manualPools,
@@ -589,6 +597,82 @@ describe("organizer giveaway lifecycle route", () => {
       ...operations,
       presentationDrawId: null,
     })).toBeNull();
+  });
+
+  test("retains an action-result presentation request while operations recovery is stale", () => {
+    const retainedRequest = createOrganizerGiveawayPresentationRequest(
+      "event-1",
+      "giveaway-random",
+      "draw-from-action-result",
+    );
+    const staleOperations: OrganizerGiveawayOperations = {
+      giveawayId: "giveaway-random",
+      canCancel: false,
+      canRunInitialRandomDraw: true,
+      presentationDrawId: null,
+      publishableDrawId: null,
+      recoverableAwards: [],
+    };
+
+    expect(
+      resolveOrganizerGiveawayPresentationRequest(
+        "event-1",
+        "giveaway-random",
+        staleOperations,
+        retainedRequest,
+      ),
+    ).toEqual(retainedRequest);
+    expect(canRunOrganizerInitialRandomDraw(staleOperations, retainedRequest)).toBe(false);
+    expect(canRunOrganizerInitialRandomDraw(staleOperations, null)).toBe(true);
+    expect(
+      resolveOrganizerGiveawayPresentationRequest(
+        "event-1",
+        "giveaway-other",
+        { ...staleOperations, giveawayId: "giveaway-other" },
+        retainedRequest,
+      ),
+    ).toBeNull();
+  });
+
+  test("acknowledges publication before preserving the ready controller through revalidation", async () => {
+    const request = createOrganizerGiveawayPresentationRequest(
+      "event-1",
+      "giveaway-random",
+      "draw-initial-random",
+    )!;
+    const readyState = {
+      request,
+      status: "ready" as const,
+      presentation: completedPresentation,
+    };
+
+    expect(resolveGiveawayPresentationLoadStartState(readyState, request, true)).toBe(readyState);
+    expect(resolveGiveawayPresentationLoadFailureState(readyState, request, true)).toBe(readyState);
+    expect(resolveGiveawayPresentationLoadStartState(readyState, request, false)).toEqual({
+      request,
+      status: "loading",
+    });
+    expect(resolveGiveawayPresentationLoadFailureState(readyState, request, false)).toEqual({
+      request,
+      status: "error",
+    });
+
+    const order: string[] = [];
+    let acknowledge!: (value: boolean) => void;
+    const publication = new Promise<boolean>((resolve) => {
+      acknowledge = resolve;
+    });
+    const controllerSettlement = publication.then(() => {
+      order.push("controller-published");
+    });
+
+    acknowledgeOrganizerGiveawayPresentationPublication(acknowledge, async () => {
+      order.push("revalidate");
+    });
+    await controllerSettlement;
+    await Promise.resolve();
+
+    expect(order).toEqual(["controller-published", "revalidate"]);
   });
 
   test("rejects stale presentation identities and renders narrow loading, retry, and published states", async () => {
