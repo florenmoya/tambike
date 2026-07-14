@@ -79,6 +79,16 @@ export async function getOrganizerGiveawayOperationsAction(giveawayId: string) {
   });
 }
 
+export async function getOrganizerGiveawayPresentationAction(
+  giveawayId: string,
+  drawId: string,
+) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.getOrganizerGiveawayPresentation(sessionToken, giveawayId, drawId);
+  });
+}
+
 export async function listGiveawayCampaignCodesAction(giveawayId: string) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();

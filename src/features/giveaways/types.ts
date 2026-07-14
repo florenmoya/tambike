@@ -406,6 +406,25 @@ export interface OrganizerGiveawayOperations {
   recoverableAwards: OrganizerGiveawayRecoverableAward[];
 }
 
+export interface GiveawayPresentationSlide {
+  position: number;
+  prizePoolTitle: string;
+  prizeItemTitle: string;
+  winnerLabel: string;
+}
+
+export interface OrganizerGiveawayPresentation {
+  giveawayId: string;
+  eventId: string;
+  drawId: string;
+  giveawayTitle: string;
+  drawStatus: "completed" | "published";
+  resultDigest: string;
+  candidateCount: number;
+  labelBank: string[];
+  slides: GiveawayPresentationSlide[];
+}
+
 /** Safe organizer/admin code inventory; raw codes and token hashes never leave creation. */
 export type GiveawayCampaignCodeStatus = "active" | "expired" | "exhausted" | "revoked";
 

@@ -33,6 +33,7 @@ import type {
   GrantManualGiveawayEntryInput,
   OrganizerGiveawayWorkspace,
   OrganizerGiveawayOperations,
+  OrganizerGiveawayPresentation,
   OperatorGiveawayClaimView,
   OrganizerGiveawayReport,
   PrivateGiveawayDeliveryDetails,
@@ -101,6 +102,10 @@ import {
   deriveGiveawayPresentationLabels,
   isGiveawayLivePresentationOptedIn,
 } from "./giveaways/presentation-labels";
+import {
+  buildOrganizerGiveawayPresentation,
+  GiveawayPresentationIntegrityError,
+} from "./giveaways/presentation";
 import {
   createGiveawayClaimToken,
   decryptGiveawayDeliveryPayload,
@@ -906,6 +911,98 @@ export class PrismaTambikeBackend {
         (left, right) => left.label.localeCompare(right.label) || left.awardId.localeCompare(right.awardId),
       ),
     };
+  }
+
+  async getOrganizerGiveawayPresentation(
+    sessionToken: string,
+    giveawayId: string,
+    drawId: string,
+  ): Promise<OrganizerGiveawayPresentation> {
+    const user = await this.requireUser(sessionToken);
+    const giveaway = await this.requireGiveawayCampaign(giveawayId);
+    this.requireGiveawayConfigurator(user, giveaway.event);
+    const draw = await this.prisma.giveawayDraw.findFirst({
+      where: { id: drawId, giveawayId: giveaway.id },
+      select: {
+        id: true,
+        snapshotId: true,
+        type: true,
+        status: true,
+        algorithmVersion: true,
+        resultDigest: true,
+        snapshot: {
+          select: {
+            id: true,
+            giveawayId: true,
+            candidateCount: true,
+            entries: {
+              select: {
+                id: true,
+                entryId: true,
+                opaquePublicReference: true,
+                presentationLabel: true,
+                entry: { select: { giveawayId: true, riderId: true } },
+              },
+            },
+          },
+        },
+        awards: {
+          select: {
+            id: true,
+            giveawayId: true,
+            drawId: true,
+            entryId: true,
+            winnerUserId: true,
+            snapshotEntryId: true,
+            prizePoolId: true,
+            prizeItemId: true,
+          },
+        },
+      },
+    });
+    if (!draw) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    if (draw.snapshot.giveawayId !== giveaway.id) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+
+    try {
+      return buildOrganizerGiveawayPresentation({
+        giveawayId: giveaway.id,
+        eventId: giveaway.eventId,
+        giveawayTitle: giveaway.title,
+        draw,
+        snapshot: {
+          id: draw.snapshot.id,
+          giveawayId: draw.snapshot.giveawayId,
+          candidateCount: draw.snapshot.candidateCount,
+          entries: draw.snapshot.entries.map((entry) => ({
+            id: entry.id,
+            giveawayId: entry.entry.giveawayId,
+            entryId: entry.entryId,
+            riderId: entry.entry.riderId,
+            opaquePublicReference: entry.opaquePublicReference,
+            presentationLabel: entry.presentationLabel,
+          })),
+        },
+        prizePools: giveaway.prizePools.map((pool) => ({
+          id: pool.id,
+          position: pool.position,
+          title: pool.title,
+          awardMode: pool.awardMode,
+          items: pool.prizeItems.map((item) => ({
+            id: item.id,
+            position: item.position,
+            title: item.title,
+          })),
+        })),
+        awards: draw.awards,
+      });
+    } catch (error) {
+      if (error instanceof GiveawayPresentationIntegrityError) {
+        throw new BackendError(error.code, error.code);
+      }
+      throw error;
+    }
   }
 
   /**

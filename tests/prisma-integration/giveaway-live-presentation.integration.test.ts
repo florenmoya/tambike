@@ -355,6 +355,79 @@ describe("Prisma live giveaway presentation", () => {
           false,
         ),
       ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_NOT_OPEN" });
+
+      const draw = await backendClients.primary.backend.runGiveawayDraw(organizerSession, {
+        giveawayId: giveaway.id,
+        idempotencyKey: "persisted-organizer-presentation",
+      });
+      const primaryPresentation =
+        await backendClients.primary.backend.getOrganizerGiveawayPresentation(
+          organizerSession,
+          giveaway.id,
+          draw.drawId,
+        );
+      const reloadedPresentation =
+        await backendClients.secondary.backend.getOrganizerGiveawayPresentation(
+          organizerSession,
+          giveaway.id,
+          draw.drawId,
+        );
+
+      expect(reloadedPresentation).toEqual(primaryPresentation);
+      expect(primaryPresentation).toEqual({
+        giveawayId: giveaway.id,
+        eventId,
+        drawId: draw.drawId,
+        giveawayTitle: "Synthetic live presentation campaign",
+        drawStatus: "completed",
+        resultDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        candidateCount: 1,
+        labelBank: ["Synthetic R."],
+        slides: [
+          {
+            position: 1,
+            prizePoolTitle: "Synthetic helmet",
+            prizeItemTitle: "Synthetic prize item",
+            winnerLabel: "Synthetic R.",
+          },
+        ],
+      });
+      const serializedPresentation = JSON.stringify(primaryPresentation);
+      for (const forbiddenField of [
+        "riderId",
+        "entryId",
+        "snapshotEntryId",
+        "awardId",
+        "email",
+        "phone",
+        "displayName",
+        "eligibility",
+        "source",
+        "weight",
+        "rank",
+        "claimReference",
+        "claimToken",
+        "delivery",
+        "encryptedSeed",
+        "seed",
+      ]) {
+        expect(serializedPresentation).not.toContain(`"${forbiddenField}"`);
+      }
+      expect(serializedPresentation).not.toContain(riderId);
+      expect(serializedPresentation).not.toContain(`presentation-rider-${suffix}@example.test`);
+
+      await backendClients.primary.backend.publishGiveawayDraw(
+        organizerSession,
+        giveaway.id,
+        draw.drawId,
+      );
+      await expect(
+        backendClients.secondary.backend.getOrganizerGiveawayPresentation(
+          organizerSession,
+          giveaway.id,
+          draw.drawId,
+        ),
+      ).resolves.toEqual({ ...primaryPresentation, drawStatus: "published" });
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;

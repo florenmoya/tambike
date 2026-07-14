@@ -17,6 +17,10 @@ describe("giveaway action and API contracts", () => {
     expect(source).toContain("issueGiveawayClaimTokenAction");
     expect(source).toContain("verifyGiveawayClaimAction");
     expect(source).toContain("getOrganizerGiveawayReportAction");
+    expect(source).toContain("getOrganizerGiveawayPresentationAction");
+    expect(source).toContain(
+      "backend.getOrganizerGiveawayPresentation(sessionToken, giveawayId, drawId)",
+    );
     expect(source).toContain("getOrganizerGiveawayOperationsAction");
     expect(source).toContain("listManualGiveawayReplacementCandidatesAction");
     expect(source).toContain("replaceManualGiveawayAwardAction");

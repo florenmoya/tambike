@@ -36,6 +36,7 @@ import type {
   GrantManualGiveawayEntryInput,
   OrganizerGiveawayWorkspace,
   OrganizerGiveawayOperations,
+  OrganizerGiveawayPresentation,
   OrganizerGiveawayReport,
   OperatorGiveawayClaimView,
   PrivateGiveawayDeliveryDetails,
@@ -103,6 +104,10 @@ import {
   isGiveawayLivePresentationOptedIn,
   type GiveawayPresentationLabelKindValue,
 } from "./giveaways/presentation-labels";
+import {
+  buildOrganizerGiveawayPresentation,
+  GiveawayPresentationIntegrityError,
+} from "./giveaways/presentation";
 import {
   createGiveawayClaimToken,
   decryptGiveawayDeliveryPayload,
@@ -1557,6 +1562,49 @@ export class TambikeBackend {
         (left, right) => left.label.localeCompare(right.label) || left.awardId.localeCompare(right.awardId),
       ),
     };
+  }
+
+  async getOrganizerGiveawayPresentation(
+    sessionToken: string,
+    giveawayId: string,
+    drawId: string,
+  ): Promise<OrganizerGiveawayPresentation> {
+    const user = this.requireUser(sessionToken);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    const draw = giveaway.draws.find((candidate) => candidate.id === drawId);
+    if (!draw) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const snapshot = giveaway.snapshot;
+    if (!snapshot) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+
+    try {
+      return buildOrganizerGiveawayPresentation({
+        giveawayId: giveaway.id,
+        eventId: giveaway.eventId,
+        giveawayTitle: giveaway.title,
+        draw,
+        snapshot: {
+          ...snapshot,
+          giveawayId: giveaway.id,
+          entries: snapshot.entries.map((entry) => ({
+            ...entry,
+            giveawayId: giveaway.id,
+          })),
+        },
+        prizePools: giveaway.prizePools,
+        awards: giveaway.awards.map((award) => ({
+          ...award,
+          giveawayId: giveaway.id,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof GiveawayPresentationIntegrityError) {
+        throw new BackendError(error.code, error.code);
+      }
+      throw error;
+    }
   }
 
   /**
