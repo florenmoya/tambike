@@ -58,19 +58,29 @@ type InternalAward = {
   updatedAt: string;
 };
 
+type InternalEntry = {
+  id: string;
+  riderId: string;
+};
+
+type InternalSnapshotEntry = {
+  id: string;
+  entryId: string;
+  riderId: string;
+  opaquePublicReference: string;
+  presentationLabel?: string;
+};
+
+type InternalSnapshot = {
+  id: string;
+  entries: InternalSnapshotEntry[];
+};
+
 type InternalGiveaway = {
   id: string;
   title: string;
-  snapshot?: {
-    id: string;
-    entries: ReadonlyArray<{
-      id: string;
-      entryId: string;
-      riderId: string;
-      opaquePublicReference: string;
-      presentationLabel?: string;
-    }>;
-  };
+  entriesByRider: Map<string, InternalEntry>;
+  snapshot?: InternalSnapshot;
   prizePools: InternalPrizePool[];
   draws: InternalDraw[];
   awards: InternalAward[];
@@ -78,6 +88,8 @@ type InternalGiveaway = {
 
 type InternalStore = {
   campaignsById: Map<string, InternalGiveaway>;
+  entriesById: Map<string, InternalEntry>;
+  snapshotsById: Map<string, InternalSnapshot>;
   drawsById: Map<string, InternalDraw>;
   awardsById: Map<string, InternalAward>;
   prizePoolsById: Map<string, InternalPrizePool>;
@@ -374,6 +386,7 @@ describe("organizer giveaway presentation read", () => {
     const store = internalStore(scenario.backend);
     const giveaway = store.campaignsById.get(scenario.giveawayId)!;
     const draw = giveaway.draws.find((candidate) => candidate.id === scenario.drawId)!;
+    const randomAwardCount = draw.awardIds.length;
     const randomPool = giveaway.prizePools[0];
     const randomAward = giveaway.awards[0];
     const manualItem: InternalPrizeItem = {
@@ -411,6 +424,7 @@ describe("organizer giveaway presentation read", () => {
     giveaway.prizePools.push(manualPool);
     giveaway.draws.push(redraw);
     giveaway.awards.push(manualAward, redrawAward);
+    draw.awardIds.push(manualAward.id);
     store.prizePoolsById.set(manualPool.id, manualPool);
     store.prizeItemsById.set(manualItem.id, manualItem);
     store.drawsById.set(redraw.id, redraw);
@@ -422,7 +436,7 @@ describe("organizer giveaway presentation read", () => {
       scenario.giveawayId,
       scenario.drawId,
     );
-    expect(presentation.slides).toHaveLength(draw.awardIds.length);
+    expect(presentation.slides).toHaveLength(randomAwardCount);
     expect(JSON.stringify(presentation.slides)).not.toContain("Manual");
 
     const empty = await createScenario({ withRiders: false });
@@ -434,5 +448,142 @@ describe("organizer giveaway presentation read", () => {
     expect(emptyPresentation.candidateCount).toBe(0);
     expect(emptyPresentation.labelBank).toEqual([]);
     expect(emptyPresentation.slides).toEqual([]);
+  });
+
+  test("rejects a canonical snapshot and award rewired to a cross-campaign entry", async () => {
+    const scenario = await createScenario();
+    const other = await createCompletedCampaign({
+      backend: scenario.backend,
+      organizerToken: scenario.organizer.sessionToken,
+      adminToken: scenario.admin.sessionToken,
+      eventId: scenario.eventId,
+      title: "Cross-campaign source",
+      idempotencyKey: "cross-campaign-source-draw",
+    });
+    const store = internalStore(scenario.backend);
+    const giveaway = store.campaignsById.get(scenario.giveawayId)!;
+    const otherGiveaway = store.campaignsById.get(other.giveawayId)!;
+    const originalSnapshot = giveaway.snapshot!;
+    const originalAward = giveaway.awards.find((award) => award.drawId === scenario.drawId)!;
+    const originalAwardIndex = giveaway.awards.indexOf(originalAward);
+    const originalSnapshotEntry = originalSnapshot.entries.find(
+      (entry) => entry.id === originalAward.snapshotEntryId,
+    )!;
+    const crossCampaignEntry = [...otherGiveaway.entriesByRider.values()].find(
+      (entry) => entry.riderId !== originalAward.winnerUserId,
+    )!;
+    const corruptedSnapshotEntry = {
+      ...originalSnapshotEntry,
+      entryId: crossCampaignEntry.id,
+      riderId: crossCampaignEntry.riderId,
+    };
+    const corruptedSnapshot = {
+      ...originalSnapshot,
+      entries: originalSnapshot.entries.map((entry) =>
+        entry.id === corruptedSnapshotEntry.id ? corruptedSnapshotEntry : entry,
+      ),
+    };
+    const corruptedAward = {
+      ...originalAward,
+      entryId: crossCampaignEntry.id,
+      winnerUserId: crossCampaignEntry.riderId,
+    };
+
+    giveaway.snapshot = corruptedSnapshot;
+    store.snapshotsById.set(corruptedSnapshot.id, corruptedSnapshot);
+    giveaway.awards[originalAwardIndex] = corruptedAward;
+    store.awardsById.set(corruptedAward.id, corruptedAward);
+    try {
+      await expect(
+        scenario.backend.getOrganizerGiveawayPresentation(
+          scenario.organizer.sessionToken,
+          scenario.giveawayId,
+          scenario.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    } finally {
+      giveaway.snapshot = originalSnapshot;
+      store.snapshotsById.set(originalSnapshot.id, originalSnapshot);
+      giveaway.awards[originalAwardIndex] = originalAward;
+      store.awardsById.set(originalAward.id, originalAward);
+    }
+  });
+
+  test.each(["draw", "snapshot", "award"] as const)(
+    "rejects a mismatched canonical %s registry record",
+    async (recordKind) => {
+      const scenario = await createScenario();
+      const store = internalStore(scenario.backend);
+      const giveaway = store.campaignsById.get(scenario.giveawayId)!;
+      const draw = giveaway.draws.find((candidate) => candidate.id === scenario.drawId)!;
+      const snapshot = giveaway.snapshot!;
+      const award = giveaway.awards.find((candidate) => candidate.drawId === draw.id)!;
+
+      if (recordKind === "draw") store.drawsById.set(draw.id, { ...draw });
+      if (recordKind === "snapshot") {
+        store.snapshotsById.set(snapshot.id, { ...snapshot, entries: [...snapshot.entries] });
+      }
+      if (recordKind === "award") store.awardsById.set(award.id, { ...award });
+      try {
+        await expect(
+          scenario.backend.getOrganizerGiveawayPresentation(
+            scenario.organizer.sessionToken,
+            scenario.giveawayId,
+            scenario.drawId,
+          ),
+        ).rejects.toMatchObject({
+          code: recordKind === "award" ? "GIVEAWAY_AWARD_INVALID" : "INVALID_GIVEAWAY_STATE",
+        });
+      } finally {
+        store.drawsById.set(draw.id, draw);
+        store.snapshotsById.set(snapshot.id, snapshot);
+        store.awardsById.set(award.id, award);
+      }
+    },
+  );
+
+  test("rejects a draw that references a missing canonical award", async () => {
+    const scenario = await createScenario();
+    const store = internalStore(scenario.backend);
+    const giveaway = store.campaignsById.get(scenario.giveawayId)!;
+    const draw = giveaway.draws.find((candidate) => candidate.id === scenario.drawId)!;
+    draw.awardIds.push("missing-canonical-award");
+    try {
+      await expect(
+        scenario.backend.getOrganizerGiveawayPresentation(
+          scenario.organizer.sessionToken,
+          scenario.giveawayId,
+          scenario.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    } finally {
+      draw.awardIds.pop();
+    }
+  });
+
+  test("rejects an extra draw-linked award absent from draw awardIds", async () => {
+    const scenario = await createScenario();
+    const store = internalStore(scenario.backend);
+    const giveaway = store.campaignsById.get(scenario.giveawayId)!;
+    const sourceAward = giveaway.awards.find((award) => award.drawId === scenario.drawId)!;
+    const extraAward: InternalAward = {
+      ...sourceAward,
+      id: "extra-unreferenced-draw-award",
+      opaqueClaimReference: "extra-unreferenced-claim",
+    };
+    giveaway.awards.push(extraAward);
+    store.awardsById.set(extraAward.id, extraAward);
+    try {
+      await expect(
+        scenario.backend.getOrganizerGiveawayPresentation(
+          scenario.organizer.sessionToken,
+          scenario.giveawayId,
+          scenario.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    } finally {
+      giveaway.awards.pop();
+      store.awardsById.delete(extraAward.id);
+    }
   });
 });

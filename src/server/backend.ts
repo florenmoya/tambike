@@ -1578,6 +1578,71 @@ export class TambikeBackend {
     if (!snapshot) {
       throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
     }
+    const campaigns = [...this.giveaways.campaignsById.values()];
+    const requireCurrentOwner = (
+      owners: GiveawayAggregate[],
+      code: "INVALID_GIVEAWAY_STATE" | "GIVEAWAY_AWARD_INVALID",
+    ) => {
+      if (owners.length !== 1 || owners[0] !== giveaway) {
+        throw new BackendError(code, code);
+      }
+      return owners[0];
+    };
+    if (this.giveaways.drawsById.get(draw.id) !== draw) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    if (this.giveaways.snapshotsById.get(snapshot.id) !== snapshot) {
+      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    }
+    requireCurrentOwner(
+      campaigns.filter((candidate) => candidate.draws.includes(draw)),
+      "INVALID_GIVEAWAY_STATE",
+    );
+    const snapshotOwner = requireCurrentOwner(
+      campaigns.filter((candidate) => candidate.snapshot === snapshot),
+      "INVALID_GIVEAWAY_STATE",
+    );
+    const presentationEntries = snapshot.entries.map((snapshotEntry) => {
+      const entry = this.giveaways.entriesById.get(snapshotEntry.entryId);
+      if (!entry || entry.riderId !== snapshotEntry.riderId) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const entryOwner = requireCurrentOwner(
+        campaigns.filter(
+          (candidate) => candidate.entriesByRider.get(entry.riderId) === entry,
+        ),
+        "GIVEAWAY_AWARD_INVALID",
+      );
+      return { ...snapshotEntry, giveawayId: entryOwner.id };
+    });
+    const drawAwardIds = new Set(draw.awardIds);
+    if (drawAwardIds.size !== draw.awardIds.length) {
+      throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+    }
+    const presentationAwards = draw.awardIds.map((awardId) => {
+      const award = giveaway.awards.find((candidate) => candidate.id === awardId);
+      if (
+        !award ||
+        award.drawId !== draw.id ||
+        this.giveaways.awardsById.get(award.id) !== award
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+      const awardOwner = requireCurrentOwner(
+        campaigns.filter((candidate) => candidate.awards.includes(award)),
+        "GIVEAWAY_AWARD_INVALID",
+      );
+      return { ...award, giveawayId: awardOwner.id };
+    });
+    for (const award of giveaway.awards) {
+      if (award.drawId !== draw.id) continue;
+      if (
+        !drawAwardIds.has(award.id) ||
+        this.giveaways.awardsById.get(award.id) !== award
+      ) {
+        throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
+      }
+    }
 
     try {
       return buildOrganizerGiveawayPresentation({
@@ -1587,17 +1652,11 @@ export class TambikeBackend {
         draw,
         snapshot: {
           ...snapshot,
-          giveawayId: giveaway.id,
-          entries: snapshot.entries.map((entry) => ({
-            ...entry,
-            giveawayId: giveaway.id,
-          })),
+          giveawayId: snapshotOwner.id,
+          entries: presentationEntries,
         },
         prizePools: giveaway.prizePools,
-        awards: giveaway.awards.map((award) => ({
-          ...award,
-          giveawayId: giveaway.id,
-        })),
+        awards: presentationAwards,
       });
     } catch (error) {
       if (error instanceof GiveawayPresentationIntegrityError) {
