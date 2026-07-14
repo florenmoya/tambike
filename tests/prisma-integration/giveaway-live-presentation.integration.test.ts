@@ -377,6 +377,13 @@ describe("Prisma live giveaway presentation", () => {
         giveawayId: giveaway.id,
         idempotencyKey: "persisted-organizer-presentation",
       });
+      const winnerNotificationWhere = {
+        userId: riderId,
+        kind: "giveaway_winner",
+      } as const;
+      await expect(
+        rawClients.primary.notification.count({ where: winnerNotificationWhere }),
+      ).resolves.toBe(0);
       await expect(
         backendClients.secondary.backend.getOrganizerGiveawayOperations(
           organizerSession,
@@ -417,6 +424,9 @@ describe("Prisma live giveaway presentation", () => {
         publishableDrawId: laterManualDraw.drawId,
       });
       await expect(
+        rawClients.primary.notification.count({ where: winnerNotificationWhere }),
+      ).resolves.toBe(0);
+      await expect(
         backendClients.primary.backend.getOrganizerGiveawayOperations(
           organizerSession,
           giveaway.id,
@@ -434,6 +444,10 @@ describe("Prisma live giveaway presentation", () => {
           giveaway.id,
           draw.drawId,
         );
+
+      await expect(
+        rawClients.primary.notification.count({ where: winnerNotificationWhere }),
+      ).resolves.toBe(0);
 
       expect(reloadedPresentation).toEqual(primaryPresentation);
       expect(primaryPresentation).toEqual({
@@ -484,6 +498,9 @@ describe("Prisma live giveaway presentation", () => {
         draw.drawId,
       );
       await expect(
+        rawClients.primary.notification.count({ where: winnerNotificationWhere }),
+      ).resolves.toBe(2);
+      await expect(
         backendClients.secondary.backend.getOrganizerGiveawayOperations(
           organizerSession,
           giveaway.id,
@@ -499,6 +516,19 @@ describe("Prisma live giveaway presentation", () => {
           draw.drawId,
         ),
       ).resolves.toEqual({ ...primaryPresentation, drawStatus: "published" });
+      await backendClients.secondary.backend.publishGiveawayDraw(
+        organizerSession,
+        giveaway.id,
+        draw.drawId,
+      );
+      await backendClients.primary.backend.getOrganizerGiveawayPresentation(
+        organizerSession,
+        giveaway.id,
+        draw.drawId,
+      );
+      await expect(
+        rawClients.primary.notification.count({ where: winnerNotificationWhere }),
+      ).resolves.toBe(2);
 
       const persistedInitialDraw = await rawClients.primary.giveawayDraw.findUniqueOrThrow({
         where: { id: draw.drawId },

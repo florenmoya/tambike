@@ -50,6 +50,25 @@ describe("giveaway action and API contracts", () => {
     expect(source).toContain("actual.length !== expected.length");
   });
 
+  test("organizer workspace wires the stable presentation draw through load, recovery, and publication", async () => {
+    const source = await readSource(
+      "src/features/giveaways/organizer-giveaway-workspace.tsx",
+    );
+
+    expect(source).toContain("presentationLoadsByKey");
+    expect(source).toContain("loadGiveawayPresentation");
+    expect(source).toContain("selectedPresentationLoadState");
+    expect(source).toContain("<CampaignGiveawayPresentationPanel");
+    expect(source).toContain("publishRandomPresentation");
+    expect(source).toContain("createOrganizerGiveawayPresentationRequest(");
+    expect(source).toContain("resolveOrganizerGiveawayPresentationRequest(");
+    expect(source).toContain("publishOrganizerGiveawayPresentation(presentation)");
+    expect(source).toContain("The fixed raffle result is ready to present.");
+    expect(source).not.toContain("The initial draw is ready for review");
+    expect(source).not.toContain("GIVEAWAY_DRAW_RESPONSE_INVALID");
+    expect(source).toContain("refreshCampaignOperations(selectedCampaign.id).catch");
+  });
+
   test("admin export awaits Next params and protects raw CSV response data", async () => {
     const source = await readSource(
       "src/app/api/admin/exports/giveaways/[giveawayId]/route.ts",

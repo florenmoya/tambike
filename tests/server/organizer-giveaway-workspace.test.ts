@@ -8,15 +8,23 @@ import { DemoProvider } from "../../src/features/tambike-demo/demo-provider";
 import { createTambikeTestBackend } from "../../src/server/testing";
 import type {
   OrganizerGiveawayOperations,
+  OrganizerGiveawayPresentation,
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
 } from "../../src/features/giveaways/types";
 import {
   buildGiveawayLifecycleRoute,
   CampaignCancellationPanel,
   CampaignEntryOperations,
+  CampaignGiveawayPresentationPanel,
   CampaignManualSelectionOperations,
   CampaignOperationalHeader,
+  createOrganizerGiveawayPresentationRequest,
+  getGiveawayPublicationMode,
   OrganizerGiveawayWorkspace,
+  publishOrganizerGiveawayPresentation,
+  readOrganizerGiveawayPresentation,
+  resolveGiveawayManualSelectionGate,
+  resolveOrganizerGiveawayPresentationRequest,
   RecoveryQueuePanel,
   resolveGiveawaySubmission,
   resolveInitialDrawSubmission,
@@ -24,6 +32,25 @@ import {
   submitCampaignCode,
   toOrganizerGiveawayEditorDraft,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
+
+const completedPresentation: OrganizerGiveawayPresentation = {
+  giveawayId: "giveaway-random",
+  eventId: "event-1",
+  drawId: "draw-initial-random",
+  giveawayTitle: "Helmet raffle",
+  drawStatus: "completed",
+  resultDigest: "a".repeat(64),
+  candidateCount: 2,
+  labelBank: ["Rider A1B2", "Rider C3D4"],
+  slides: [
+    {
+      position: 1,
+      prizePoolTitle: "Helmet pool",
+      prizeItemTitle: "Road helmet",
+      winnerLabel: "Rider A1B2",
+    },
+  ],
+};
 
 describe("organizer giveaway lifecycle route", () => {
   test("shows the factual lifecycle and treats pause as an operational hold", () => {
@@ -359,7 +386,7 @@ describe("organizer giveaway lifecycle route", () => {
       publishableDrawId: "draw-opaque",
       recoverableAwards: [],
     };
-    const publishBlockedProps = {
+    const randomProps = {
       campaign: {
         id: "giveaway-manual",
         eventId: "event-1",
@@ -370,7 +397,9 @@ describe("organizer giveaway lifecycle route", () => {
       },
       isPending: false,
       operations,
-      hasAwardableManualSelections: true,
+      publicationMode: "random_presentation",
+      manualSelectionGate: "blocked",
+      manualSelectionGateReason: "candidates_remaining",
       onSubmit: () => undefined,
       onSchedule: () => undefined,
       onOpen: () => undefined,
@@ -381,13 +410,241 @@ describe("organizer giveaway lifecycle route", () => {
     } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>;
 
     const markup = renderToStaticMarkup(
-      React.createElement(CampaignOperationalHeader, publishBlockedProps),
+      React.createElement(CampaignOperationalHeader, randomProps),
     );
 
     expect(markup).toContain("Run draw");
-    expect(markup).toContain("Publish result");
-    expect(markup).toContain("Complete the remaining manual selections before publishing.");
-    expect(markup).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?Publish result/);
+    expect(markup).not.toContain("Publish result");
+  });
+
+  test("derives the manual-selection publication gate only from every current server inventory", () => {
+    const manualPools = [
+      { id: "manual-1", awardMode: "manual_selection" as const },
+      { id: "manual-2", awardMode: "manual_selection" as const },
+    ];
+
+    expect(resolveGiveawayManualSelectionGate([], {}, {})).toEqual({
+      gate: "clear",
+      reason: "none",
+    });
+    expect(
+      resolveGiveawayManualSelectionGate(
+        manualPools,
+        { "manual-1": "idle", "manual-2": "ready" },
+        { "manual-2": [] },
+      ),
+    ).toEqual({ gate: "checking", reason: "inventory_checking" });
+    expect(
+      resolveGiveawayManualSelectionGate(
+        manualPools,
+        { "manual-1": "loading", "manual-2": "ready" },
+        { "manual-2": [] },
+      ),
+    ).toEqual({ gate: "checking", reason: "inventory_checking" });
+    expect(
+      resolveGiveawayManualSelectionGate(
+        manualPools,
+        { "manual-1": "error", "manual-2": "ready" },
+        { "manual-1": [], "manual-2": [] },
+      ),
+    ).toEqual({ gate: "blocked", reason: "inventory_error" });
+    expect(
+      resolveGiveawayManualSelectionGate(
+        manualPools,
+        { "manual-1": "ready", "manual-2": "ready" },
+        { "manual-1": [], "manual-2": [{ snapshotEntryId: "entry-1", label: "Rider A1B2" }] },
+      ),
+    ).toEqual({ gate: "blocked", reason: "candidates_remaining" });
+    expect(
+      resolveGiveawayManualSelectionGate(
+        manualPools,
+        { "manual-1": "ready", "manual-2": "ready" },
+        { "manual-1": [], "manual-2": [] },
+      ),
+    ).toEqual({ gate: "clear", reason: "none" });
+  });
+
+  test("fails closed when deciding between presentation and direct publication", () => {
+    const randomPool = { id: "random", awardMode: "random_draw" as const };
+    const manualPool = { id: "manual", awardMode: "manual_selection" as const };
+    const noPresentationOperations: OrganizerGiveawayOperations = {
+      giveawayId: "giveaway-1",
+      canCancel: false,
+      canRunInitialRandomDraw: false,
+      presentationDrawId: null,
+      publishableDrawId: "draw-manual-before-random",
+      recoverableAwards: [],
+    };
+
+    expect(getGiveawayPublicationMode([randomPool], noPresentationOperations)).toBe("random_presentation");
+    expect(getGiveawayPublicationMode([manualPool, randomPool], noPresentationOperations)).toBe("random_presentation");
+    expect(getGiveawayPublicationMode([manualPool], noPresentationOperations)).toBe("manual_direct");
+    expect(getGiveawayPublicationMode(undefined, noPresentationOperations)).toBe("unknown");
+    expect(
+      getGiveawayPublicationMode(undefined, {
+        ...noPresentationOperations,
+        canRunInitialRandomDraw: true,
+      }),
+    ).toBe("random_presentation");
+    expect(
+      getGiveawayPublicationMode(undefined, {
+        ...noPresentationOperations,
+        presentationDrawId: "draw-initial-random",
+      }),
+    ).toBe("random_presentation");
+  });
+
+  test("keeps direct publication only for loaded manual-only configuration and fails closed on inventory", () => {
+    const baseProps = {
+      campaign: {
+        id: "giveaway-manual",
+        eventId: "event-1",
+        title: "Manual awards",
+        state: "drawing" as const,
+        complianceStatus: "approved" as const,
+        mechanicsVersion: 1,
+      },
+      isPending: false,
+      operations: {
+        giveawayId: "giveaway-manual",
+        canCancel: false,
+        canRunInitialRandomDraw: false,
+        presentationDrawId: null,
+        publishableDrawId: "draw-manual",
+        recoverableAwards: [],
+      },
+      publicationMode: "manual_direct" as const,
+      onSubmit: () => undefined,
+      onSchedule: () => undefined,
+      onOpen: () => undefined,
+      onPause: () => undefined,
+      onLock: () => undefined,
+      onDraw: () => undefined,
+      onPublish: () => undefined,
+    };
+    const checking = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        manualSelectionGate: "checking",
+        manualSelectionGateReason: "inventory_checking",
+      }),
+    );
+    const failed = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        manualSelectionGate: "blocked",
+        manualSelectionGateReason: "inventory_error",
+      }),
+    );
+    const clear = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        manualSelectionGate: "clear",
+        manualSelectionGateReason: "none",
+      }),
+    );
+
+    expect(checking).toContain("Publish result");
+    expect(checking).toContain("Checking the remaining manual selections before publication.");
+    expect(checking).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Publish result/);
+    expect(failed).toContain("Manual candidate inventory could not be verified. Refresh before publishing.");
+    expect(failed).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Publish result/);
+    expect(clear).toContain("Publish result");
+    expect(clear).not.toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Publish result/);
+  });
+
+  test("uses the stable initial draw identity for presentation reads and publication", async () => {
+    const operations: OrganizerGiveawayOperations = {
+      giveawayId: "giveaway-random",
+      canCancel: false,
+      canRunInitialRandomDraw: false,
+      presentationDrawId: "draw-initial-random",
+      publishableDrawId: "draw-later-manual",
+      recoverableAwards: [],
+    };
+    const request = resolveOrganizerGiveawayPresentationRequest("event-1", "giveaway-random", operations);
+    const readAction = vi.fn(async () => ({ ok: true as const, data: completedPresentation }));
+    const publishAction = vi.fn(async () => ({ ok: true as const, data: {} }));
+
+    expect(request).toEqual({
+      eventId: "event-1",
+      giveawayId: "giveaway-random",
+      drawId: "draw-initial-random",
+    });
+    await expect(readOrganizerGiveawayPresentation(request!, readAction)).resolves.toEqual(completedPresentation);
+    expect(readAction).toHaveBeenCalledWith("giveaway-random", "draw-initial-random");
+    await expect(
+      publishOrganizerGiveawayPresentation(completedPresentation, publishAction),
+    ).resolves.toBe(true);
+    expect(publishAction).toHaveBeenCalledWith("giveaway-random", "draw-initial-random");
+
+    expect(
+      createOrganizerGiveawayPresentationRequest("event-1", "giveaway-random", "draw-from-action-result"),
+    ).toEqual({
+      eventId: "event-1",
+      giveawayId: "giveaway-random",
+      drawId: "draw-from-action-result",
+    });
+    expect(resolveOrganizerGiveawayPresentationRequest("event-1", "giveaway-random", {
+      ...operations,
+      presentationDrawId: null,
+    })).toBeNull();
+  });
+
+  test("rejects stale presentation identities and renders narrow loading, retry, and published states", async () => {
+    await expect(
+      readOrganizerGiveawayPresentation(
+        { eventId: "event-other", giveawayId: "giveaway-random", drawId: "draw-initial-random" },
+        async () => ({ ok: true, data: completedPresentation }),
+      ),
+    ).rejects.toThrow("GIVEAWAY_PRESENTATION_IDENTITY_MISMATCH");
+
+    const loading = renderToStaticMarkup(
+      React.createElement(CampaignGiveawayPresentationPanel, {
+        loadState: {
+          request: { eventId: "event-1", giveawayId: "giveaway-random", drawId: "draw-initial-random" },
+          status: "loading",
+        },
+        manualSelectionGate: "clear",
+        completedDrawPublishable: true,
+        pending: false,
+        onRetry: () => undefined,
+        onPublish: async () => true,
+      }),
+    );
+    const failed = renderToStaticMarkup(
+      React.createElement(CampaignGiveawayPresentationPanel, {
+        loadState: {
+          request: { eventId: "event-1", giveawayId: "giveaway-random", drawId: "draw-initial-random" },
+          status: "error",
+        },
+        manualSelectionGate: "clear",
+        completedDrawPublishable: true,
+        pending: false,
+        onRetry: () => undefined,
+        onPublish: async () => true,
+      }),
+    );
+    const published = renderToStaticMarkup(
+      React.createElement(CampaignGiveawayPresentationPanel, {
+        loadState: {
+          request: { eventId: "event-1", giveawayId: "giveaway-random", drawId: "draw-initial-random" },
+          status: "ready",
+          presentation: { ...completedPresentation, drawStatus: "published" },
+        },
+        manualSelectionGate: "clear",
+        completedDrawPublishable: false,
+        pending: false,
+        onRetry: () => undefined,
+        onPublish: async () => true,
+      }),
+    );
+
+    expect(loading).toContain("Loading the fixed raffle presentation");
+    expect(failed).toContain("The fixed draw is safe, but its presentation could not be loaded.");
+    expect(failed).toContain("Retry presentation");
+    expect(published).toContain("Presentation published");
+    expect(published).toMatch(/<button[^>]*disabled=""[^>]*>Publish &amp; Notify<\/button>/);
   });
 
   test("uses a server-owned recovery queue without rendering raw terminal award IDs", () => {
