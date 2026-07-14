@@ -2078,7 +2078,7 @@ function CampaignEditor({
   }
 
   return (
-    <div className="grid gap-4">
+    <fieldset disabled={isPending} className="m-0 grid gap-4 border-0 p-0">
       <Card>
         <CardHeader>
           <CardTitle>Policy and terms</CardTitle>
@@ -2162,7 +2162,7 @@ function CampaignEditor({
           </Button>
         </CardContent>
       </Card>
-    </div>
+    </fieldset>
   );
 }
 

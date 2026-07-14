@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
@@ -37,6 +38,18 @@ import {
   submitCampaignCode,
   toOrganizerGiveawayEditorDraft,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
+
+const organizerGiveawayWorkspaceSourceUrl = new URL(
+  "../../src/features/giveaways/organizer-giveaway-workspace.tsx",
+  import.meta.url,
+);
+
+async function readCampaignEditorSource() {
+  const source = await readFile(organizerGiveawayWorkspaceSourceUrl, "utf8");
+  const start = source.indexOf("function CampaignEditor({");
+  const end = source.indexOf("\n/**", start);
+  return source.slice(start, end);
+}
 
 const completedPresentation: OrganizerGiveawayPresentation = {
   giveawayId: "giveaway-random",
@@ -168,6 +181,30 @@ describe("organizer giveaway lifecycle route", () => {
 
     expect(updatedDrafts[workspace.id]?.entryOpensAt).toBe("2026-08-19T09:00");
     expect(draftsByCampaignId[workspace.id]?.entryOpensAt).toBe("2026-08-17T17:30");
+  });
+
+  test("wires existing campaign edits through the selected campaign draft dispatcher", async () => {
+    const source = await readFile(organizerGiveawayWorkspaceSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "setDraftsByCampaignId((current) =>\n        applyOrganizerGiveawayDraftUpdate(current, selectedCampaignId, update),",
+    );
+    expect(source).toContain("onChange={changeSelectedCampaignDraft}");
+  });
+
+  test("keeps the standalone editor draft for a new campaign", async () => {
+    const source = await readFile(organizerGiveawayWorkspaceSourceUrl, "utf8");
+
+    expect(source).toContain("if (!selectedCampaignId) {\n        setEditorDraft(update);");
+    expect(source).toContain("draft={selectedDraft ?? editorDraft}");
+  });
+
+  test("freezes campaign editor controls while a save is pending", async () => {
+    const campaignEditorSource = await readCampaignEditorSource();
+
+    expect(campaignEditorSource).toContain(
+      '<fieldset disabled={isPending} className="m-0 grid gap-4 border-0 p-0">',
+    );
   });
 
   test("places Giveaways beside scanner and report links for the selected event", async () => {
