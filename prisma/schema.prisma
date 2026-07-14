@@ -196,6 +196,11 @@ enum GiveawayEntryEventType {
   source_revalidated
 }
 
+enum GiveawayPresentationLabelKind {
+  consented_name
+  masked
+}
+
 enum GiveawayAwardMode {
   random_draw
   first_come
@@ -739,6 +744,8 @@ model GiveawayEntry {
   acknowledgedMechanicsChecksum  String?
   acknowledgedMechanicsAt        DateTime?
   opaquePublicReference          String              @unique
+  livePresentationOptedInAt      DateTime?
+  livePresentationRevokedAt      DateTime?
   createdAt                      DateTime            @default(now())
   updatedAt                      DateTime            @updatedAt
 
@@ -836,6 +843,8 @@ model GiveawaySnapshotEntry {
   qualifiedEligibilityGroupIds Json
   qualifiedEligibilityGroupTimings Json
   rankSourceDigest             String
+  presentationLabel           String?
+  presentationLabelKind       GiveawayPresentationLabelKind?
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
 

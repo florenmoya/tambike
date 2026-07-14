@@ -60,6 +60,11 @@ type GiveawayBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   pauseGiveaway(sessionToken: string, giveawayId: string): Promise<GiveawayCampaignView>;
   lockGiveaway(sessionToken: string, giveawayId: string): Promise<GiveawayLockResult>;
   optInToGiveaway(sessionToken: string, giveawayId: string): Promise<RiderGiveawayState>;
+  setGiveawayLivePresentationPreference(
+    sessionToken: string,
+    giveawayId: string,
+    optedIn: boolean,
+  ): Promise<RiderGiveawayState>;
   createGiveawayCampaignCode(
     sessionToken: string,
     giveawayId: string,
@@ -334,6 +339,14 @@ function giveawayInput(
   } as CreateGiveawayInput;
 }
 
+function maskedLivePresentation(canUpdate = true) {
+  return {
+    optedIn: false,
+    canUpdate,
+    labelPreview: expect.stringMatching(/^Rider [0-9A-F]{4,8}$/),
+  };
+}
+
 async function withDrawEncryptionKey<T>(callback: () => Promise<T>) {
   const prior = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
   process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY = Buffer.alloc(32, 37).toString("base64");
@@ -514,6 +527,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 3,
+      livePresentation: maskedLivePresentation(),
     });
 
     await backend.registerForEvent(rider.sessionToken, eventId, {
@@ -564,6 +578,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 4,
+      livePresentation: maskedLivePresentation(),
     });
   });
 
@@ -673,6 +688,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 3,
+      livePresentation: maskedLivePresentation(),
     });
     expect(await backend.auditCount("GIVEAWAY_ENTRY_RECONCILED")).toBe(2);
   });
@@ -790,6 +806,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 5,
+      livePresentation: maskedLivePresentation(),
     });
   });
 
@@ -835,6 +852,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 2,
+      livePresentation: maskedLivePresentation(),
     });
   });
 
@@ -859,6 +877,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 3,
+      livePresentation: maskedLivePresentation(false),
     });
     await expect(
       backend.updateGiveaway(organizer.sessionToken, { id: giveaway.id, title: "Too late" }),
@@ -885,6 +904,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 3,
+      livePresentation: maskedLivePresentation(),
     });
     for (const forbiddenValue of [
       "email",
@@ -935,6 +955,7 @@ describe("in-memory event giveaway lifecycle", () => {
       giveawayId: giveaway.id,
       status: "entered",
       entryCount: 3,
+      livePresentation: maskedLivePresentation(),
     });
 
     await backend.pauseGiveaway(organizer.sessionToken, giveaway.id);
@@ -954,6 +975,122 @@ describe("in-memory event giveaway lifecycle", () => {
     );
     await expect(backend.optInToGiveaway(rider.sessionToken, wrongMode.giveaway.id)).rejects.toMatchObject({
       code: "GIVEAWAY_ENTRY_MODE_INVALID",
+    });
+  });
+
+  test("lets only an active entrant update live-raffle consent while open and freezes the label at lock", async () => {
+    const backend = asGiveawayBackend(await createTambikeTestBackend());
+    const { giveaway, eventId, organizer, admin, rider } = await createApprovedOpenCustomGiveaway(
+      backend,
+      (createdEventId) =>
+        giveawayInput(createdEventId, {
+          entryMode: "opt_in",
+          mechanics: "Tap to acknowledge these current mechanics and enter.",
+        }),
+    );
+    await backend.registerForEvent(rider.sessionToken, eventId, {
+      status: "going",
+      attendanceType: "direct",
+    });
+    const entered = await backend.optInToGiveaway(rider.sessionToken, giveaway.id);
+    expect(entered.livePresentation).toMatchObject({
+      optedIn: false,
+      canUpdate: true,
+      labelPreview: expect.stringMatching(/^Rider [0-9A-F]{4}$/),
+    });
+
+    const entrantWithoutEntry = await createExtraRider(backend, "live-presentation-owner");
+    await expect(
+      backend.setGiveawayLivePresentationPreference(
+        entrantWithoutEntry.sessionToken,
+        giveaway.id,
+        true,
+      ),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_NOT_ELIGIBLE" });
+    await expect(
+      backend.setGiveawayLivePresentationPreference(organizer.sessionToken, giveaway.id, true),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const optedIn = await backend.setGiveawayLivePresentationPreference(
+      rider.sessionToken,
+      giveaway.id,
+      true,
+    );
+    expect(optedIn.livePresentation).toEqual({
+      optedIn: true,
+      canUpdate: true,
+      labelPreview: "Mina R.",
+    });
+    expect(await backend.auditCount("GIVEAWAY_LIVE_PRESENTATION_OPTED_IN")).toBe(1);
+
+    const revoked = await backend.setGiveawayLivePresentationPreference(
+      rider.sessionToken,
+      giveaway.id,
+      false,
+    );
+    expect(revoked.livePresentation).toMatchObject({
+      optedIn: false,
+      canUpdate: true,
+      labelPreview: expect.stringMatching(/^Rider [0-9A-F]{4}$/),
+    });
+    expect(await backend.auditCount("GIVEAWAY_LIVE_PRESENTATION_REVOKED")).toBe(1);
+    await expect(
+      backend.setGiveawayLivePresentationPreference(rider.sessionToken, giveaway.id, false),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    await backend.setGiveawayLivePresentationPreference(rider.sessionToken, giveaway.id, true);
+    await withDrawEncryptionKey(() => backend.lockGiveaway(organizer.sessionToken, giveaway.id));
+    await backend.updateProfile(rider.sessionToken, {
+      displayName: "Changed Rider",
+      area: "Antipolo",
+    });
+    const lockedState = await backend.getRiderGiveawayState(rider.sessionToken, giveaway.id);
+    expect(lockedState.livePresentation).toEqual({
+      optedIn: true,
+      canUpdate: false,
+      labelPreview: "Mina R.",
+    });
+    await expect(
+      backend.setGiveawayLivePresentationPreference(rider.sessionToken, giveaway.id, false),
+    ).rejects.toMatchObject({ code: "GIVEAWAY_ENTRY_NOT_OPEN" });
+
+    const store = backend as unknown as {
+      giveaways: {
+        campaignsById: Map<
+          string,
+          {
+            auditEvents: Array<{ action: string; payload: Record<string, unknown> }>;
+            snapshot?: {
+              entries: Array<{
+                presentationLabel?: string;
+                presentationLabelKind?: string;
+                rankSourceDigest: string;
+              }>;
+            };
+          }
+        >;
+      };
+    };
+    const internal = store.giveaways.campaignsById.get(giveaway.id);
+    const preferenceAudits = internal?.auditEvents.filter((event) =>
+      event.action.startsWith("GIVEAWAY_LIVE_PRESENTATION_"),
+    );
+    expect(preferenceAudits).toHaveLength(3);
+    for (const event of preferenceAudits ?? []) {
+      expect(JSON.stringify(event.payload)).not.toMatch(/Mina|Changed|opaque|reference/i);
+    }
+    expect(internal?.snapshot?.entries).toEqual([
+      expect.objectContaining({
+        presentationLabel: "Mina R.",
+        presentationLabelKind: "consented_name",
+        rankSourceDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+    ]);
+    expect(await backend.getAdminGiveawayAudit(admin.sessionToken, giveaway.id)).toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({ action: "GIVEAWAY_LIVE_PRESENTATION_OPTED_IN" }),
+        expect.objectContaining({ action: "GIVEAWAY_LIVE_PRESENTATION_REVOKED" }),
+      ]),
     });
   });
 
@@ -996,7 +1133,7 @@ describe("in-memory event giveaway lifecycle", () => {
     ).rejects.toMatchObject({ code: "GIVEAWAY_CODE_INVALID" });
     await expect(
       backend.claimGiveawayCampaignCode(rider.sessionToken, giveaway.id, createdCode.code),
-    ).resolves.toEqual({ giveawayId: giveaway.id, status: "entered", entryCount: 2 });
+    ).resolves.toMatchObject({ giveawayId: giveaway.id, status: "entered", entryCount: 2 });
     await expect(
       backend.claimGiveawayCampaignCode(extra.sessionToken, giveaway.id, createdCode.code),
     ).rejects.toMatchObject({ code: "GIVEAWAY_CODE_UNAVAILABLE" });
@@ -1039,7 +1176,7 @@ describe("in-memory event giveaway lifecycle", () => {
         riderId: rider.user.id,
         reason: "Verified paper registration",
       }),
-    ).resolves.toEqual({ giveawayId: manual.giveaway.id, status: "entered", entryCount: 1 });
+    ).resolves.toMatchObject({ giveawayId: manual.giveaway.id, status: "entered", entryCount: 1 });
     await expect(
       backend.revokeManualGiveawayEntry(
         manual.organizer.sessionToken,
@@ -1080,7 +1217,7 @@ describe("in-memory event giveaway lifecycle", () => {
     });
     await expect(
       backend.getRiderGiveawayState(rider.sessionToken, perkCampaign.giveaway.id),
-    ).resolves.toEqual({ giveawayId: perkCampaign.giveaway.id, status: "entered", entryCount: 4 });
+    ).resolves.toMatchObject({ giveawayId: perkCampaign.giveaway.id, status: "entered", entryCount: 4 });
   });
 
   test("fails closed before lock when the draw key is invalid, then freezes one idempotent snapshot", async () => {
@@ -1171,10 +1308,10 @@ describe("in-memory event giveaway lifecycle", () => {
     await backend.redeemGiveawayPerk(context.rider.sessionToken, eventPerkId);
     await expect(
       backend.getRiderGiveawayState(context.rider.sessionToken, context.giveaway.id),
-    ).resolves.toEqual({ giveawayId: context.giveaway.id, status: "entered", entryCount: 5 });
+    ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered", entryCount: 5 });
     await expect(
       backend.getRiderGiveawayState(secondRider.sessionToken, context.giveaway.id),
-    ).resolves.toEqual({ giveawayId: context.giveaway.id, status: "entered", entryCount: 1 });
+    ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered", entryCount: 1 });
 
     await withDrawEncryptionKey(async () => {
       await backend.lockGiveaway(context.organizer.sessionToken, context.giveaway.id);
@@ -1259,7 +1396,7 @@ describe("in-memory event giveaway lifecycle", () => {
     ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     await expect(
       backend.optInToGiveaway(laterRider.sessionToken, firstCome.giveaway.id),
-    ).resolves.toEqual({ giveawayId: firstCome.giveaway.id, status: "entered", entryCount: 3 });
+    ).resolves.toMatchObject({ giveawayId: firstCome.giveaway.id, status: "entered", entryCount: 3 });
   });
 
   test("finalizes a declined direct first-come award, releases its item, and reallocates it", async () => {
@@ -3188,7 +3325,7 @@ describe("in-memory event giveaway lifecycle", () => {
     await backend.redeemGiveawayPerk(rider.sessionToken, perkId);
     await expect(
       backend.getRiderGiveawayState(rider.sessionToken, giveaway.id),
-    ).resolves.toEqual({ giveawayId: giveaway.id, status: "entered", entryCount: 1 });
+    ).resolves.toMatchObject({ giveawayId: giveaway.id, status: "entered", entryCount: 1 });
     await expect(backend.redeemGiveawayPerk(secondRider.sessionToken, perkId)).rejects.toMatchObject({
       code: "GIVEAWAY_PERK_UNAVAILABLE",
     });
@@ -3294,7 +3431,7 @@ describe("giveaway first-come fairness and entrant-facing configuration freezes"
     ).resolves.toMatchObject({ status: "claimable", award: expect.any(Object) });
     await expect(
       backend.getRiderGiveawayState(laterRequalifiedRider.sessionToken, giveaway.id),
-    ).resolves.toEqual({ giveawayId: giveaway.id, status: "entered", entryCount: 3 });
+    ).resolves.toMatchObject({ giveawayId: giveaway.id, status: "entered", entryCount: 3 });
   });
 
   test("refills a released pool from an already eligible rider when the prior winner loses only that pool group", async () => {
@@ -3347,7 +3484,7 @@ describe("giveaway first-come fairness and entrant-facing configuration freezes"
     });
     await expect(
       backend.getRiderGiveawayState(alreadyEligibleRider.sessionToken, context.giveaway.id),
-    ).resolves.toEqual({ giveawayId: context.giveaway.id, status: "entered", entryCount: 1 });
+    ).resolves.toMatchObject({ giveawayId: context.giveaway.id, status: "entered", entryCount: 1 });
 
     await backend.registerForEvent(context.rider.sessionToken, context.eventId, {
       status: "interested",

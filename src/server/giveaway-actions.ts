@@ -230,6 +230,16 @@ export async function getRiderGiveawayStateAction(giveawayId: string) {
   });
 }
 
+export async function setGiveawayLivePresentationPreferenceAction(
+  giveawayId: string,
+  optedIn: boolean,
+) {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.setGiveawayLivePresentationPreference(sessionToken, giveawayId, optedIn);
+  });
+}
+
 export async function setGiveawayWinnerPublicationAction(
   awardId: string,
   input: GiveawayWinnerPublicationInput,

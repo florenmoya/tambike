@@ -19,6 +19,7 @@ import {
   claimGiveawayCampaignCodeAction,
   listRiderGiveawayStatesForEventAction,
   optInToGiveawayAction,
+  setGiveawayLivePresentationPreferenceAction,
   setGiveawayWinnerPublicationAction,
 } from "@/server/giveaway-actions";
 
@@ -209,6 +210,71 @@ export function RiderGiveawayEntryControl({
   );
 }
 
+type RiderGiveawayLivePresentationControlProps = {
+  giveawayId: string;
+  giveawayState: GiveawayState;
+  livePresentation: NonNullable<RiderGiveawayState["livePresentation"]>;
+  onUpdate: (optedIn: boolean) => Promise<boolean> | boolean;
+};
+
+export function RiderGiveawayLivePresentationControl({
+  giveawayId,
+  giveawayState,
+  livePresentation,
+  onUpdate,
+}: RiderGiveawayLivePresentationControlProps) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const frozen = ["locked", "drawing", "claims_open", "completed"].includes(giveawayState);
+
+  async function updatePreference(optedIn: boolean) {
+    setPending(true);
+    setError(null);
+    try {
+      if (!(await onUpdate(optedIn))) {
+        setError("Your live-raffle display preference could not be updated.");
+      }
+    } catch {
+      setError("Your live-raffle display preference could not be updated.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section
+      className="grid gap-2 rounded-md border border-white/10 bg-white/[0.025] p-3"
+      aria-label="Live raffle name"
+    >
+      <label
+        className="flex items-start gap-2 text-xs font-bold text-white/78"
+        htmlFor={`live-raffle-name-${giveawayId}`}
+      >
+        <input
+          id={`live-raffle-name-${giveawayId}`}
+          checked={livePresentation.optedIn}
+          className="mt-0.5 size-4 accent-[#ffbe45]"
+          disabled={pending || !livePresentation.canUpdate}
+          onChange={(event) => void updatePreference(event.target.checked)}
+          type="checkbox"
+        />
+        <span>Show my first name + last initial during this live raffle</span>
+      </label>
+      <p className="m-0 text-xs text-white/65">
+        Safe preview: <strong className="text-white/85">{livePresentation.labelPreview}</strong>
+      </p>
+      {frozen ? (
+        <p className="m-0 text-xs text-white/58">
+          This control is disabled because the label was frozen when entries closed.
+        </p>
+      ) : !livePresentation.canUpdate ? (
+        <p className="m-0 text-xs text-white/58">Updates are available only while entries are open.</p>
+      ) : null}
+      {error ? <p className="m-0 text-xs text-[#ff9b94]" role="status">{error}</p> : null}
+    </section>
+  );
+}
+
 export function RiderGiveawayStatusPanel({
   eventId,
   enabled,
@@ -261,6 +327,13 @@ export function RiderGiveawayStatusPanel({
         ),
       };
     });
+    return true;
+  };
+
+  const updateLivePresentation = async (giveawayId: string, optedIn: boolean) => {
+    const next = await setGiveawayLivePresentationPreferenceAction(giveawayId, optedIn);
+    if (!next.ok) return false;
+    updateRiderGiveawayState(giveawayId, next.data);
     return true;
   };
 
@@ -370,6 +443,15 @@ export function RiderGiveawayStatusPanel({
                   onRefresh={refreshRiderGiveawayState}
                   riderStatus={giveaway.riderState.status}
                 />
+
+                {giveaway.riderState.livePresentation ? (
+                  <RiderGiveawayLivePresentationControl
+                    giveawayId={giveaway.giveawayId}
+                    giveawayState={giveaway.giveawayState}
+                    livePresentation={giveaway.riderState.livePresentation}
+                    onUpdate={(optedIn) => updateLivePresentation(giveaway.giveawayId, optedIn)}
+                  />
+                ) : null}
 
                 {award ? (
                   <div className="grid gap-2 border-t border-white/10 pt-3">

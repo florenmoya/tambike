@@ -98,6 +98,12 @@ import {
   type EncryptedDrawSeed,
 } from "./giveaways/draw-engine";
 import {
+  deriveGiveawayPresentationLabelPreview,
+  deriveGiveawayPresentationLabels,
+  isGiveawayLivePresentationOptedIn,
+  type GiveawayPresentationLabelKindValue,
+} from "./giveaways/presentation-labels";
+import {
   createGiveawayClaimToken,
   decryptGiveawayDeliveryPayload,
   encryptGiveawayDeliveryPayload,
@@ -192,6 +198,8 @@ export type AuditAction =
   | "GIVEAWAY_SUSPENDED"
   | "GIVEAWAY_ENTRY_RECONCILED"
   | "GIVEAWAY_ENTRY_OPTED_IN"
+  | "GIVEAWAY_LIVE_PRESENTATION_OPTED_IN"
+  | "GIVEAWAY_LIVE_PRESENTATION_REVOKED"
   | "GIVEAWAY_CAMPAIGN_CODE_CREATED"
   | "GIVEAWAY_CAMPAIGN_CODE_CLAIMED"
   | "GIVEAWAY_MANUAL_ENTRY_GRANTED"
@@ -352,6 +360,8 @@ type GiveawayEntryRecord = {
   campaignCodeId?: string;
   manualGrantActive?: boolean;
   opaquePublicReference: string;
+  livePresentationOptedInAt?: string;
+  livePresentationRevokedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -420,6 +430,8 @@ type GiveawaySnapshotEntryRecord = Readonly<{
   qualifiedGroupIds: readonly string[];
   qualifiedEligibilityGroupTimings: readonly GiveawayEligibilityGroupTiming[];
   rankSourceDigest: string;
+  presentationLabel?: string;
+  presentationLabelKind?: GiveawayPresentationLabelKindValue;
 }>;
 
 type GiveawaySnapshotRecord = {
@@ -1916,6 +1928,49 @@ export class TambikeBackend {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
     const giveaway = this.requireGiveaway(giveawayId);
+    return this.toRiderGiveawayState(giveaway, rider.id);
+  }
+
+  async setGiveawayLivePresentationPreference(
+    sessionToken: string,
+    giveawayId: string,
+    optedIn: boolean,
+  ): Promise<RiderGiveawayState> {
+    const rider = this.requireGiveawayRider(sessionToken);
+    if (typeof optedIn !== "boolean") throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    const giveaway = this.requireGiveaway(giveawayId);
+    if (giveaway.state !== "open") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_OPEN", "GIVEAWAY_ENTRY_NOT_OPEN");
+    }
+    const entry = giveaway.entriesByRider.get(rider.id);
+    if (!entry || entry.status !== "eligible") {
+      throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+    }
+    if (!optedIn && !isGiveawayLivePresentationOptedIn({
+      optedInAt: entry.livePresentationOptedInAt,
+      revokedAt: entry.livePresentationRevokedAt,
+    })) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const now = new Date().toISOString();
+    if (optedIn) {
+      entry.livePresentationOptedInAt = now;
+      entry.livePresentationRevokedAt = undefined;
+    } else {
+      entry.livePresentationRevokedAt = now;
+    }
+    entry.updatedAt = now;
+    this.auditGiveaway(
+      giveaway,
+      rider.id,
+      optedIn
+        ? "GIVEAWAY_LIVE_PRESENTATION_OPTED_IN"
+        : "GIVEAWAY_LIVE_PRESENTATION_REVOKED",
+      "entry",
+      entry.id,
+      { optedIn },
+    );
     return this.toRiderGiveawayState(giveaway, rider.id);
   }
 
@@ -3761,10 +3816,25 @@ export class TambikeBackend {
     const entries = Array.from(giveaway.entriesByRider.values())
       .filter((entry) => entry.status === "eligible")
       .sort((left, right) => left.opaquePublicReference.localeCompare(right.opaquePublicReference));
+    const presentationLabels = new Map(
+      deriveGiveawayPresentationLabels(
+        entries.map((entry) => ({
+          entryId: entry.id,
+          opaquePublicReference: entry.opaquePublicReference,
+          displayName: this.users.get(entry.riderId)?.displayName ?? "",
+          optedIn: isGiveawayLivePresentationOptedIn({
+            optedInAt: entry.livePresentationOptedInAt,
+            revokedAt: entry.livePresentationRevokedAt,
+          }),
+        })),
+      ).map((label) => [label.entryId, label]),
+    );
     const configDigest = this.calculateGiveawayConfigDigest(giveaway, mechanics.id);
     const snapshotEntries: readonly GiveawaySnapshotEntryRecord[] = Object.freeze(
-      entries.map((entry) =>
-        Object.freeze({
+      entries.map((entry) => {
+        const presentation = presentationLabels.get(entry.id);
+        if (!presentation) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+        return Object.freeze({
           id: `giveaway-snapshot-entry-${randomUUID()}`,
           entryId: entry.id,
           riderId: entry.riderId,
@@ -3789,8 +3859,10 @@ export class TambikeBackend {
               }),
             )
             .digest("hex"),
-        }),
-      ),
+          presentationLabel: presentation.presentationLabel,
+          presentationLabelKind: presentation.presentationLabelKind,
+        });
+      }),
     );
     const snapshotDigest = createHash("sha256")
       .update(
@@ -4885,6 +4957,7 @@ export class TambikeBackend {
     if (entry.status === "disqualified") {
       return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
     }
+    const livePresentation = this.toRiderGiveawayLivePresentation(giveaway, entry);
     const proof = this.toRiderGiveawayDrawProof(giveaway, entry);
     const award = giveaway.awards
       .filter(
@@ -4910,6 +4983,7 @@ export class TambikeBackend {
         giveawayId: giveaway.id,
         status: "entered",
         entryCount: entry.currentWeight,
+        livePresentation,
         ...(proof ? { proof } : {}),
       };
     }
@@ -4919,6 +4993,7 @@ export class TambikeBackend {
       giveawayId: giveaway.id,
       status: award.status as RiderGiveawayState["status"],
       entryCount: entry.currentWeight,
+      livePresentation,
       award: {
         awardId: award.id,
         prizePoolTitle: pool.title,
@@ -4931,6 +5006,29 @@ export class TambikeBackend {
         },
       },
       ...(proof ? { proof } : {}),
+    };
+  }
+
+  private toRiderGiveawayLivePresentation(
+    giveaway: GiveawayAggregate,
+    entry: GiveawayEntryRecord,
+  ): NonNullable<RiderGiveawayState["livePresentation"]> {
+    const optedIn = isGiveawayLivePresentationOptedIn({
+      optedInAt: entry.livePresentationOptedInAt,
+      revokedAt: entry.livePresentationRevokedAt,
+    });
+    const frozenLabel = giveaway.snapshot?.entries.find(
+      (candidate) => candidate.entryId === entry.id,
+    )?.presentationLabel;
+    const preview = deriveGiveawayPresentationLabelPreview({
+      opaquePublicReference: entry.opaquePublicReference,
+      displayName: this.users.get(entry.riderId)?.displayName ?? "",
+      optedIn,
+    });
+    return {
+      optedIn,
+      canUpdate: giveaway.state === "open" && entry.status === "eligible",
+      labelPreview: frozenLabel ?? preview.presentationLabel,
     };
   }
 

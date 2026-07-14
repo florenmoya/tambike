@@ -97,6 +97,11 @@ import {
   rankFrozenWeightedEntries,
 } from "./giveaways/draw-engine";
 import {
+  deriveGiveawayPresentationLabelPreview,
+  deriveGiveawayPresentationLabels,
+  isGiveawayLivePresentationOptedIn,
+} from "./giveaways/presentation-labels";
+import {
   createGiveawayClaimToken,
   decryptGiveawayDeliveryPayload,
   encryptGiveawayDeliveryPayload,
@@ -1403,6 +1408,52 @@ export class PrismaTambikeBackend {
     return this.toRiderGiveawayState(giveaway, rider.id);
   }
 
+  async setGiveawayLivePresentationPreference(
+    sessionToken: string,
+    giveawayId: string,
+    optedIn: boolean,
+  ): Promise<RiderGiveawayState> {
+    const rider = await this.requireGiveawayRider(sessionToken);
+    if (typeof optedIn !== "boolean") throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+
+    return this.prisma.$transaction(async (tx) => {
+      const giveaway = await this.lockGiveawayCampaign(tx, giveawayId);
+      if (giveaway.status !== "open") {
+        throw new BackendError("GIVEAWAY_ENTRY_NOT_OPEN", "GIVEAWAY_ENTRY_NOT_OPEN");
+      }
+      const entry = await this.lockGiveawayEntry(tx, giveaway.id, rider.id);
+      if (!entry || entry.status !== "eligible") {
+        throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
+      }
+      if (!optedIn && !isGiveawayLivePresentationOptedIn({
+        optedInAt: entry.livePresentationOptedInAt,
+        revokedAt: entry.livePresentationRevokedAt,
+      })) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+
+      const now = new Date();
+      await tx.giveawayEntry.update({
+        where: { id: entry.id },
+        data: optedIn
+          ? { livePresentationOptedInAt: now, livePresentationRevokedAt: null }
+          : { livePresentationRevokedAt: now },
+      });
+      await this.auditGiveaway(
+        tx,
+        giveaway.id,
+        rider.id,
+        optedIn
+          ? "GIVEAWAY_LIVE_PRESENTATION_OPTED_IN"
+          : "GIVEAWAY_LIVE_PRESENTATION_REVOKED",
+        "entry",
+        entry.id,
+        { optedIn },
+      );
+      return this.toRiderGiveawayState(giveaway, rider.id, tx);
+    });
+  }
+
   /** Rider-only event list; hidden campaigns appear only when the rider has their own state. */
   async listRiderGiveawayStatesForEvent(
     sessionToken: string,
@@ -2298,11 +2349,31 @@ export class PrismaTambikeBackend {
       await this.reallocateImmediateGiveawayAwards(tx, giveaway);
 
       const eligibleEntries = lockedEntries.filter((entry) => entry.status === "eligible");
+      const riders = await tx.user.findMany({
+        where: { id: { in: eligibleEntries.map((entry) => entry.riderId) } },
+        select: { id: true, displayName: true },
+      });
+      const displayNamesByRider = new Map(riders.map((rider) => [rider.id, rider.displayName]));
+      const presentationLabels = new Map(
+        deriveGiveawayPresentationLabels(
+          eligibleEntries.map((entry) => ({
+            entryId: entry.id,
+            opaquePublicReference: entry.opaquePublicReference,
+            displayName: displayNamesByRider.get(entry.riderId) ?? "",
+            optedIn: isGiveawayLivePresentationOptedIn({
+              optedInAt: entry.livePresentationOptedInAt,
+              revokedAt: entry.livePresentationRevokedAt,
+            }),
+          })),
+        ).map((label) => [label.entryId, label]),
+      );
       const mechanics = this.currentGiveawayMechanics(giveaway);
       const configDigest = this.calculateGiveawayConfigDigest(giveaway, mechanics.id);
       const frozenEntries = eligibleEntries.map((entry) => {
         const qualifiedEligibilityGroupIds = this.entryQualifiedGroupIds(entry);
         const qualifiedEligibilityGroupTimings = this.entryQualifiedGroupTimings(entry);
+        const presentation = presentationLabels.get(entry.id);
+        if (!presentation) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
         return {
           id: `giveaway-snapshot-entry-${randomUUID()}`,
           entryId: entry.id,
@@ -2321,6 +2392,8 @@ export class PrismaTambikeBackend {
             qualifiedEligibilityGroupIds,
             qualifiedEligibilityGroupTimings,
           }),
+          presentationLabel: presentation.presentationLabel,
+          presentationLabelKind: presentation.presentationLabelKind,
         };
       });
       const snapshotDigest = this.calculateGiveawaySnapshotDigest(
@@ -2357,6 +2430,8 @@ export class PrismaTambikeBackend {
                 entry.qualifiedEligibilityGroupTimings,
               ),
               rankSourceDigest: entry.rankSourceDigest,
+              presentationLabel: entry.presentationLabel,
+              presentationLabelKind: entry.presentationLabelKind,
             })),
           },
         },
@@ -6456,6 +6531,11 @@ export class PrismaTambikeBackend {
     if (entry.status === "disqualified") {
       return { giveawayId: giveaway.id, status: "disqualified", entryCount: 0 };
     }
+    const livePresentation = await this.toRiderGiveawayLivePresentation(
+      giveaway,
+      entry,
+      client,
+    );
     const proof = await this.toRiderGiveawayDrawProof(giveaway, entry, client);
     const award = await client.giveawayAward.findFirst({
       where: {
@@ -6482,6 +6562,7 @@ export class PrismaTambikeBackend {
         giveawayId: giveaway.id,
         status: "entered",
         entryCount: entry.currentWeight,
+        livePresentation,
         ...(proof ? { proof } : {}),
       };
     }
@@ -6489,6 +6570,7 @@ export class PrismaTambikeBackend {
       giveawayId: giveaway.id,
       status: award.status as RiderGiveawayEntryStatus,
       entryCount: entry.currentWeight,
+      livePresentation,
       award: {
         awardId: award.id,
         prizePoolTitle: award.prizePool.title,
@@ -6501,6 +6583,44 @@ export class PrismaTambikeBackend {
         },
       },
       ...(proof ? { proof } : {}),
+    };
+  }
+
+  private async toRiderGiveawayLivePresentation(
+    giveaway: GiveawayConfiguration,
+    entry: {
+      id: string;
+      riderId: string;
+      status: string;
+      opaquePublicReference: string;
+      livePresentationOptedInAt: Date | null;
+      livePresentationRevokedAt: Date | null;
+    },
+    client: Prisma.TransactionClient | PrismaClient,
+  ): Promise<NonNullable<RiderGiveawayState["livePresentation"]>> {
+    const optedIn = isGiveawayLivePresentationOptedIn({
+      optedInAt: entry.livePresentationOptedInAt,
+      revokedAt: entry.livePresentationRevokedAt,
+    });
+    const [snapshotEntry, rider] = await Promise.all([
+      client.giveawaySnapshotEntry.findFirst({
+        where: { entryId: entry.id, snapshot: { is: { giveawayId: giveaway.id } } },
+        select: { presentationLabel: true },
+      }),
+      client.user.findUnique({
+        where: { id: entry.riderId },
+        select: { displayName: true },
+      }),
+    ]);
+    const preview = deriveGiveawayPresentationLabelPreview({
+      opaquePublicReference: entry.opaquePublicReference,
+      displayName: rider?.displayName ?? "",
+      optedIn,
+    });
+    return {
+      optedIn,
+      canUpdate: giveaway.status === "open" && entry.status === "eligible",
+      labelPreview: snapshotEntry?.presentationLabel ?? preview.presentationLabel,
     };
   }
 

@@ -22,6 +22,7 @@ describe("giveaway action and API contracts", () => {
     expect(source).toContain("replaceManualGiveawayAwardAction");
     expect(source).toContain("getAdminGiveawayAuditAction");
     expect(source).toContain("listGiveawayOperatorClaimsAction");
+    expect(source).toContain("setGiveawayLivePresentationPreferenceAction");
     expect(source).not.toContain("exportGiveawayCsv");
     expect(source).not.toContain("console.");
   });

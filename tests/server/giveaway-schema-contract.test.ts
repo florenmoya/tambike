@@ -19,6 +19,13 @@ const publicGiveawayProofMigrationSql = readFileSync(
   ),
   "utf8",
 );
+const liveRafflePresentationMigrationSql = readFileSync(
+  resolve(
+    process.cwd(),
+    "prisma/migrations/20260715000000_live_raffle_presentation/migration.sql",
+  ),
+  "utf8",
+);
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
 const prismaSeed = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
 
@@ -62,6 +69,7 @@ const requiredEnums = {
     "manual_revoke",
     "source_revalidated",
   ],
+  GiveawayPresentationLabelKind: ["consented_name", "masked"],
   GiveawayAwardMode: ["random_draw", "first_come", "guaranteed", "manual_selection"],
   GiveawayPrizeItemStatus: ["available", "reserved", "fulfilled", "voided"],
   GiveawayDrawType: ["initial", "redraw"],
@@ -381,6 +389,49 @@ describe("giveaway Prisma schema contract", () => {
     expect(publicGiveawayProofMigrationSql).toContain(
       'CREATE TRIGGER "GiveawayAward_public_winner_alias_guard"',
     );
+  });
+
+  test("adds nullable live-presentation consent and frozen snapshot labels without rewriting history", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const entry = models.get("GiveawayEntry");
+    const snapshotEntry = models.get("GiveawaySnapshotEntry");
+
+    expect(entry?.fields.find((field) => field.name === "livePresentationOptedInAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(entry?.fields.find((field) => field.name === "livePresentationRevokedAt")).toMatchObject({
+      kind: "scalar",
+      type: "DateTime",
+    });
+    expect(snapshotEntry?.fields.find((field) => field.name === "presentationLabel")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(snapshotEntry?.fields.find((field) => field.name === "presentationLabelKind")).toMatchObject({
+      kind: "enum",
+      type: "GiveawayPresentationLabelKind",
+    });
+    expect(prismaSchema).toMatch(/livePresentationOptedInAt\s+DateTime\?\s*\n/);
+    expect(prismaSchema).toMatch(/livePresentationRevokedAt\s+DateTime\?\s*\n/);
+    expect(prismaSchema).toMatch(/presentationLabel\s+String\?\s*\n/);
+    expect(prismaSchema).toMatch(
+      /presentationLabelKind\s+GiveawayPresentationLabelKind\?\s*\n/,
+    );
+    expect(liveRafflePresentationMigrationSql).toContain(
+      'CREATE TYPE "GiveawayPresentationLabelKind" AS ENUM (\'consented_name\', \'masked\')',
+    );
+    expect(liveRafflePresentationMigrationSql).toContain(
+      'ADD COLUMN "livePresentationOptedInAt" TIMESTAMP(3)',
+    );
+    expect(liveRafflePresentationMigrationSql).toContain(
+      'ADD COLUMN "livePresentationRevokedAt" TIMESTAMP(3)',
+    );
+    expect(liveRafflePresentationMigrationSql).toContain('ADD COLUMN "presentationLabel" TEXT');
+    expect(liveRafflePresentationMigrationSql).toContain(
+      'ADD COLUMN "presentationLabelKind" "GiveawayPresentationLabelKind"',
+    );
+    expect(liveRafflePresentationMigrationSql).not.toMatch(/NOT NULL|UPDATE\s+"Giveaway/);
   });
 
   test("does not cap a prize pool to one current award per snapshot entry", () => {

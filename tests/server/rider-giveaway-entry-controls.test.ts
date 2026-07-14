@@ -10,10 +10,53 @@ vi.mock("../../src/server/giveaway-actions", () => ({
   claimGiveawayCampaignCodeAction: vi.fn(),
   listRiderGiveawayStatesForEventAction: vi.fn(),
   optInToGiveawayAction: vi.fn(),
+  setGiveawayLivePresentationPreferenceAction: vi.fn(),
   setGiveawayWinnerPublicationAction: vi.fn(),
 }));
 
 describe("rider giveaway entry controls", () => {
+  test("renders a separate live-raffle consent toggle, safe preview, and frozen explanation", async () => {
+    const riderPanelModule = (await import("../../src/features/giveaways/rider-giveaway-status-panel")) as Record<
+      string,
+      unknown
+    >;
+    const livePresentationControl = riderPanelModule.RiderGiveawayLivePresentationControl;
+
+    expect(livePresentationControl).toBeTypeOf("function");
+    if (typeof livePresentationControl !== "function") return;
+
+    const Control = livePresentationControl as React.ComponentType<{
+      giveawayId: string;
+      giveawayState: RiderEventGiveawayState["giveawayState"];
+      livePresentation: NonNullable<RiderEventGiveawayState["riderState"]["livePresentation"]>;
+      onUpdate: (optedIn: boolean) => void;
+    }>;
+    const editable = renderToStaticMarkup(
+      React.createElement(Control, {
+        giveawayId: "giveaway-open",
+        giveawayState: "open",
+        livePresentation: { optedIn: false, canUpdate: true, labelPreview: "Rider A1B2" },
+        onUpdate: () => undefined,
+      }),
+    );
+    const frozen = renderToStaticMarkup(
+      React.createElement(Control, {
+        giveawayId: "giveaway-locked",
+        giveawayState: "locked",
+        livePresentation: { optedIn: true, canUpdate: false, labelPreview: "Mina R." },
+        onUpdate: () => undefined,
+      }),
+    );
+
+    expect(editable).toContain("Show my first name + last initial during this live raffle");
+    expect(editable).toContain("Rider A1B2");
+    expect(editable).not.toContain("disabled=\"\"");
+    expect(frozen).toContain("Mina R.");
+    expect(frozen).toContain("label was frozen when entries closed");
+    expect(frozen).toContain("disabled=\"\"");
+    expect(frozen).not.toContain("Public winner alias");
+  });
+
   test("only offers self-entry for an open opt-in or campaign-code campaign without an existing entry", async () => {
     const surfaceStateModule = (await import("../../src/features/giveaways/giveaway-surface-state")) as Record<
       string,

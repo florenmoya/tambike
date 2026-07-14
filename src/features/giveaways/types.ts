@@ -275,6 +275,11 @@ export interface RiderGiveawayState {
   giveawayId: string;
   status: RiderGiveawayEntryStatus;
   entryCount: number;
+  livePresentation?: {
+    optedIn: boolean;
+    canUpdate: boolean;
+    labelPreview: string;
+  };
   award?: RiderGiveawayAwardSummary;
   proof?: RiderGiveawayDrawProof;
 }
