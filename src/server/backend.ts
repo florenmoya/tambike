@@ -678,6 +678,10 @@ type BackendSeed = {
 
 export type TambikeTestSeedOptions = {
   perkQuantities?: Record<string, number>;
+  /** Deterministic test seam for counterfactual draw comparisons. */
+  generateGiveawayDrawSeed?: () => Uint8Array;
+  /** Deterministic test seam for IDs that participate in frozen draw state. */
+  generateGiveawayUuid?: () => string;
 };
 
 const demoScannerPass = {
@@ -935,7 +939,12 @@ export class TambikeBackend {
   };
   private readonly audits: AuditRecord[] = [];
 
-  private constructor(seed: BackendSeed) {
+  private readonly generateGiveawayDrawSeed: () => Uint8Array;
+  private readonly generateGiveawayUuid: () => string;
+
+  private constructor(seed: BackendSeed, options: TambikeTestSeedOptions) {
+    this.generateGiveawayDrawSeed = options.generateGiveawayDrawSeed ?? generateDrawSeed;
+    this.generateGiveawayUuid = options.generateGiveawayUuid ?? randomUUID;
     for (const user of seed.users) {
       this.users.set(user.id, { ...user });
     }
@@ -968,8 +977,8 @@ export class TambikeBackend {
     }
   }
 
-  static async create(options?: TambikeTestSeedOptions) {
-    return new TambikeBackend(await createSeed(options));
+  static async create(options: TambikeTestSeedOptions = {}) {
+    return new TambikeBackend(await createSeed(options), options);
   }
 
   getSnapshot(sessionToken?: string) {
@@ -2355,7 +2364,7 @@ export class TambikeBackend {
     const seed = this.decryptGiveawayDrawSeed(snapshot);
     const now = new Date().toISOString();
     const draw: GiveawayDrawRecord = {
-      id: `giveaway-draw-${randomUUID()}`,
+      id: `giveaway-draw-${this.generateGiveawayUuid()}`,
       snapshotId: snapshot.id,
       sequence: giveaway.draws.length + 1,
       type: "initial",
@@ -3302,7 +3311,7 @@ export class TambikeBackend {
     if (!nextEntry) throw new BackendError("GIVEAWAY_AWARD_INVALID", "GIVEAWAY_AWARD_INVALID");
     const now = new Date().toISOString();
     const draw: GiveawayDrawRecord = {
-      id: `giveaway-draw-${randomUUID()}`,
+      id: `giveaway-draw-${this.generateGiveawayUuid()}`,
       snapshotId: snapshot.id,
       sequence: giveaway.draws.length + 1,
       type: "redraw",
@@ -3402,7 +3411,7 @@ export class TambikeBackend {
     }
     const now = new Date().toISOString();
     const draw: GiveawayDrawRecord = {
-      id: `giveaway-draw-${randomUUID()}`,
+      id: `giveaway-draw-${this.generateGiveawayUuid()}`,
       snapshotId: snapshot.id,
       sequence: giveaway.draws.length + 1,
       type: "initial",
@@ -3512,7 +3521,7 @@ export class TambikeBackend {
     );
     const now = new Date().toISOString();
     const draw: GiveawayDrawRecord = {
-      id: `giveaway-draw-${randomUUID()}`,
+      id: `giveaway-draw-${this.generateGiveawayUuid()}`,
       snapshotId: snapshot.id,
       sequence: giveaway.draws.length + 1,
       type: "redraw",
@@ -3835,7 +3844,7 @@ export class TambikeBackend {
         const presentation = presentationLabels.get(entry.id);
         if (!presentation) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
         return Object.freeze({
-          id: `giveaway-snapshot-entry-${randomUUID()}`,
+          id: `giveaway-snapshot-entry-${this.generateGiveawayUuid()}`,
           entryId: entry.id,
           riderId: entry.riderId,
           opaquePublicReference: entry.opaquePublicReference,
@@ -3884,7 +3893,7 @@ export class TambikeBackend {
       )
       .digest("hex");
     const snapshot: GiveawaySnapshotRecord = {
-      id: `giveaway-snapshot-${randomUUID()}`,
+      id: `giveaway-snapshot-${this.generateGiveawayUuid()}`,
       mechanicsVersionId: mechanics.id,
       mechanicsVersion: mechanics.version,
       configDigest,
@@ -4902,7 +4911,7 @@ export class TambikeBackend {
       );
     }
     try {
-      const seed = generateDrawSeed();
+      const seed = this.generateGiveawayDrawSeed();
       return {
         seed,
         encryptedSeed: encryptDrawSeed(seed, encryptionKey),
@@ -5268,7 +5277,7 @@ export class TambikeBackend {
     const entry =
       existing ??
       ({
-        id: `giveaway-entry-${randomUUID()}`,
+        id: `giveaway-entry-${this.generateGiveawayUuid()}`,
         riderId,
         status: "eligible",
         currentWeight: qualification.weight,
@@ -6239,7 +6248,7 @@ export class TambikeBackend {
     }
     const now = new Date().toISOString();
     const award: GiveawayAwardRecord = {
-      id: `giveaway-award-${randomUUID()}`,
+      id: `giveaway-award-${this.generateGiveawayUuid()}`,
       entryId: input.entry.id,
       drawId: input.draw?.id,
       prizePoolId: input.prizePool.id,
@@ -6320,7 +6329,7 @@ export class TambikeBackend {
   ): GiveawayAggregate {
     const now = new Date().toISOString();
     const giveaway: GiveawayAggregate = {
-      id: `giveaway-${randomUUID()}`,
+      id: `giveaway-${this.generateGiveawayUuid()}`,
       eventId,
       creatorUserId,
       organizerAttestedById: creatorUserId,
@@ -6382,7 +6391,7 @@ export class TambikeBackend {
 
     const groupIdByRequestId = new Map<string, string>();
     const persistedGroups = groups.map<GiveawayEligibilityGroupRecord>((group, position) => {
-      const id = `giveaway-eligibility-group-${randomUUID()}`;
+      const id = `giveaway-eligibility-group-${this.generateGiveawayUuid()}`;
       groupIdByRequestId.set(group.id, id);
       const persisted: GiveawayEligibilityGroupRecord = {
         id,
@@ -6391,7 +6400,7 @@ export class TambikeBackend {
         entryWeight: group.weight,
         enabled: true,
         conditions: group.conditions.map((condition) => ({
-          id: `giveaway-eligibility-condition-${randomUUID()}`,
+          id: `giveaway-eligibility-condition-${this.generateGiveawayUuid()}`,
           condition: { ...condition },
         })),
       };
@@ -6400,10 +6409,10 @@ export class TambikeBackend {
     });
 
     const persistedPools = prizePools.map<GiveawayPrizePoolRecord>((pool, position) => {
-      const id = `giveaway-prize-pool-${randomUUID()}`;
+      const id = `giveaway-prize-pool-${this.generateGiveawayUuid()}`;
       const items = pool.items.map<GiveawayPrizeItemRecord>((item, itemPosition) => {
         const persisted: GiveawayPrizeItemRecord = {
-          id: `giveaway-prize-item-${randomUUID()}`,
+          id: `giveaway-prize-item-${this.generateGiveawayUuid()}`,
           position: itemPosition,
           title: item.title,
           description: item.description,
@@ -6453,7 +6462,7 @@ export class TambikeBackend {
     if (!mechanics || !terms) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     const sponsorDisclosure = input?.sponsorDisclosure ?? current?.sponsorDisclosure;
     const record: GiveawayMechanicsVersionRecord = {
-      id: `giveaway-mechanics-${randomUUID()}`,
+      id: `giveaway-mechanics-${this.generateGiveawayUuid()}`,
       version: (current?.version ?? 0) + 1,
       mechanics,
       terms,
@@ -6859,7 +6868,7 @@ export class TambikeBackend {
     if (!existing) {
       const now = new Date().toISOString();
       const entry: GiveawayEntryRecord = {
-        id: `giveaway-entry-${randomUUID()}`,
+        id: `giveaway-entry-${this.generateGiveawayUuid()}`,
         riderId,
         status: "eligible",
         currentWeight: nextWeight,
