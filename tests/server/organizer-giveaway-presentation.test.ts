@@ -586,4 +586,32 @@ describe("organizer giveaway presentation read", () => {
       store.awardsById.delete(extraAward.id);
     }
   });
+
+  test("rejects a canonical foreign-campaign award carrying the requested draw id", async () => {
+    const scenario = await createScenario();
+    const other = await createCompletedCampaign({
+      backend: scenario.backend,
+      organizerToken: scenario.organizer.sessionToken,
+      adminToken: scenario.admin.sessionToken,
+      eventId: scenario.eventId,
+      title: "Foreign award owner",
+      idempotencyKey: "foreign-award-owner-draw",
+    });
+    const store = internalStore(scenario.backend);
+    const otherGiveaway = store.campaignsById.get(other.giveawayId)!;
+    const foreignAward = otherGiveaway.awards.find((award) => award.drawId === other.drawId)!;
+    const originalDrawId = foreignAward.drawId;
+    foreignAward.drawId = scenario.drawId;
+    try {
+      await expect(
+        scenario.backend.getOrganizerGiveawayPresentation(
+          scenario.organizer.sessionToken,
+          scenario.giveawayId,
+          scenario.drawId,
+        ),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    } finally {
+      foreignAward.drawId = originalDrawId;
+    }
+  });
 });
