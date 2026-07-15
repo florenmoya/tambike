@@ -43,7 +43,7 @@ describe("Tambike backend domain rules", () => {
       organizerProfileId: TAMBIKE_ORGANIZER_PROFILE_ID,
       role: "organizer",
     });
-    expect(snapshot.users.some((user) => user.role === "venue")).toBe(false);
+    expect(snapshot.users.map((user) => user.role)).not.toContain("venue");
     expect(
       snapshot.users.some((user) =>
         [

@@ -21,18 +21,18 @@ interface UploadItem {
 
 const initialUploads: UploadItem[] = [
   {
-    id: "org-bulk-july",
-    name: "organizer-verification-july.csv",
+    id: "event-location-july",
+    name: "event-location-review-july.csv",
     progress: 74,
     status: "validating",
-    detail: "Checking FB links, duplicate organizers, and approved venues.",
+    detail: "Checking event location names, map links, and duplicate drafts.",
   },
   {
-    id: "venue-owner-match",
-    name: "venue-owner-matching.xlsx",
+    id: "organizer-event-match",
+    name: "organizer-event-matching.xlsx",
     progress: 100,
     status: "completed",
-    detail: "18 venue records matched to approved staff accounts.",
+    detail: "18 event rows matched to the organizer account.",
   },
   {
     id: "event-risk-flags",
@@ -100,7 +100,7 @@ export default function FileUpload06() {
         <div className="flex items-center gap-2 text-muted-foreground">
           <UploadIcon className="size-5" />
           <div>
-            Drop organizer or venue validation files here, or{" "}
+            Drop organizer or event validation files here, or{" "}
             <Button
               variant="link"
               className="h-auto p-0 font-normal text-primary"

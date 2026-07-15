@@ -45,10 +45,7 @@ import {
   adminApproval,
   getEvent,
   getOrganizer,
-  getVenue,
   reportMetrics,
-  venues,
-  venueApproval,
 } from "./data";
 import { useDemo } from "./demo-provider";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
@@ -78,31 +75,6 @@ export type TambikeView =
   | "login"
   | "signup"
   | "profile"
-  | "organizer-apply"
-  | "organizer-dashboard"
-  | "organizer-events"
-  | "organizer-create"
-  | "organizer-event"
-  | "organizer-attendees"
-  | "organizer-scanner"
-  | "organizer-report"
-  | "organizer-reports"
-  | "venue-dashboard"
-  | "venue-requests"
-  | "venue-events"
-  | "venue-request"
-  | "venue-checkin"
-  | "venue-report"
-  | "venue-reports"
-  | "admin-dashboard"
-  | "admin-organizers"
-  | "admin-event-reviews"
-  | "admin-event-review"
-  | "admin-moderation"
-  | "admin-users"
-  | "admin-leads"
-  | "admin-reports"
-  | "admin-report"
   | "event-register"
   | "event-test-ride";
 
@@ -117,7 +89,6 @@ const roleLabels: Record<Role, string> = {
   guest: "Guest",
   rider: "Rider",
   organizer: "Organizer",
-  venue: "Venue",
   admin: "Admin",
 };
 
@@ -193,11 +164,6 @@ const panelLinkByRole: Partial<Record<Role, PanelLink>> = {
     href: "/organizer/dashboard",
     icon: Gauge,
   },
-  venue: {
-    label: "Venue console",
-    href: "/venue/dashboard",
-    icon: Building2,
-  },
   admin: {
     label: "Admin console",
     href: "/admin",
@@ -233,9 +199,7 @@ const footerLinkGroups: Array<{
     title: "Workspaces",
     ariaLabel: "Footer workspace links",
     links: [
-      { label: "Organizer application", href: "/organizer/apply" },
       { label: "Organizer console", href: "/organizer/dashboard", roles: ["organizer"] },
-      { label: "Venue console", href: "/venue/dashboard", roles: ["venue"] },
       { label: "Admin console", href: "/admin", roles: ["admin"] },
     ],
   },
@@ -333,174 +297,6 @@ const protectedViews: Partial<
     }
   >
 > = {
-  "organizer-dashboard": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use an approved host account to manage events.",
-    roleTitle: "Host access needed",
-    roleBody: "This area is for approved event hosts.",
-  },
-  "organizer-events": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use an approved host account to manage events.",
-    roleTitle: "Host access needed",
-    roleBody: "This area is for approved event hosts.",
-  },
-  "organizer-create": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Only approved organizer accounts can create event drafts.",
-    roleTitle: "Host access needed",
-    roleBody: "Apply as an organizer before creating event drafts.",
-  },
-  "organizer-event": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use an approved host account to manage events.",
-    roleTitle: "Host access needed",
-    roleBody: "This area is for approved event hosts.",
-  },
-  "organizer-attendees": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use an approved host account to manage attendees.",
-    roleTitle: "Host access needed",
-    roleBody: "This area is for approved event hosts.",
-  },
-  "organizer-scanner": {
-    allowed: ["organizer", "venue", "admin"],
-    loginTitle: "Log in to scan passes",
-    loginBody: "Use an event, venue, or ops account.",
-    roleTitle: "Scanner access needed",
-    roleBody: "Use an account assigned to event check-in.",
-  },
-  "organizer-report": {
-    allowed: ["organizer", "venue", "admin"],
-    loginTitle: "Log in to view reports",
-    loginBody: "Use an event, venue, or ops account.",
-    roleTitle: "Report access needed",
-    roleBody: "Use an account assigned to this event.",
-  },
-  "organizer-reports": {
-    allowed: ["organizer", "admin"],
-    loginTitle: "Log in to view reports",
-    loginBody: "Use an approved host account to view event reports.",
-    roleTitle: "Host access needed",
-    roleBody: "Reports are available to approved event hosts.",
-  },
-  "venue-dashboard": {
-    allowed: ["venue", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a venue account to manage requests.",
-    roleTitle: "Venue access needed",
-    roleBody: "Use an account assigned to this venue.",
-  },
-  "venue-requests": {
-    allowed: ["venue", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a venue account to review requests.",
-    roleTitle: "Venue access needed",
-    roleBody: "Use an account assigned to this venue.",
-  },
-  "venue-events": {
-    allowed: ["venue", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a venue account to manage events.",
-    roleTitle: "Venue access needed",
-    roleBody: "Use an account assigned to this venue.",
-  },
-  "venue-request": {
-    allowed: ["venue", "admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a venue account to review this request.",
-    roleTitle: "Venue access needed",
-    roleBody: "Use an account assigned to this venue.",
-  },
-  "venue-checkin": {
-    allowed: ["venue", "organizer", "admin"],
-    loginTitle: "Log in to scan passes",
-    loginBody: "Use an event, venue, or ops account.",
-    roleTitle: "Scanner access needed",
-    roleBody: "Use an account assigned to event check-in.",
-  },
-  "venue-report": {
-    allowed: ["venue", "organizer", "admin"],
-    loginTitle: "Log in to view reports",
-    loginBody: "Use an event, venue, or ops account.",
-    roleTitle: "Report access needed",
-    roleBody: "Use an account assigned to this event.",
-  },
-  "venue-reports": {
-    allowed: ["venue", "admin"],
-    loginTitle: "Log in to view reports",
-    loginBody: "Use a venue account to view event reports.",
-    roleTitle: "Venue access needed",
-    roleBody: "Reports are available to venue staff assigned to these events.",
-  },
-  "admin-dashboard": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-organizers": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-event-reviews": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-event-review": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-moderation": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-users": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-leads": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-reports": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
-  "admin-report": {
-    allowed: ["admin"],
-    loginTitle: "Log in to continue",
-    loginBody: "Use a Tambike ops account.",
-    roleTitle: "Ops access needed",
-    roleBody: "Use a Tambike ops account.",
-  },
 };
 
 export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenProps) {
@@ -530,31 +326,6 @@ export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenP
       {view === "login" && <LoginScreen nextHref={nextHref} />}
       {view === "signup" && <SignupScreen />}
       {view === "profile" && <ProfileScreen />}
-      {view === "organizer-apply" && <OrganizerApplyScreen />}
-      {view === "organizer-dashboard" && <OrganizerDashboard />}
-      {view === "organizer-events" && <OrganizerEventsScreen />}
-      {view === "organizer-create" && <CreateEventScreen />}
-      {view === "organizer-event" && <OrganizerEventStatus eventId={id} />}
-      {view === "organizer-attendees" && <AttendeesScreen eventId={id} />}
-      {view === "organizer-scanner" && <ScannerScreen eventId={id} owner="organizer" />}
-      {view === "organizer-report" && <ReportScreen eventId={id} owner="organizer" />}
-      {view === "organizer-reports" && <ReportsIndexScreen owner="organizer" />}
-      {view === "venue-dashboard" && <VenueDashboard />}
-      {view === "venue-requests" && <VenueRequestsScreen />}
-      {view === "venue-events" && <VenueEventsScreen />}
-      {view === "venue-request" && <VenueRequestScreen requestId={id} />}
-      {view === "venue-checkin" && <ScannerScreen eventId={id} owner="venue" />}
-      {view === "venue-report" && <ReportScreen eventId={id} owner="venue" />}
-      {view === "venue-reports" && <ReportsIndexScreen owner="venue" />}
-      {view === "admin-dashboard" && <AdminDashboard />}
-      {view === "admin-organizers" && <AdminQueue title="Organizer verifications" />}
-      {view === "admin-event-reviews" && <AdminEventReviews />}
-      {view === "admin-event-review" && <AdminEventReview reviewId={id} />}
-      {view === "admin-moderation" && <AdminModerationScreen />}
-      {view === "admin-users" && <AdminUsersScreen />}
-      {view === "admin-leads" && <AdminLeadsScreen />}
-      {view === "admin-reports" && <ReportsIndexScreen owner="admin" />}
-      {view === "admin-report" && <ReportScreen eventId={id} owner="admin" />}
     </>
   );
   const guard = protectedViews[view];
@@ -684,7 +455,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="header-actions">
           {showHostCta && (
-            <Link className="host-event-link" href="/organizer/apply" aria-label="Host an Event">
+            <Link className="host-event-link" href="/organizer/dashboard" aria-label="Host an Event">
               <CalendarPlus aria-hidden="true" />
               <span>Host an Event</span>
             </Link>
@@ -765,7 +536,7 @@ function TambikeFooter() {
           <div className="footer-callout">
             <span>Ride bulletin</span>
             <p>
-              Built for tambike nights, charity rides, track days, and venue-hosted motorcycle
+              Built for tambike nights, charity rides, track days, and location-based motorcycle
               ganaps.
             </p>
           </div>
@@ -1212,7 +983,6 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
 function EventDetail({ eventId }: { eventId?: string }) {
   const { authNotice, currentUser, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
   const event = findEvent(events, eventId);
-  const venue = getVenue(event.venueId);
   const organizer = getOrganizer(event.organizerId);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState("");
@@ -1304,8 +1074,8 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 <strong>{event.time}</strong>
               </div>
               <div>
-                <span>Venue</span>
-                <strong>{venue.area}</strong>
+                <span>Location</span>
+                <strong>{event.locationName}</strong>
               </div>
             </div>
           </div>
@@ -1335,7 +1105,7 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 Verified organizer · {organizer.pastEvents} previous events · {organizer.fbLink}
               </p>
             </InfoPanel>
-            <InfoPanel eyebrow="Rules" title="Safety and venue notes">
+            <InfoPanel eyebrow="Rules" title="Safety and location notes">
               <div className="chip-list">
                 {event.rules.map((rule) => (
                   <span key={rule}>{rule}</span>
@@ -1371,16 +1141,16 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 <strong>{event.expectedRiders}</strong>
               </div>
             </div>
-            <div className="event-detail-venue-card">
+            <div className="event-detail-location-card">
               <Building2 aria-hidden="true" />
               <div>
-                <span>{venue.name}</span>
-                <strong>{venue.area}</strong>
-                <p>{venue.capacityNote}</p>
+                <span>{event.locationName}</span>
+                <strong>{event.area}</strong>
+                <p>{event.locationAddress}</p>
               </div>
             </div>
             {event.rideOut && (
-              <div className="event-detail-venue-card">
+              <div className="event-detail-location-card">
                 <Route aria-hidden="true" />
                 <div>
                   <span>Route</span>
@@ -1389,9 +1159,11 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 </div>
               </div>
             )}
-            <Link className="primary-action event-detail-map-link" href={venue.mapLink} target="_blank" rel="noreferrer">
-              Open Waze
-            </Link>
+            {event.locationMapLink ? (
+              <Link className="primary-action event-detail-map-link" href={event.locationMapLink} target="_blank" rel="noreferrer">
+                Open map
+              </Link>
+            ) : null}
           </aside>
         </div>
       </div>
@@ -1447,7 +1219,7 @@ function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
               checked={attendance === "direct"}
               onChange={() => setAttendance("direct")}
             />
-            <span>Go direct to venue</span>
+            <span>Go directly to the event location</span>
           </label>
           <label>
             <input
@@ -1650,7 +1422,6 @@ function PassDetail({ passId }: { passId?: string }) {
   }
 
   const event = findEvent(events, pass.eventId);
-  const venue = getVenue(event.venueId);
   const passIdValue = pass.id;
 
   return (
@@ -1667,7 +1438,7 @@ function PassDetail({ passId }: { passId?: string }) {
             <br />
             {event.date} · {event.time}
             <br />
-            Venue: {venue.name}
+            Location: {event.locationName}
           </p>
           <div className="qr-frame" aria-label="QR code for Tambike Pass">
             <QRCodeSVG value={pass.qrToken} size={188} level="M" />
@@ -1677,9 +1448,11 @@ function PassDetail({ passId }: { passId?: string }) {
             <span>Pass ID: {passIdValue}</span>
           </div>
           <div className="pass-actions">
-            <Link className="checkout-button as-link" href={venue.mapLink}>
-              Open Waze
-            </Link>
+            {event.locationMapLink ? (
+              <Link className="checkout-button as-link" href={event.locationMapLink}>
+                Open map
+              </Link>
+            ) : null}
             <Link className="buy-secondary as-link" href={`/events/${event.id}`}>
               View Event
             </Link>
@@ -1729,7 +1502,7 @@ function PassCard({ event, pass }: { event: Event; pass: Pass }) {
   );
 }
 
-function ScannerScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "venue" }) {
+function ScannerScreen({ eventId }: { eventId?: string }) {
   const { events, scannerOutcome, setScannerOutcome, checkedInCount } = useDemo();
   const event = findEvent(events, eventId);
   const outcome = scannerCopy[scannerOutcome];
@@ -1767,7 +1540,7 @@ function ScannerScreen({ eventId, owner }: { eventId?: string; owner: "organizer
         </div>
         <aside className={clsx("order-summary scanner-result", outcome.tone)}>
           <div className="buy-section-title">
-            <span>{owner === "venue" ? "Venue scan" : "Organizer scan"}</span>
+            <span>Organizer scan</span>
             <h2>{outcome.title}</h2>
           </div>
           <p>{outcome.body}</p>
@@ -1790,75 +1563,6 @@ function ScannerScreen({ eventId, owner }: { eventId?: string; owner: "organizer
   );
 }
 
-function VenueRequestScreen({ requestId }: { requestId?: string }) {
-  const event = getEvent(venueApproval.eventId);
-  const venue = getVenue(event.venueId);
-  const { venueConditions, setVenueConditions, venueDecision, approveVenueWithConditions } =
-    useDemo();
-  const [error, setError] = useState("");
-
-  return (
-    <LightView>
-      <section className="request-layout">
-        <HeroPanel
-          eyebrow="Event request"
-          title="Venue request"
-          body={`${event.title} needs venue approval before it can move to admin review or publish.`}
-        />
-        <aside className="order-summary">
-          <div className="buy-section-title">
-            <span>Request {requestId ?? venueApproval.id}</span>
-            <h2>{venueDecision === "pending" ? "Pending venue decision" : "Venue approved"}</h2>
-          </div>
-          <p className="order-venue">
-            {venue.name} · Expected riders: {event.expectedRiders}
-          </p>
-          {venueDecision === "pending" ? (
-            <>
-              <textarea
-                className="condition-box"
-                aria-label="Venue conditions"
-                value={venueConditions}
-                onChange={(event) => setVenueConditions(event.target.value)}
-              />
-              <button
-                className="checkout-button"
-                type="button"
-                onClick={async () => {
-                  setError("");
-                  try {
-                    await approveVenueWithConditions();
-                  } catch (actionError) {
-                    setError(actionErrorMessage(actionError));
-                  }
-                }}
-              >
-                Approve with conditions
-              </button>
-              {error && <p className="inline-error" aria-live="polite">{error}</p>}
-            </>
-          ) : (
-            <PassStrip title="Approved with conditions" body={venueConditions} />
-          )}
-        </aside>
-        <div className="buy-main">
-          <InfoPanel eyebrow="Organizer" title={getOrganizer(event.organizerId).displayName}>
-            <p>Approved organizer · venue receives event details, risk flags, perks, and rules.</p>
-          </InfoPanel>
-          <InfoPanel eyebrow="Event summary" title={event.title}>
-            <div className="detail-grid">
-              <Detail label="Type" value={event.type} />
-              <Detail label="Date" value={`${event.date} · ${event.time}`} />
-              <Detail label="Perk" value={event.perkPreview} />
-              <Detail label="Ride-out" value={event.rideOut ? "Optional ride-out" : "No ride-out"} />
-            </div>
-          </InfoPanel>
-        </div>
-      </section>
-    </LightView>
-  );
-}
-
 function AdminEventReview({ reviewId }: { reviewId?: string }) {
   const event = getEvent(adminApproval.eventId);
   const { adminDecision, approvePublish } = useDemo();
@@ -1875,7 +1579,7 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
         <HeroPanel
           eyebrow="Admin review"
           title="Event review"
-          body="Risky events are reviewed before publishing to protect riders, venues, and organizers."
+          body="Risky events are reviewed before publishing to protect riders, locations, and organizers."
         />
         <aside className="order-summary">
           <div className="buy-section-title">
@@ -1918,11 +1622,10 @@ function AdminEventReview({ reviewId }: { reviewId?: string }) {
   );
 }
 
-function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "venue" | "admin" }) {
+function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "admin" }) {
   const { events } = useDemo();
   const event = findEvent(events, eventId);
-  const eyebrow =
-    owner === "admin" ? "Admin report" : owner === "venue" ? "Venue report" : "Organizer report";
+  const eyebrow = owner === "admin" ? "Admin report" : "Organizer report";
 
   if (!isReportableEvent(event)) {
     return (
@@ -1948,7 +1651,7 @@ function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer"
         <InfoPanel eyebrow="Notes" title="Post-event notes">
           <p>
             Parking flow was smooth after marshals were added. Sticker redemption ended at 8:04 PM.
-            Venue marked host-again as yes with quiet-exit reminder.
+            Location notes marked host-again as yes with quiet-exit reminder.
           </p>
         </InfoPanel>
       </div>
@@ -1956,7 +1659,7 @@ function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer"
   );
 }
 
-function ReportsIndexScreen({ owner }: { owner: "organizer" | "venue" | "admin" }) {
+function ReportsIndexScreen({ owner }: { owner: "organizer" | "admin" }) {
   const { currentUser, events } = useDemo();
   const isAdmin = currentUser?.role === "admin";
   const reports = events.filter((event) => {
@@ -1968,15 +1671,10 @@ function ReportsIndexScreen({ owner }: { owner: "organizer" | "venue" | "admin" 
       return true;
     }
 
-    if (owner === "venue") {
-      return event.venueId === currentUser?.venueId;
-    }
-
     return event.organizerId === currentUser?.organizerProfileId;
   });
   const reportHrefFor = (event: Event) => {
     if (owner === "admin") return `/admin/reports/${event.id}`;
-    if (owner === "venue") return `/venue/events/${event.id}/report`;
     return `/organizer/events/${event.id}/report`;
   };
   const copy = {
@@ -1986,16 +1684,10 @@ function ReportsIndexScreen({ owner }: { owner: "organizer" | "venue" | "admin" 
       body: "Post-event summaries for events owned by the logged-in organizer, with attendance and perk performance drill-downs.",
       detail: "Host-owned summaries",
     },
-    venue: {
-      title: "Venue reports",
-      eyebrow: "Venue reports",
-      body: "Venue-linked event summaries for attendance, peak arrivals, redemptions, issues, and host-again decisions.",
-      detail: "Venue-linked summaries",
-    },
     admin: {
       title: "Admin reports",
       eyebrow: "Admin reports",
-      body: "Operations view of event reports across organizers and venues for manual exports, moderation follow-up, and partner reporting.",
+      body: "Operations view of event reports across organizers and locations for manual exports, moderation follow-up, and partner reporting.",
       detail: "Platform summaries",
     },
   }[owner];
@@ -2045,13 +1737,12 @@ function OrganizerEventStatus({ eventId }: { eventId?: string }) {
       <HeroPanel
         eyebrow="Event status"
         title={event.title}
-        body="Track the path from draft to venue approval, admin review, publish, check-in, and report."
+        body="Track the path from draft to admin review, publish, check-in, and report."
       />
       <Timeline
         steps={[
           "Draft created",
-          "Submitted to venue",
-          "Venue approval pending",
+          "Submitted for admin review",
           "Admin review pending",
           "Published",
         ]}
@@ -2073,10 +1764,6 @@ function OrganizerDashboard() {
       }
     />
   );
-}
-
-function VenueDashboard() {
-  return <Dashboard title="Venue Dashboard" eyebrow="Event requests and check-ins" icon={Building2} />;
 }
 
 function AdminDashboard() {
@@ -2112,61 +1799,7 @@ function OrganizerEventsScreen() {
       ) : (
         <div className="empty-state">
           <h2>No organizer events yet</h2>
-          <p>Create a draft to start the venue and admin review path.</p>
-        </div>
-      )}
-    </LightView>
-  );
-}
-
-function VenueRequestsScreen() {
-  const event = getEvent(venueApproval.eventId);
-
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Venue requests"
-        title="Venue approval requests"
-        body="Events awaiting venue conditions, driveway checks, parking notes, and host approval."
-      />
-      <div className="queue-list">
-        <Link href={`/venue/requests/${venueApproval.id}`}>
-          <Building2 aria-hidden="true" />
-          <span>{event.title}</span>
-          <strong>Review request</strong>
-        </Link>
-      </div>
-    </LightView>
-  );
-}
-
-function VenueEventsScreen() {
-  const { currentUser, events } = useDemo();
-  const venueEvents = events.filter((event) =>
-    currentUser?.role === "admin" ? true : event.venueId === currentUser?.venueId,
-  );
-
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Venue events"
-        title="Venue-linked events"
-        body="Approved and pending events tied to this venue, with check-in and report entry points."
-      />
-      {venueEvents.length ? (
-        <div className="queue-list">
-          {venueEvents.map((event) => (
-            <Link key={event.id} href={`/venue/events/${event.id}`}>
-              <Building2 aria-hidden="true" />
-              <span>{event.title}</span>
-              <strong>{event.status.replaceAll("_", " ")}</strong>
-            </Link>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <h2>No venue-linked events yet</h2>
-          <p>Approved venue events will appear here after organizer submission.</p>
+          <p>Create a draft to start the admin review path.</p>
         </div>
       )}
     </LightView>
@@ -2204,7 +1837,7 @@ function AdminModerationScreen() {
         body="Open rider safety reports, event flags, and admin decisions stay separate from public rider pages."
       />
       <div className="queue-list">
-        {["Open rider safety reports", "Escalated event flag", "Resolved venue note"].map((item) => (
+        {["Open rider safety reports", "Escalated event flag", "Resolved location note"].map((item) => (
           <Link key={item} href="/admin/moderation">
             <AlertTriangle aria-hidden="true" />
             <span>{item}</span>
@@ -2224,7 +1857,7 @@ function AdminUsersScreen() {
       <HeroPanel
         eyebrow="Users"
         title="User management"
-        body="Review role, verification status, and suspension controls for rider, organizer, venue, and admin accounts."
+        body="Review role, verification status, and suspension controls for rider, organizer, and admin accounts."
       />
       <div className="queue-list user-management-list">
         {users.map((user) => (
@@ -2261,7 +1894,7 @@ function Dashboard({
       {action}
       <div className="dashboard-grid">
         {[
-          ["Pending approvals", "3", "Organizer, venue, and event queues"],
+          ["Pending approvals", "3", "Organizer and event queues"],
           ["Published events", "12", "Public ganaps visible in Explore"],
           ["Today check-ins", "68", "Event-day QR scans"],
           ["Reports ready", "4", "Post-event summaries"],
@@ -2282,7 +1915,7 @@ function CreateEventScreen() {
   const { createEventDraft, currentUser } = useDemo();
   const [createdEvent, setCreatedEvent] = useState<Event | null>(null);
   const [error, setError] = useState("");
-  const steps = ["Event Type", "Basic Details", "Venue", "Ride / Meetup", "Perks", "Rules", "Review"];
+  const steps = ["Event Type", "Basic Details", "Location", "Ride / Meetup", "Perks", "Rules", "Review"];
 
   if (!currentUser) {
     return <AuthRequired title="Log in to create events" body="Only approved organizer accounts can create event drafts in the MVP flow." />;
@@ -2296,8 +1929,8 @@ function CreateEventScreen() {
           title="Apply before creating events"
           body="MVP rules allow riders to browse and register, but only approved organizers can create publishable event drafts."
         />
-        <Link className="checkout-button as-link" href="/organizer/apply">
-          Apply as organizer
+        <Link className="checkout-button as-link" href="/organizer/dashboard">
+          Open organizer console
         </Link>
       </LightView>
     );
@@ -2310,11 +1943,11 @@ function CreateEventScreen() {
           <HeroPanel
             eyebrow="Create Event Wizard"
             title="Draft created"
-            body="Needs venue approval before it can move to admin review or public publishing."
+            body="Needs admin review before it can move to public publishing."
           />
           <InfoPanel eyebrow="Event draft" title={createdEvent.title}>
             <div className="detail-grid">
-              <Detail label="Status" value="Needs venue approval" />
+              <Detail label="Status" value="Pending admin review" />
               <Detail label="Type" value={createdEvent.type} />
               <Detail label="Date" value={`${createdEvent.date} · ${createdEvent.time}`} />
               <Detail label="Expected riders" value={String(createdEvent.expectedRiders)} />
@@ -2328,8 +1961,8 @@ function CreateEventScreen() {
         <>
           <HeroPanel
             eyebrow="Create Event Wizard"
-            title="Create a venue-approved ganap"
-            body="Create an event draft with the same MVP review path: organizer draft, venue approval, then admin review when required."
+            title="Create a location-based ganap"
+            body="Create an event draft with the current MVP review path: organizer draft, then admin review when required."
           />
           <Timeline steps={steps} />
           <form
@@ -2342,7 +1975,9 @@ function CreateEventScreen() {
                 const draft = await createEventDraft({
                   title: String(formData.get("title") ?? ""),
                   type: String(formData.get("type") ?? "Tambike") as EventType,
-                  venueId: String(formData.get("venueId") ?? venues[0].id),
+                  locationName: String(formData.get("locationName") ?? ""),
+                  locationAddress: String(formData.get("locationAddress") ?? ""),
+                  locationMapLink: String(formData.get("locationMapLink") ?? ""),
                   date: String(formData.get("date") ?? ""),
                   time: String(formData.get("time") ?? ""),
                   area: String(formData.get("area") ?? ""),
@@ -2371,14 +2006,16 @@ function CreateEventScreen() {
               </select>
             </label>
             <label className="checkout-field">
-              <span>Venue</span>
-              <select name="venueId" defaultValue={venues[0].id}>
-                {venues.map((venue) => (
-                  <option key={venue.id} value={venue.id}>
-                    {venue.name}
-                  </option>
-                ))}
-              </select>
+              <span>Location name</span>
+              <input name="locationName" required placeholder="Katipunan Bike Night Lot" />
+            </label>
+            <label className="checkout-field">
+              <span>Location address</span>
+              <input name="locationAddress" required placeholder="Katipunan, Quezon City" />
+            </label>
+            <label className="checkout-field">
+              <span>Map link</span>
+              <input name="locationMapLink" type="url" placeholder="https://maps.example.test/place" />
             </label>
             <label className="checkout-field">
               <span>Date label</span>
@@ -2431,7 +2068,6 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
 
   const destinationFor = (role: Role) => {
     if (role === "organizer") return "/organizer/dashboard";
-    if (role === "venue") return "/venue/dashboard";
     if (role === "admin") return "/admin";
     return "/profile";
   };
@@ -2785,12 +2421,11 @@ function AdminEventReviews() {
 
 function QueueList() {
   const event = getEvent(adminApproval.eventId);
-  const venue = getVenue(event.venueId);
   const organizer = getOrganizer(event.organizerId);
 
   return (
     <div className="queue-list">
-      {[event.title, `${venue.name} venue request`, `${organizer.displayName} organizer`].map((item) => (
+      {[event.title, `${event.locationName} location review`, `${organizer.displayName} organizer`].map((item) => (
         <Link key={item} href={`/admin/events/review/${adminApproval.id}`}>
           <FileCheck2 aria-hidden="true" />
           <span>{item}</span>

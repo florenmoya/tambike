@@ -32,14 +32,10 @@ vi.mock("../../src/features/giveaways/admin-giveaway-console", () => ({
 vi.mock("../../src/features/giveaways/giveaway-operator-workspace", () => ({
   GiveawayOperatorWorkspace: () => null,
 }));
-vi.mock("../../src/features/giveaways/venue-giveaway-queue", () => ({
-  VenueGiveawayQueue: () => null,
-}));
 
 import AdminGiveawayDetailPage from "../../src/app/admin/giveaways/[giveawayId]/page";
 import AdminGiveawaysPage from "../../src/app/admin/giveaways/page";
 import GiveawayOpsPage from "../../src/app/giveaway-ops/[eventId]/page";
-import VenueGiveawaysPage from "../../src/app/venue/events/[eventId]/giveaways/page";
 
 const campaign = {
   id: "giveaway-1",
@@ -144,22 +140,6 @@ describe("giveaway operations routes", () => {
     });
   });
 
-  test("keeps the venue route to its safe event queue and an operator-desk link", async () => {
-    mocks.listQueue.mockResolvedValueOnce({
-      ok: true,
-      code: "OK",
-      data: [],
-    });
-
-    const element = await VenueGiveawaysPage({ params: Promise.resolve({ eventId: campaign.eventId }) });
-
-    expect(mocks.listQueue).toHaveBeenCalledWith(campaign.eventId);
-    expect(element.props).toMatchObject({
-      eventId: campaign.eventId,
-      initialQueue: [],
-      initialError: null,
-    });
-  });
 });
 
 describe("giveaway operations UI boundaries", () => {
@@ -168,7 +148,6 @@ describe("giveaway operations UI boundaries", () => {
       [
         "../../src/features/giveaways/admin-giveaway-console.tsx",
         "../../src/features/giveaways/giveaway-operator-workspace.tsx",
-        "../../src/features/giveaways/venue-giveaway-queue.tsx",
         "../../src/app/admin/giveaways/[giveawayId]/page.tsx",
         "../../src/app/giveaway-ops/[eventId]/page.tsx",
       ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
@@ -196,12 +175,12 @@ describe("giveaway operations UI boundaries", () => {
     expect(source).not.toMatch(/useDemo|DemoState|readGiveawayDeliveryDetailsAction|PrivateGiveawayDeliveryDetails|IssuedGiveawayClaimToken|sourceFact/i);
   });
 
-  test("links the scoped giveaway workspaces from the existing admin and venue consoles", async () => {
-    const [sidebarSource, adminSource, venueSource, operatorSource] = await Promise.all(
+  test("links the scoped giveaway workspaces from existing admin and organizer consoles", async () => {
+    const [sidebarSource, adminSource, organizerSource, operatorSource] = await Promise.all(
       [
         "../../src/components/app-sidebar.tsx",
         "../../src/features/admin/admin-console.tsx",
-        "../../src/features/venue/venue-console.tsx",
+        "../../src/features/organizer/organizer-console.tsx",
         "../../src/features/giveaways/giveaway-operator-workspace.tsx",
       ].map((path) => readFile(new URL(path, import.meta.url), "utf8")),
     );
@@ -209,9 +188,10 @@ describe("giveaway operations UI boundaries", () => {
     expect(sidebarSource).toContain('href: "/admin/giveaways"');
     expect(sidebarSource).toContain('section: "giveaways"');
     expect(adminSource).toContain('section === "giveaways"');
-    expect(venueSource).toContain("/venue/events/${activeEventId}/giveaways");
-    expect(venueSource).toContain("Open giveaway claims");
-    expect(operatorSource).toContain("/venue/events/${encodeURIComponent(eventId)}/giveaways");
+    expect(organizerSource).toContain("/giveaway-ops/${event.id}");
+    expect(organizerSource).toContain("Claim desk");
+    expect(operatorSource).toContain("/organizer/events/${encodeURIComponent(eventId)}/giveaways");
+    expect(operatorSource).not.toContain("/venue/");
     expect(operatorSource).not.toContain('href="/venue/events"');
   });
 });

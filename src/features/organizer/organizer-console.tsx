@@ -62,7 +62,8 @@ import {
 import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
 import { CheckInPolicyPanel } from "@/features/check-in/check-in-policy-panel";
 import { OrganizerGiveawayWorkspace } from "@/features/giveaways/organizer-giveaway-workspace";
-import { demoEvents, getVenue, mockUsers, venues } from "@/features/tambike-demo/data";
+import { demoEvents } from "@/features/tambike-demo/data";
+import { EVENT_LOCATION_LIMITS } from "@/features/tambike-demo/event-location";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type {
   CreateEventInput,
@@ -93,7 +94,7 @@ type OrganizerEventRow = {
   title: string;
   type: EventType;
   status: EventStatus;
-  venue: string;
+  location: string;
   riders: number;
   checkIns: number;
   date: string;
@@ -119,7 +120,7 @@ type SidebarMetrics = {
 const sectionCopy: Record<OrganizerSection, { title: string; description: string; status?: string }> = {
   overview: {
     title: "Organizer overview",
-    description: "Track event drafts, venue approvals, registrations, scanner activity, and reports.",
+    description: "Track event drafts, admin review, registrations, scanner activity, and reports.",
     status: "Host",
   },
   events: {
@@ -129,12 +130,12 @@ const sectionCopy: Record<OrganizerSection, { title: string; description: string
   },
   create: {
     title: "Create event",
-    description: "Prepare a draft for venue and admin review before riders see it.",
+    description: "Prepare a draft for admin review before riders see it.",
     status: "Draft",
   },
   event: {
     title: "Event workspace",
-    description: "Review event readiness, venue assignment, risk flags, and next actions.",
+    description: "Review event readiness, location details, risk flags, and next actions.",
     status: "Event",
   },
   attendees: {
@@ -518,7 +519,7 @@ function OverviewSection({
         <Card>
           <CardHeader>
             <CardTitle>Event queue</CardTitle>
-            <CardDescription>Organizer events that still need venue, admin, or rider-day attention.</CardDescription>
+            <CardDescription>Organizer events that still need admin or rider-day attention.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
@@ -607,7 +608,7 @@ function CreateEventSection({
         <CardHeader>
           <CardTitle>Event draft</CardTitle>
           <CardDescription>
-            Drafts enter venue and admin review before they appear on public event discovery.
+            Drafts enter admin review before they appear on public event discovery.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -626,7 +627,9 @@ function CreateEventSection({
               const draft = await createEventDraft({
                 title: String(formData.get("title") ?? ""),
                 type: String(formData.get("type") ?? "Tambike") as EventType,
-                venueId: String(formData.get("venueId") ?? ""),
+                locationName: String(formData.get("locationName") ?? ""),
+                locationAddress: String(formData.get("locationAddress") ?? ""),
+                locationMapLink: String(formData.get("locationMapLink") ?? ""),
                 date: String(formData.get("date") ?? ""),
                 time: String(formData.get("time") ?? ""),
                 area: String(formData.get("area") ?? ""),
@@ -660,22 +663,17 @@ function CreateEventSection({
                 ))}
               </select>
             </Field>
-            <Field label="Venue">
-              <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                name="venueId"
-                required
-                defaultValue={venues[0]?.id}
-              >
-                {venues.map((venue) => (
-                  <option key={venue.id} value={venue.id}>
-                    {venue.name} - {venue.area}
-                  </option>
-                ))}
-              </select>
+            <Field label="Location name">
+              <Input name="locationName" required maxLength={EVENT_LOCATION_LIMITS.name} placeholder="Shell Pugon" />
+            </Field>
+            <Field label="Location address">
+              <Input name="locationAddress" required maxLength={EVENT_LOCATION_LIMITS.address} placeholder="Antipolo, Rizal" />
+            </Field>
+            <Field label="Map link">
+              <Input name="locationMapLink" type="url" maxLength={EVENT_LOCATION_LIMITS.mapLink} placeholder="https://maps.example.test/place" />
             </Field>
             <Field label="Area">
-              <Input name="area" required placeholder="Katipunan, Quezon City" />
+              <Input name="area" required maxLength={EVENT_LOCATION_LIMITS.area} placeholder="Katipunan, Quezon City" />
             </Field>
             <Field label="Date label">
               <Input name="date" required placeholder="Sat - July 18" />
@@ -720,7 +718,6 @@ function EventDetailSection({ event }: { event: Event }) {
   const { checkInSettings, configureCheckIn, issueSelfCheckInQr } = useDemo();
   const [isSavingPolicy, setIsSavingPolicy] = React.useState(false);
   const [issuedQr, setIssuedQr] = React.useState<SelfCheckInQr | null>(null);
-  const venue = getVenue(event.venueId);
   const settings: EventCheckInSettings =
     checkInSettings.find((candidate) => candidate.eventId === event.id) ?? {
       eventId: event.id,
@@ -752,7 +749,7 @@ function EventDetailSection({ event }: { event: Event }) {
         <CardHeader>
           <CardTitle>{event.title}</CardTitle>
           <CardDescription>
-            {event.type} at {venue.name} in {event.area}
+            {event.type} at {event.locationName} in {event.area}
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -784,6 +781,9 @@ function EventDetailSection({ event }: { event: Event }) {
           </Button>
           <Button asChild variant="outline">
             <Link href={`/organizer/events/${event.id}/report`}>Open report</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/giveaway-ops/${event.id}`}>Claim desk</Link>
           </Button>
           <Button asChild variant="outline">
             <Link href={`/events/${event.id}`}>View public page</Link>
@@ -897,7 +897,7 @@ function ReportDetailSection({ event }: { event: Event }) {
           <InfoList
             title="Close-out"
             items={[
-              "Confirm venue issue notes.",
+              "Confirm location issue notes.",
               "Review no-show rate.",
               "Export attendee list.",
               "Archive event assets.",
@@ -979,7 +979,7 @@ const eventColumns: ColumnDef<OrganizerEventRow>[] = [
       <div className="min-w-64">
         <div className="font-medium">{row.original.title}</div>
         <div className="text-sm text-muted-foreground">
-          {row.original.venue} · {row.original.date}
+          {row.original.location} · {row.original.date}
         </div>
       </div>
     ),
@@ -1008,6 +1008,7 @@ const eventColumns: ColumnDef<OrganizerEventRow>[] = [
     { label: "Open workspace", href: `/organizer/events/${row.id}` },
     { label: "Attendees", href: `/organizer/events/${row.id}/attendees` },
     { label: "Scanner", href: `/organizer/events/${row.id}/scanner` },
+    { label: "Claim desk", href: `/giveaway-ops/${row.id}` },
     { label: "Report", href: `/organizer/events/${row.id}/report` },
   ]),
 ];
@@ -1134,7 +1135,7 @@ function EventStatusBadge({ status }: { status: EventStatus }) {
     );
   }
 
-  if (status === "PENDING_ADMIN_REVIEW" || status === "PENDING_VENUE_APPROVAL") {
+  if (status === "PENDING_ADMIN_REVIEW") {
     return <Badge variant="secondary">{formatStatus(status)}</Badge>;
   }
 
@@ -1155,8 +1156,7 @@ function getOrganizerEvents(currentUser: UserProfile, events: Event[]) {
     return events;
   }
 
-  const demoProfileId = mockUsers.find((user) => user.id === currentUser.id)?.organizerProfileId;
-  const organizerProfileIds = [currentUser.organizerProfileId, demoProfileId].filter(Boolean);
+  const organizerProfileIds = [currentUser.organizerProfileId].filter(Boolean);
 
   if (!organizerProfileIds.length) {
     return [];
@@ -1179,7 +1179,7 @@ function getOrganizerEventRows(events: Event[]): OrganizerEventRow[] {
     title: event.title,
     type: event.type,
     status: event.status,
-    venue: getVenue(event.venueId).name,
+    location: event.locationName,
     riders: event.going + event.interested,
     checkIns: getCheckIns(event),
     date: event.date,
@@ -1214,7 +1214,7 @@ function getSectionCards(events: Event[], checkedInCount: number): SectionCard[]
     {
       label: "In review",
       value: String(inReview),
-      detail: "Venue or admin checks before publishing",
+      detail: "Admin checks before publishing",
       trend: "Approvals",
       icon: <ClipboardCheckIcon data-icon="inline-start" />,
     },

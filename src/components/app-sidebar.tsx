@@ -11,7 +11,6 @@ import {
   ShieldCheckIcon,
   UploadCloudIcon,
   UsersIcon,
-  UserRoundCheckIcon,
 } from "lucide-react";
 
 import type { AdminSection } from "@/features/admin/admin-console";
@@ -31,7 +30,6 @@ import {
 } from "@/components/ui/sidebar";
 
 type SidebarMetric = {
-  pendingOrganizers: number;
   pendingEvents: number;
 };
 
@@ -47,13 +45,6 @@ const primaryNav: Array<{
     href: "/admin",
     section: "overview",
     icon: <GaugeIcon />,
-  },
-  {
-    title: "Organizer verification",
-    href: "/admin/verifications/organizers",
-    section: "organizers",
-    icon: <UserRoundCheckIcon />,
-    badge: "pendingOrganizers",
   },
   {
     title: "Event review",

@@ -139,7 +139,7 @@ describe("Prisma live giveaway presentation", () => {
         true,
       );
       const afterOptIn = new Date();
-      const expectedPresentationLabel = optedInState.livePresentation.labelPreview;
+      const expectedPresentationLabel = optedInState.livePresentation?.labelPreview;
       if (!expectedPresentationLabel) {
         throw new Error("PRESENTATION_LABEL_PREVIEW_MISSING");
       }

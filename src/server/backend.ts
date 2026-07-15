@@ -4218,9 +4218,7 @@ export class TambikeBackend {
   }
 
   listPublicUsers() {
-    return Array.from(this.users.values())
-      .filter((user) => !user.email.endsWith("@seed.tambike.local"))
-      .map(cloneUser);
+    return Array.from(this.users.values()).map(cloneUser);
   }
 
   listEvents(query?: EventQueryInput) {

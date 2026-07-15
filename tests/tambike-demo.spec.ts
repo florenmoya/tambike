@@ -24,16 +24,12 @@ test.beforeEach(async ({ request }) => {
 });
 
 const accountCredentials = {
-  rider: "mina.rider@example.com",
-  organizer: "marco.organizer@example.com",
-  venue: "ana.venue@example.com",
+  organizer: "organizer@bayanko.ph",
   admin: "admin@bayanko.ph",
 } as const;
 
 const accountPasswords = {
-  rider: "password123",
   organizer: "password123",
-  venue: "password123",
   admin: "secret_123",
 } as const;
 
@@ -42,6 +38,16 @@ async function logInAs(page: Page, role: keyof typeof accountCredentials) {
   await page.getByLabel(/Email/i).fill(accountCredentials[role]);
   await page.getByLabel(/Password/i).fill(accountPasswords[role]);
   await page.getByRole("button", { name: /^Log in$/i }).click();
+}
+
+async function signUpRider(page: Page, email: string, displayName = "Secure Rider") {
+  await page.goto("/signup");
+  await page.getByLabel(/Display name/i).fill(displayName);
+  await page.getByLabel(/Email/i).fill(email);
+  await page.getByLabel(/^Password$/i).fill("passw0rd!");
+  await page.getByLabel(/Confirm password/i).fill("passw0rd!");
+  await page.getByLabel(/Area \/ city/i).fill("Quezon City");
+  await page.getByRole("button", { name: /Create rider account/i }).click();
 }
 
 test("event discovery highlights the simple tambike sample", async ({ page }) => {
@@ -486,7 +492,7 @@ test("events page includes redesigned Tambike footer shortcuts", async ({ page }
   const footer = page.getByRole("contentinfo", { name: "Tambike footer" });
   await expect(footer).toBeVisible();
   await expect(footer.getByText("Ride bulletin")).toBeVisible();
-  await expect(footer.getByText("Built for tambike nights, charity rides, track days, and venue-hosted motorcycle ganaps.")).toBeVisible();
+  await expect(footer.getByText("Built for tambike nights, charity rides, track days, and location-based motorcycle ganaps.")).toBeVisible();
   await expect(footer.getByText(/Next checkpoint|Pass flow, event review|Featured ride/i)).toHaveCount(0);
   await expect(footer.getByText(/Mock/i)).toHaveCount(0);
   await expect(footer.getByRole("navigation", { name: "Footer event links" }).getByRole("link", { name: "Explore events" })).toHaveAttribute("href", "/events");
@@ -656,8 +662,8 @@ test("tablet app pages keep the utility navigation on one row", async ({ page })
   await expect(page.locator(".buy-topbar")).toHaveCount(0);
 });
 
-test("rider navigation separates discovery, passes, profile, and hosting", async ({ page }) => {
-  await logInAs(page, "rider");
+test("rider navigation separates discovery, passes, profile, and hosting", async ({ page }, testInfo) => {
+  await signUpRider(page, `nav.rider.${testInfo.project.name}.${Date.now()}@example.com`, "Navigation Rider");
   await expect(page).toHaveURL(/\/profile/);
 
   await page.goto("/events");
@@ -704,25 +710,25 @@ test("rider navigation separates discovery, passes, profile, and hosting", async
   await expect(homeShortcuts.getByRole("link", { name: "Near Me" })).toHaveCount(0);
 });
 
-test("guest can log in with seeded account data, view profile, and register for an event", async ({
+test("guest can create a rider account, view profile, and register for an event", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/events/tambike-cafe-classico");
 
   await expect(page.getByRole("heading", { name: /Tambike at Cafe Classico/i })).toBeVisible();
   await page.getByRole("button", { name: /^Going$/i }).click();
   await expect(page.getByRole("heading", { name: /Log in to get your Tambike Pass/i })).toBeVisible();
 
-  await logInAs(page, "rider");
+  const riderEmail = `rsvp.rider.${testInfo.project.name}.${Date.now()}@example.com`;
+  await signUpRider(page, riderEmail, "RSVP Rider");
 
   await expect(page).toHaveURL(/\/profile/);
-  await expect(page.getByRole("heading", { name: /Mina Rider/i })).toBeVisible();
-  await expect(page.getByText(/mina.rider@example.com/i)).toBeVisible();
-  await expect(page.getByText(/Motorcycle: Yamaha Mio Gear/i)).toBeVisible();
+  await expect(page.getByRole("heading", { name: /RSVP Rider/i })).toBeVisible();
+  await expect(page.getByText(new RegExp(riderEmail, "i"))).toBeVisible();
 
   await page.goto("/events/tambike-cafe-classico");
   await page.getByRole("button", { name: /^Going$/i }).click();
-  await page.getByLabel(/Go direct to venue/i).check();
+  await page.getByLabel(/Go directly to the event location/i).check();
   await page.getByRole("button", { name: /Get Tambike Pass/i }).click();
 
   await expect(page).toHaveURL(/\/passes\/pass-tambike-cafe-classico/);
@@ -731,15 +737,15 @@ test("guest can log in with seeded account data, view profile, and register for 
   await expect(page.locator(".qr-token")).toHaveCount(0);
 });
 
-test("email and password login signs in with seeded accounts", async ({ page }) => {
+test("email and password login signs in with the organizer seed account", async ({ page }) => {
   await page.goto("/login");
 
-  await page.getByLabel(/Email/i).fill("mina.rider@example.com");
+  await page.getByLabel(/Email/i).fill("organizer@bayanko.ph");
   await page.getByLabel(/Password/i).fill("password123");
   await page.getByRole("button", { name: /^Log in$/i }).click();
 
-  await expect(page).toHaveURL(/\/profile/);
-  await expect(page.getByRole("heading", { name: /Mina Rider/i })).toBeVisible();
+  await expect(page).toHaveURL(/\/organizer\/dashboard/);
+  await expect(page.getByRole("heading", { name: /Organizer Dashboard/i })).toBeVisible();
 });
 
 test("login and footer use production account copy", async ({ page }) => {
@@ -781,15 +787,13 @@ test("signup requires password and matching confirmation", async ({ page }, test
 
 test("guest and wrong-role users see protected route guards instead of operator controls", async ({
   page,
-}) => {
+}, testInfo) => {
   const protectedRoutes = [
     ["/admin", /Log in to continue/i],
     ["/admin/moderation", /Log in to continue/i],
     ["/organizer/events", /Log in to continue/i],
     ["/organizer/events/arai-hjc-charity-ride/scanner", /Log in to scan passes/i],
     ["/organizer/events/arai-hjc-charity-ride/report", /Log in to view reports/i],
-    ["/venue/requests", /Log in to continue/i],
-    ["/venue/events", /Log in to continue/i],
   ] as const;
 
   for (const [route, heading] of protectedRoutes) {
@@ -798,7 +802,7 @@ test("guest and wrong-role users see protected route guards instead of operator 
     await expect(page.getByRole("button", { name: /Approve|Valid pass|Export|Suspend/i })).toHaveCount(0);
   }
 
-  await logInAs(page, "rider");
+  await signUpRider(page, `guard.rider.${testInfo.project.name}.${Date.now()}@example.com`, "Guard Rider");
   await expect(page).toHaveURL(/\/profile/);
 
   await page.goto("/admin");
@@ -828,13 +832,6 @@ test("operator index routes render distinct MVP screens", async ({ page }) => {
   await expect(page).toHaveURL(/\/organizer\/dashboard/);
   await page.goto("/organizer/events");
   await expect(page.getByRole("heading", { name: /Organizer-owned events/i })).toBeVisible();
-
-  await logInAs(page, "venue");
-  await expect(page).toHaveURL(/\/venue\/dashboard/);
-  await page.goto("/venue/requests");
-  await expect(page.getByRole("heading", { name: /Venue approval requests/i })).toBeVisible();
-  await page.goto("/venue/events");
-  await expect(page.getByRole("heading", { name: "Venue-linked events", exact: true })).toBeVisible();
 });
 
 test("operator Reports nav opens reports indexes instead of one event report", async ({ page }) => {
@@ -843,14 +840,6 @@ test("operator Reports nav opens reports indexes instead of one event report", a
   await page.getByRole("navigation", { name: /Organizer navigation/i }).getByRole("link", { name: "Reports" }).click();
   await expect(page).toHaveURL(/\/organizer\/reports$/);
   await expect(page.getByRole("heading", { name: "Organizer reports", exact: true })).toBeVisible();
-  await expect(page.getByText("ARAI HJC Charity Ride")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "No reports yet", exact: true })).toBeVisible();
-
-  await logInAs(page, "venue");
-  await expect(page).toHaveURL(/\/venue\/dashboard/);
-  await page.getByRole("navigation", { name: /Venue navigation/i }).getByRole("link", { name: "Reports" }).click();
-  await expect(page).toHaveURL(/\/venue\/reports$/);
-  await expect(page.getByRole("heading", { name: "Venue reports", exact: true })).toBeVisible();
   await expect(page.getByText("ARAI HJC Charity Ride")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "No reports yet", exact: true })).toBeVisible();
 
@@ -876,13 +865,13 @@ test("event search filters listings through the q query parameter", async ({ pag
   await expect(page.locator(".event-grid .event-card h3")).toHaveText(["Makina Moto Expo Cebu"]);
 });
 
-test("share controls show copied or shared feedback", async ({ page }) => {
+test("share controls show copied or shared feedback", async ({ page }, testInfo) => {
   await page.goto("/events/tambike-cafe-classico");
 
   await page.getByRole("button", { name: /^Share$/i }).click();
   await expect(page.getByText(/Link copied|Shared/i)).toBeVisible();
 
-  await logInAs(page, "rider");
+  await signUpRider(page, `share.rider.${testInfo.project.name}.${Date.now()}@example.com`, "Share Rider");
   await expect(page).toHaveURL(/\/profile/);
   await page.goto("/events/tambike-cafe-classico");
   await page.getByRole("button", { name: /^Going$/i }).click();
@@ -929,7 +918,9 @@ test("approved organizer can create an event draft", async ({ page }) => {
 
   await page.getByLabel(/Event title/i).fill("Tambike Night at Katipunan");
   await page.getByLabel(/Event type/i).selectOption("Bike Night");
-  await page.getByLabel(/Venue/i).selectOption("shell-pugon");
+  await page.getByLabel(/Location name/i).fill("Katipunan Bike Night Lot");
+  await page.getByLabel(/Location address/i).fill("Katipunan Avenue, Quezon City");
+  await page.getByLabel(/Map link/i).fill("https://maps.example.com/katipunan-bike-night");
   await page.getByLabel(/Date label/i).fill("Sat · July 18");
   await page.getByLabel(/Time label/i).fill("7:00 PM - 10:00 PM");
   await page.getByLabel(/Area/i).fill("Katipunan, Quezon City");
@@ -941,7 +932,7 @@ test("approved organizer can create an event draft", async ({ page }) => {
   await expect(page.getByText("Event draft")).toBeVisible();
   await expect(page.getByText(/Mock event/i)).toHaveCount(0);
   await expect(page.getByText(/Tambike Night at Katipunan/i)).toBeVisible();
-  await expect(page.getByText("Needs venue approval", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pending admin review", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: /View draft event/i }).click();
   await expect(page.getByRole("heading", { name: /Tambike Night at Katipunan/i })).toBeVisible();
@@ -978,23 +969,6 @@ test("organizer scanner shows event-day validation states and report metrics", a
   await page.getByRole("link", { name: /Open event report/i }).click();
   await expect(page.getByRole("heading", { name: /Event report/i })).toBeVisible();
   await expect(page.getByText(/Conversion/i)).toBeVisible();
-});
-
-test("venue can approve an event request with conditions", async ({ page }) => {
-  await logInAs(page, "venue");
-  await expect(page).toHaveURL(/\/venue\/dashboard/);
-
-  await page.goto("/venue/requests/req-shell-pugon");
-
-  await expect(page.getByRole("heading", { name: /Venue request/i })).toBeVisible();
-  await expect(page.getByText(/Expected riders: 90/i)).toBeVisible();
-  await page
-    .getByLabel(/Venue conditions/i)
-    .fill("Parking marshals required. Quiet exit after 10 PM.");
-  await page.getByRole("button", { name: /Approve with conditions/i }).click();
-
-  await expect(page.getByText(/Approved with conditions/i)).toBeVisible();
-  await expect(page.getByText(/Parking marshals required/i)).toBeVisible();
 });
 
 test("admin can review and publish the risky event", async ({ page }) => {
