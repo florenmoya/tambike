@@ -168,6 +168,13 @@ export interface SignupInput extends ProfileInput {
   password: string;
 }
 
+export interface EventLocationInput {
+  locationName: string;
+  locationAddress: string;
+  locationMapLink?: string;
+  area: string;
+}
+
 export interface CreateEventInput {
   title: string;
   type: EventType;
