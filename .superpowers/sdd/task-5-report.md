@@ -1,35 +1,47 @@
-# Task 5 — Prisma giveaway lifecycle and entry parity
+## Task 5 report: Prisma backend, seed, and integration fixture parity
 
-## Implemented
+Status: DONE
 
-- Added the database-backed campaign configuration, review, lifecycle, public/rider read, and entry APIs to `PrismaTambikeBackend`.
-- Enforced organizer-owner/admin configuration authorization, admin-only compliance review and suspension, rider-only self-entry, and the existing pre-award owner/admin cancellation behavior.
-- Added interactive transactions with documented lock order: campaign, campaign code, entry, pool, item, then award. Campaign creation and configuration replacement pre-lock the Event row.
-- Implemented automatic qualification at campaign open and atomically inside the RSVP/pass and confirmed self/staff check-in Event transactions. Pending self-review arrivals do not reconcile.
-- Implemented eligibility parity for active RSVP/pass, confirmed check-in, staff-confirmed check-in, perk redemption, campaign code, and audited manual entry.
-- Implemented immediate unlimited `guaranteed` and ordered finite `first_come` direct awards, including void, item release, and chronological reallocation after qualification changes.
-- Added canonical hash-chained giveaway audit writes and kept private source facts, code hashes, audit payloads, and entrants out of public/rider DTOs and `getSnapshot`.
+### Changed files
 
-## Schema and migration corrections
+- `src/server/prisma-backend.ts`
+- `prisma/seed.ts`
+- `tests/prisma-integration/fixtures.ts`
+- `tests/prisma-integration/event-location.integration.test.ts`
+- `tests/prisma-integration/seed-policy.integration.test.ts`
+- `tests/prisma-integration/giveaway-draw.integration.test.ts`
+- `tests/prisma-integration/giveaway-live-presentation.integration.test.ts`
+- `tests/server/prisma-giveaway-lifecycle-contract.test.ts`
 
-- Persisted entry path, qualified group IDs, manual-grant state, and opt-in mechanics acknowledgement on `GiveawayEntry`.
-- Added campaign-level presence verification, campaign-code creator provenance, and an append-only `GiveawayCampaignCodeClaim` ledger unique by code/rider and code/idempotency key.
-- Added immutable direct-allocation provenance on awards, renamed undeployed draw/award `reason` fields to `reasonDigest`, and expanded the scope guard accordingly.
-- Added entry provenance, code-claim parentage, and append-only triggers to the existing undeployed giveaway migration.
+### Summary
 
-## Verification
+- Removed Prisma backend dependencies on `Venue`, `venueId`, `ownedVenues`, `approvalType`, `PENDING_VENUE_APPROVAL`, `approveVenueWithConditions`, and venue-owner authorization.
+- Prisma event creation now normalizes event-owned location input and creates organizer events directly in `PENDING_ADMIN_REVIEW`.
+- Admin publish now records event-specific admin review rows without `approvalType`.
+- Check-in and giveaway operation authorization now permits admin, owning approved organizer, and explicit giveaway operators.
+- Replaced the seed with canonical organizer/admin plus clean source `demoEvents` only; source `demoEvents.length` is 24.
+- Added reusable Prisma integration fixture builder for owned users/events/passes and moved giveaway integration tests onto it.
 
-- `npm run db:generate` — passed.
-- `npx prisma validate` — passed.
-- Focused contract tests (`prisma-giveaway-lifecycle-contract`, `giveaway-schema-contract`) — 19 passed.
-- `npm run test:server` — 8 files, 118 tests passed.
-- `npx tsc --noEmit` — passed.
-- `npm run lint` — passed.
-- `npm run build` — passed.
-- `git diff --check` — passed.
-- `npx prisma migrate status` — intentionally blocked: `DATABASE_URL`, `DIRECT_URL`, and related URLs are unset; Prisma reports that `datasource.url` is required. No persistent database command, migration, reset, push, or seed was run.
+### Commands and results
 
-## Deferred intentionally
+- `npx vitest run tests/server/prisma-giveaway-lifecycle-contract.test.ts tests/server/prisma-giveaway-perk-contract.test.ts`
+  - RED before implementation: failed on `approveVenueWithConditions`/venue residue.
+  - GREEN after implementation: 2 files passed, 29 tests passed.
+- `npm run db:generate`
+  - PASS; Prisma Client generated successfully.
+- `npm run test:prisma:prepare` with `TAMBIKE_RUN_PRISMA_INTEGRATION_TESTS=1`, `TAMBIKE_PREPARE_PRISMA_INTEGRATION_SCHEMA=1`, and `TAMBIKE_TEST_DATABASE_URL=postgresql://integration:password@127.0.0.1:5432/tambike_test_giveaways`
+  - PASS; no pending migrations on disposable loopback database.
+- `npx vitest run --config vitest.prisma-integration.config.ts tests/prisma-integration/event-location.integration.test.ts tests/prisma-integration/seed-policy.integration.test.ts tests/prisma-integration/giveaway-draw.integration.test.ts tests/prisma-integration/giveaway-live-presentation.integration.test.ts`
+  - Initial GREEN after fixes: 4 files passed, 4 tests passed.
+  - Final rerun: 4 files passed, 4 tests passed.
+- `npx tsx -e "import { demoEvents } from './src/features/tambike-demo/data'; console.log(demoEvents.length)"`
+  - PASS; printed `24`.
+- `rg -n 'venueId|ownedVenues|approveVenueWithConditions|PENDING_VENUE_APPROVAL|approvalType|@seed\.tambike\.local|mina\.rider@example\.com|scan-rider@seed\.tambike\.local|ana\.venue@example\.com|marco\.organizer@example\.com' src/server/prisma-backend.ts prisma/seed.ts`
+  - PASS; no active backend/seed hits.
+- `git diff --check -- <Task 5 files>`
+  - PASS; no whitespace errors.
 
-- Canonical lock/snapshot creation, drawings, publication, redraws, claims, verification, fulfilment, delivery details, exports, cron lifecycle execution, and browser smoke flows remain for the subsequent giveaway tasks.
-- No disposable PostgreSQL URL is configured in this worktree, so database integration/concurrency tests were not run or faked.
+### Concerns
+
+- The disposable integration run still emits an existing `pg` deprecation warning about concurrent `client.query()` calls during concurrency tests. The tests pass and this warning was not introduced by the location/ownership parity change.
+- The worktree contains unrelated Task 7 route/UI deletions and edits; they were intentionally not included in this Task 5 commit.

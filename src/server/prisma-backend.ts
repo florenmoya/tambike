@@ -56,7 +56,7 @@ import {
   parseCreateGiveawayInput,
   validateGiveawayUpdateInput,
 } from "@/features/giveaways/validation";
-import { venues } from "@/features/tambike-demo/data";
+import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -140,7 +140,9 @@ type PrismaEventRecord = {
   type: string;
   status: string;
   organizerId: string;
-  venueId: string | null;
+  locationName: string;
+  locationAddress: string;
+  locationMapLink: string | null;
   poster: string;
   dateLabel: string;
   timeLabel: string;
@@ -175,7 +177,6 @@ type PrismaUserRecord = {
   clubName: string | null;
   createdAt: Date;
   organizerProfile?: { id: string } | null;
-  ownedVenues?: Array<{ id: string }>;
 };
 
 type CheckInSettingsValue = CheckInConfiguration & {
@@ -187,7 +188,6 @@ const giveawayConfigurationInclude = {
   event: {
     include: {
       organizer: { select: { userId: true } },
-      venue: { select: { ownerUserId: true } },
       perks: true,
       _count: { select: { passes: true, rsvps: true } },
     },
@@ -382,7 +382,7 @@ function defaultRulesForEvent(type: EventType) {
     return [...baseRules, "Follow marshal instructions"];
   }
 
-  return [...baseRules, "Respect venue staff"];
+  return [...baseRules, "Respect event staff"];
 }
 
 export class PrismaTambikeBackend {
@@ -447,7 +447,7 @@ export class PrismaTambikeBackend {
         bikeModel: input.bikeModel?.trim() || null,
         clubName: input.clubName?.trim() || null,
       },
-      include: { organizerProfile: true, ownedVenues: true },
+      include: { organizerProfile: true },
     });
     await this.audit("USER_CREATED", user.id, "User", user.id);
     const sessionToken = await this.createSessionForUser(user.id);
@@ -490,7 +490,7 @@ export class PrismaTambikeBackend {
         bikeModel: input.bikeModel?.trim() || null,
         clubName: input.clubName?.trim() || null,
       },
-      include: { organizerProfile: true, ownedVenues: true },
+      include: { organizerProfile: true },
     });
     await this.audit("PROFILE_UPDATED", user.id, "User", user.id);
     return this.toUserProfile(updated);
@@ -4310,8 +4310,8 @@ export class PrismaTambikeBackend {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
 
-    const venue = await this.prisma.venue.findUnique({ where: { id: input.venueId } });
-    if (!venue || venue.status !== "APPROVED") {
+    const location = normalizeEventLocation(input);
+    if (!location) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
 
@@ -4326,19 +4326,21 @@ export class PrismaTambikeBackend {
         slug,
         title: input.title.trim(),
         type: eventTypeToDb[type] as never,
-        status: "PENDING_VENUE_APPROVAL",
+        status: "PENDING_ADMIN_REVIEW",
         organizerId,
-        venueId: venue.id,
+        locationName: location.locationName,
+        locationAddress: location.locationAddress,
+        locationMapLink: location.locationMapLink ?? null,
         poster: "/demo/poster-tambike-cafe-classico.jpg",
         dateLabel: input.date.trim(),
         timeLabel: input.time.trim(),
-        area: input.area.trim(),
+        area: location.area,
         expectedRiders,
-        description: `${input.title.trim()} is awaiting venue approval.`,
+        description: `${input.title.trim()} is awaiting admin review.`,
         whatHappens:
-          "Organizer-created draft that will move through venue approval and admin publish.",
+          "Organizer-created draft that will move through admin publish.",
         perkPreview: input.perkPreview.trim(),
-        tags: [type, "Venue approval"],
+        tags: [type, "Admin review"],
         riskFlags: this.riskFlagsFor(type, expectedRiders),
         safetyRules: defaultRulesForEvent(type),
         checkInSettings: {
@@ -4725,40 +4727,6 @@ export class PrismaTambikeBackend {
     }
   }
 
-  async approveVenueWithConditions(sessionToken: string, eventId: string, conditions: string) {
-    const user = await this.requireUser(sessionToken);
-    if (!["venue", "admin"].includes(user.role)) {
-      throw new BackendError("FORBIDDEN", "FORBIDDEN");
-    }
-
-    await this.requireEvent(eventId);
-    const event = await this.prisma.event.update({
-      where: { id: eventId },
-      data: { status: "PENDING_ADMIN_REVIEW" },
-      include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
-    });
-    await this.prisma.eventApproval.upsert({
-      where: { id: "req-shell-pugon" },
-      create: {
-        id: "req-shell-pugon",
-        eventId,
-        approvalType: "venue",
-        reviewerId: user.id,
-        decision: "approved_with_conditions",
-        conditions: conditions.trim(),
-        decidedAt: new Date(),
-      },
-      update: {
-        reviewerId: user.id,
-        decision: "approved_with_conditions",
-        conditions: conditions.trim(),
-        decidedAt: new Date(),
-      },
-    });
-    await this.audit("VENUE_APPROVED", user.id, "Event", event.id);
-    return { event: this.toEvent(event), conditions: conditions.trim() };
-  }
-
   async approvePublish(sessionToken: string, eventId: string) {
     const user = await this.requireRole(sessionToken, "admin");
     await this.requireEvent(eventId);
@@ -4768,11 +4736,10 @@ export class PrismaTambikeBackend {
       include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
     });
     await this.prisma.eventApproval.upsert({
-      where: { id: "rev-arai-hjc-charity-ride" },
+      where: { id: `admin-review-${eventId}` },
       create: {
-        id: "rev-arai-hjc-charity-ride",
+        id: `admin-review-${eventId}`,
         eventId,
-        approvalType: "admin",
         reviewerId: user.id,
         decision: "published",
         decidedAt: new Date(),
@@ -4856,14 +4823,7 @@ export class PrismaTambikeBackend {
 
   async listPublicUsers() {
     const users = await this.prisma.user.findMany({
-      where: {
-        email: {
-          not: {
-            endsWith: "@seed.tambike.local",
-          },
-        },
-      },
-      include: { organizerProfile: true, ownedVenues: true },
+      include: { organizerProfile: true },
       orderBy: { createdAt: "asc" },
     });
     return users.map((user) => this.toUserProfile(user));
@@ -5708,9 +5668,9 @@ export class PrismaTambikeBackend {
   ) {
     if (user.role === "admin") return;
     if (
-      user.role === "venue" &&
+      user.role === "organizer" &&
       user.verificationStatus === "APPROVED" &&
-      giveaway.event.venue?.ownerUserId === user.id
+      giveaway.event.organizer.userId === user.id
     ) {
       return;
     }
@@ -5835,7 +5795,7 @@ export class PrismaTambikeBackend {
   private async findGiveawayCronActor(giveaway: GiveawayConfiguration): Promise<PrismaUserRecord | null> {
     const actor = await this.prisma.user.findUnique({
       where: { id: giveaway.creatorUserId },
-      include: { organizerProfile: true, ownedVenues: true },
+      include: { organizerProfile: true },
     });
     if (!actor || actor.verificationStatus === "SUSPENDED") return null;
     try {
@@ -8370,7 +8330,7 @@ export class PrismaTambikeBackend {
   private async getUserForSessionToken(sessionToken: string) {
     const session = await this.prisma.session.findUnique({
       where: { tokenHash: hashToken(sessionToken) },
-      include: { user: { include: { organizerProfile: true, ownedVenues: true } } },
+      include: { user: { include: { organizerProfile: true } } },
     });
     if (!session || session.expiresAt < new Date()) {
       return null;
@@ -8436,7 +8396,6 @@ export class PrismaTambikeBackend {
       where: { id: eventId },
       include: {
         organizer: { select: { userId: true } },
-        venue: { select: { ownerUserId: true } },
         checkInSettings: true,
         perks: true,
         _count: { select: { passes: true, rsvps: true } },
@@ -8465,7 +8424,6 @@ export class PrismaTambikeBackend {
         event: {
           include: {
             organizer: { select: { userId: true } },
-            venue: { select: { ownerUserId: true } },
             checkInSettings: true,
             perks: true,
             _count: { select: { passes: true, rsvps: true } },
@@ -8560,7 +8518,7 @@ export class PrismaTambikeBackend {
 
   private requireCheckInStaff(
     user: { id: string; role: string; verificationStatus: string },
-    event: { organizer: { userId: string }; venue: { ownerUserId: string | null } | null },
+    event: { organizer: { userId: string } },
   ) {
     if (user.role === "admin") {
       return;
@@ -8572,20 +8530,13 @@ export class PrismaTambikeBackend {
     ) {
       return;
     }
-    if (
-      user.role === "venue" &&
-      user.verificationStatus === "APPROVED" &&
-      event.venue?.ownerUserId === user.id
-    ) {
-      return;
-    }
     throw new BackendError("FORBIDDEN", "FORBIDDEN");
   }
 
   private findUserByEmail(email: string) {
     return this.prisma.user.findUnique({
       where: { email },
-      include: { organizerProfile: true, ownedVenues: true },
+      include: { organizerProfile: true },
     });
   }
 
@@ -8617,7 +8568,6 @@ export class PrismaTambikeBackend {
       clubName: user.clubName ?? undefined,
       joinedAt: formatJoinedAt(user.createdAt),
       organizerProfileId: user.organizerProfile?.id,
-      venueId: user.ownedVenues?.[0]?.id,
     };
   }
 
@@ -8629,7 +8579,9 @@ export class PrismaTambikeBackend {
       type,
       status: event.status as Event["status"],
       organizerId: event.organizerId,
-      venueId: event.venueId ?? venues[0].id,
+      locationName: event.locationName,
+      locationAddress: event.locationAddress,
+      locationMapLink: event.locationMapLink ?? undefined,
       poster: event.poster,
       date: event.dateLabel,
       time: event.timeLabel,
@@ -8686,6 +8638,6 @@ export class PrismaTambikeBackend {
       flags.push("Expected riders need review");
     }
 
-    return flags.length > 0 ? flags : ["Standard venue approval"];
+    return flags.length > 0 ? flags : ["Standard admin review"];
   }
 }

@@ -447,7 +447,7 @@ describe("Prisma giveaway lifecycle contract", () => {
     );
     const scanSource = prismaBackendSource.slice(
       prismaBackendSource.indexOf("async scanPass"),
-      prismaBackendSource.indexOf("async approveVenueWithConditions"),
+      prismaBackendSource.indexOf("async approvePublish"),
     );
     const openSource = prismaBackendSource.slice(
       prismaBackendSource.indexOf("async openGiveaway"),
@@ -488,6 +488,54 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).not.toContain("reconcileAutomaticGiveawayEligibilityAfterEvent");
     expect(openSource).toContain("reconcileAutomaticGiveawayEntry(tx, opened, riderId, {");
     expect(openSource).not.toContain("reconcileAutomaticGiveawayEligibility(tx, giveaway.eventId)");
+  });
+
+  test("uses event-owned locations and organizer ownership without venue dependencies", () => {
+    const createEventSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async createEventDraft"),
+      prismaBackendSource.indexOf("async registerForEvent"),
+    );
+    const publishSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("async approvePublish"),
+      prismaBackendSource.indexOf("async exportAttendeesCsv"),
+    );
+    const userMapperSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private toUserProfile"),
+      prismaBackendSource.indexOf("private toEvent"),
+    );
+    const eventMapperSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private toEvent"),
+      prismaBackendSource.indexOf("private toPass"),
+    );
+    const operatorSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async requireGiveawayOperator"),
+      prismaBackendSource.indexOf("private toOperatorGiveawayClaimView"),
+    );
+    const checkInStaffSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private requireCheckInStaff"),
+      prismaBackendSource.indexOf("private findUserByEmail"),
+    );
+
+    expect(prismaBackendSource).not.toContain("approveVenueWithConditions");
+    expect(prismaBackendSource).not.toContain("ownedVenues");
+    expect(prismaBackendSource).not.toContain("venueId");
+    expect(prismaBackendSource).not.toContain("approvalType");
+    expect(prismaBackendSource).not.toContain("PENDING_VENUE_APPROVAL");
+    expect(prismaBackendSource).not.toContain('user.role === "venue"');
+    expect(prismaBackendSource).not.toContain("Respect venue staff");
+    expect(prismaBackendSource).not.toContain("Standard venue approval");
+    expect(createEventSource).toContain("normalizeEventLocation(input)");
+    expect(createEventSource).toContain('status: "PENDING_ADMIN_REVIEW"');
+    expect(createEventSource).toContain("locationName: location.locationName");
+    expect(publishSource).toContain("admin-review-${eventId}");
+    expect(userMapperSource).not.toContain("venue");
+    expect(eventMapperSource).toContain("locationName: event.locationName");
+    expect(eventMapperSource).toContain("locationAddress: event.locationAddress");
+    expect(eventMapperSource).toContain("locationMapLink: event.locationMapLink ?? undefined");
+    expect(operatorSource).toContain("giveaway.event.organizer.userId === user.id");
+    expect(operatorSource).not.toContain("venue");
+    expect(checkInStaffSource).toContain("event.organizer.userId === user.id");
+    expect(checkInStaffSource).not.toContain("venue");
   });
 
   test("locks all automatic campaign entries before open-time allocation locks pools", () => {

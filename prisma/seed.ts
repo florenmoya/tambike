@@ -1,16 +1,18 @@
 import bcrypt from "bcryptjs";
-import { randomUUID } from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { loadEnvConfig } from "@next/env";
-import { demoEvents, mockUsers, organizers, venues } from "../src/features/tambike-demo/data";
+import { PrismaClient as RuntimePrismaClient } from "@prisma/client";
+import {
+  demoEvents,
+  seedUsers,
+  TAMBIKE_ORGANIZER_PROFILE_ID,
+  TAMBIKE_ORGANIZER_USER_ID,
+} from "../src/features/tambike-demo/data";
 import type { EventType } from "../src/features/tambike-demo/types";
 import { requireMigrationDatabaseUrl } from "../src/server/database-url";
 
 loadEnvConfig(process.cwd());
-
-const adapter = new PrismaPg(requireMigrationDatabaseUrl());
-const prisma = new PrismaClient({ adapter });
 
 const eventTypeMap: Record<EventType, string> = {
   Tambike: "TAMBIKE",
@@ -26,15 +28,27 @@ const eventTypeMap: Record<EventType, string> = {
   Race: "RACE",
 };
 
-const demoScannerPass = {
-  eventId: "arai-hjc-charity-ride",
-  userId: "user-demo-scan-rider",
-  rsvpId: "rsvp-arai-hjc-charity-ride-user-demo-scan-rider",
-  passId: "pass-arai-hjc-charity-ride-user-demo-scan-rider",
-  qrToken: "tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s",
-};
+function parseDatabaseName(databaseUrl: string) {
+  try {
+    const parsed = new URL(databaseUrl);
+    return decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  } catch {
+    return "";
+  }
+}
 
-async function main() {
+export function assertDisposableSeedClient(databaseUrl: string) {
+  const parsed = new URL(databaseUrl);
+  const databaseName = parseDatabaseName(databaseUrl);
+  if (
+    !["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname) ||
+    !/^tambike_test_[a-z0-9_]+$/.test(databaseName)
+  ) {
+    throw new Error("Seed integration calls require a loopback tambike_test_* database URL.");
+  }
+}
+
+export async function seedPrisma(prisma: PrismaClient) {
   const [giveawayCount, giveawayAuditCount] = await Promise.all([
     prisma.eventGiveaway.count(),
     prisma.giveawayAuditEvent.count(),
@@ -43,9 +57,14 @@ async function main() {
     throw new Error("REFUSING_TO_SEED_WITH_GIVEAWAY_HISTORY");
   }
 
+  const organizer = seedUsers.find((user) => user.id === TAMBIKE_ORGANIZER_USER_ID);
+  const admin = seedUsers.find((user) => user.role === "admin");
+  if (!organizer || !admin) {
+    throw new Error("CANONICAL_SEED_USERS_MISSING");
+  }
+
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
-  const internalOwnerPasswordHash = await bcrypt.hash(randomUUID(), 10);
 
   await prisma.$transaction(async (transaction) => {
     await transaction.auditLog.deleteMany();
@@ -61,202 +80,115 @@ async function main() {
     await transaction.eventApproval.deleteMany();
     await transaction.perk.deleteMany();
     await transaction.event.deleteMany();
-    await transaction.venue.deleteMany();
     await transaction.organizerProfile.deleteMany();
     await transaction.session.deleteMany();
     await transaction.user.deleteMany();
-  });
 
-  for (const user of mockUsers) {
-    await prisma.user.create({
+    await transaction.user.create({
       data: {
-        id: user.id,
-        displayName: user.displayName,
-        email: user.email,
-        passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
-        role: user.role,
-        verificationStatus: user.verificationStatus,
-        area: user.area,
-        bikeModel: user.bikeModel,
-        clubName: user.clubName,
+        id: organizer.id,
+        displayName: "Tambike Organizer",
+        email: "organizer@bayanko.ph",
+        passwordHash,
+        role: "organizer",
+        verificationStatus: "APPROVED",
+        area: organizer.area,
+        bikeModel: organizer.bikeModel ?? null,
+        clubName: "Tambike Organizer",
+      },
+    });
+    await transaction.organizerProfile.create({
+      data: {
+        id: TAMBIKE_ORGANIZER_PROFILE_ID,
+        userId: TAMBIKE_ORGANIZER_USER_ID,
+        organizerType: "Tambike event organizer",
+        displayName: "Tambike Organizer",
+        realName: "Tambike Organizer",
+        contactNumber: "09000000000",
+        fbLink: "https://www.facebook.com/tambike",
+        clubPageName: "Tambike Organizer",
+        reason: "Canonical Tambike organizer account for event operations.",
+        pastEventLinks: [],
+        verificationStatus: "APPROVED",
+      },
+    });
+    await transaction.user.create({
+      data: {
+        id: admin.id,
+        displayName: admin.displayName,
+        email: admin.email,
+        passwordHash: adminPasswordHash,
+        role: "admin",
+        verificationStatus: "APPROVED",
+        area: admin.area,
+        bikeModel: admin.bikeModel ?? null,
+        clubName: admin.clubName ?? null,
       },
     });
 
-    if (user.role === "organizer") {
-      await prisma.organizerProfile.create({
+    for (const event of demoEvents) {
+      await transaction.event.create({
         data: {
-          id: `${user.id}-profile`,
-          userId: user.id,
-          organizerType: "Sample organizer",
-          displayName: user.displayName,
-          realName: user.displayName,
-          contactNumber: "09000000000",
-          fbLink: "https://facebook.com/tambike",
-          clubPageName: user.displayName,
-          reason: "Seeded organizer account for Tambike event operations.",
-          pastEventLinks: [],
-          verificationStatus: user.verificationStatus,
+          id: event.id,
+          slug: event.id,
+          title: event.title,
+          type: eventTypeMap[event.type] as never,
+          status: event.status,
+          organizerId: TAMBIKE_ORGANIZER_PROFILE_ID,
+          locationName: event.locationName,
+          locationAddress: event.locationAddress,
+          locationMapLink: event.locationMapLink ?? null,
+          dateLabel: event.date,
+          timeLabel: event.time,
+          area: event.area,
+          expectedRiders: event.expectedRiders,
+          description: event.shortDescription,
+          whatHappens: event.whatHappens,
+          poster: event.poster,
+          perkPreview: event.perkPreview,
+          tags: event.tags,
+          riskFlags: event.riskFlags,
+          rideOutMeetup: event.rideOut?.meetup,
+          rideOutCallTime: event.rideOut?.callTime,
+          rideOutDeparture: event.rideOut?.departure,
+          rideOutDestination: event.rideOut?.destination,
+          rideOutNotes: event.rideOut?.notes,
+          safetyRules: event.rules,
+          perks: {
+            create: event.perks.map((perk) => ({
+              id: perk.id,
+              type: perk.type,
+              description: perk.description,
+              quantity: perk.quantity,
+            })),
+          },
+          checkInSettings: {
+            create: {
+              mode: "staff_only",
+              state: "closed",
+              qrMode: "rotating",
+            },
+          },
         },
       });
     }
-  }
-
-  await prisma.user.create({
-    data: {
-      id: demoScannerPass.userId,
-      displayName: "Seeded Scan Rider",
-      email: "scan-rider@seed.tambike.local",
-      passwordHash: internalOwnerPasswordHash,
-      role: "rider",
-      verificationStatus: "UNVERIFIED",
-      area: "Antipolo",
-    },
-  });
-
-  for (const organizer of organizers) {
-    const ownerId = `user-${organizer.id}`;
-    await prisma.user.upsert({
-      where: { email: `${organizer.id}@seed.tambike.local` },
-      create: {
-        id: ownerId,
-        displayName: organizer.displayName,
-        email: `${organizer.id}@seed.tambike.local`,
-        passwordHash: internalOwnerPasswordHash,
-        role: "organizer",
-        verificationStatus: organizer.verificationStatus,
-        area: "Philippines",
-      },
-      update: {},
-    });
-    await prisma.organizerProfile.upsert({
-      where: { id: organizer.id },
-      create: {
-        id: organizer.id,
-        userId: ownerId,
-        organizerType: organizer.type,
-        displayName: organizer.displayName,
-        realName: organizer.displayName,
-        contactNumber: "09000000000",
-        fbLink: organizer.fbLink,
-        clubPageName: organizer.displayName,
-        reason: "Seeded organizer profile for Tambike event content.",
-        pastEventLinks: [],
-        verificationStatus: organizer.verificationStatus,
-      },
-      update: {},
-    });
-  }
-
-  for (const venue of venues) {
-    await prisma.venue.create({
-      data: {
-        id: venue.id,
-        name: venue.name,
-        area: venue.area,
-        address: venue.address,
-        mapLink: venue.mapLink,
-        status: venue.status,
-        capacityNotes: venue.capacityNote,
-        houseRules: venue.houseRules,
-        contact: "Seeded venue contact",
-      },
-    });
-  }
-
-  for (const event of demoEvents) {
-    await prisma.event.create({
-      data: {
-        id: event.id,
-        slug: event.id,
-        title: event.title,
-        type: eventTypeMap[event.type] as never,
-        status: event.status,
-        organizerId: event.organizerId,
-        venueId: event.venueId,
-        dateLabel: event.date,
-        timeLabel: event.time,
-        area: event.area,
-        expectedRiders: event.expectedRiders,
-        description: event.shortDescription,
-        whatHappens: event.whatHappens,
-        poster: event.poster,
-        perkPreview: event.perkPreview,
-        tags: event.tags,
-        riskFlags: event.riskFlags,
-        rideOutMeetup: event.rideOut?.meetup,
-        rideOutCallTime: event.rideOut?.callTime,
-        rideOutDeparture: event.rideOut?.departure,
-        rideOutDestination: event.rideOut?.destination,
-        rideOutNotes: event.rideOut?.notes,
-        safetyRules: event.rules,
-        perks: {
-          create: event.perks.map((perk) => ({
-            id: perk.id,
-            type: perk.type,
-            description: perk.description,
-            quantity: perk.quantity,
-          })),
-        },
-      },
-    });
-  }
-
-  await prisma.eventCheckInSettings.createMany({
-    data: demoEvents.map((event) => ({
-      eventId: event.id,
-      mode: "staff_only",
-      state: "closed",
-      qrMode: "rotating",
-    })),
-  });
-
-  await prisma.rSVP.create({
-    data: {
-      id: demoScannerPass.rsvpId,
-      eventId: demoScannerPass.eventId,
-      userId: demoScannerPass.userId,
-      status: "going",
-      attendanceType: "direct",
-      clubName: "Weekend Tambike Crew",
-    },
-  });
-  await prisma.pass.create({
-    data: {
-      id: demoScannerPass.passId,
-      eventId: demoScannerPass.eventId,
-      userId: demoScannerPass.userId,
-      rsvpId: demoScannerPass.rsvpId,
-      qrTokenHash: demoScannerPass.qrToken,
-      status: "active",
-    },
-  });
-
-  await prisma.eventApproval.create({
-    data: {
-      id: "req-shell-pugon",
-      eventId: "arai-hjc-charity-ride",
-      approvalType: "venue",
-      decision: "pending",
-      notes: "Pending driveway staging, donation drop-off table, and batch departure conditions.",
-    },
-  });
-  await prisma.eventApproval.create({
-    data: {
-      id: "rev-arai-hjc-charity-ride",
-      eventId: "arai-hjc-charity-ride",
-      approvalType: "admin",
-      decision: "pending",
-      notes: "Review donation collection, public road ride-out, and beneficiary coordination.",
-    },
   });
 }
 
-main()
-  .then(async () => {
+async function main() {
+  const databaseUrl = requireMigrationDatabaseUrl();
+  const adapter = new PrismaPg(databaseUrl);
+  const prisma = new RuntimePrismaClient({ adapter });
+  try {
+    await seedPrisma(prisma);
+  } finally {
     await prisma.$disconnect();
-  })
-  .catch(async (error) => {
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  main().catch((error) => {
     console.error(error);
-    await prisma.$disconnect();
     process.exit(1);
   });
+}

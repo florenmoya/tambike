@@ -9,6 +9,7 @@ import {
   createPrismaIntegrationClientPair,
   createPrismaIntegrationClients,
 } from "./clients";
+import { createPrismaEventFixture } from "./fixtures";
 
 function sessionTokenHash(token: string) {
   return createHash("sha256").update(token).digest("base64url");
@@ -67,144 +68,41 @@ describe("Prisma live giveaway presentation", () => {
       },
     );
     const suffix = randomUUID();
-    const organizerId = `presentation-organizer-${suffix}`;
-    const organizerProfileId = `presentation-organizer-profile-${suffix}`;
-    const adminId = `presentation-admin-${suffix}`;
-    const riderId = `presentation-rider-${suffix}`;
     const outsiderId = `presentation-outsider-${suffix}`;
-    const eventId = `presentation-event-${suffix}`;
-    const organizerSession = `presentation-organizer-session-${suffix}`;
-    const adminSession = `presentation-admin-session-${suffix}`;
-    const riderSession = `presentation-rider-session-${suffix}`;
     const outsiderSession = `presentation-outsider-session-${suffix}`;
     const previousEncryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
     process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY = Buffer.alloc(32, 79).toString("base64");
 
     try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix,
+        riderCount: 1,
+      });
+      const { eventId, organizerSession, adminSession } = fixture;
+      const riderId = fixture.riders[0]?.userId;
+      const riderSession = fixture.riders[0]?.sessionToken;
+      if (!riderId || !riderSession) {
+        throw new Error("PRESENTATION_FIXTURE_RIDER_MISSING");
+      }
       await rawClients.primary.$transaction(async (tx) => {
-        await tx.user.createMany({
-          data: [
-            {
-              id: organizerId,
-              displayName: "Synthetic Organizer",
-              email: `presentation-organizer-${suffix}@example.test`,
-              passwordHash: "integration-only",
-              role: "organizer",
-              verificationStatus: "APPROVED",
-              area: "Antipolo",
-            },
-            {
-              id: adminId,
-              displayName: "Synthetic Administrator",
-              email: `presentation-admin-${suffix}@example.test`,
-              passwordHash: "integration-only",
-              role: "admin",
-              verificationStatus: "APPROVED",
-              area: "Antipolo",
-            },
-            {
-              id: riderId,
-              displayName: "Synthetic Rider",
-              email: `presentation-rider-${suffix}@example.test`,
-              passwordHash: "integration-only",
-              role: "rider",
-              verificationStatus: "UNVERIFIED",
-              area: "Antipolo",
-            },
-            {
-              id: outsiderId,
-              displayName: "Synthetic Outsider",
-              email: `presentation-outsider-${suffix}@example.test`,
-              passwordHash: "integration-only",
-              role: "rider",
-              verificationStatus: "UNVERIFIED",
-              area: "Antipolo",
-            },
-          ],
-        });
-        await tx.organizerProfile.create({
+        await tx.user.create({
           data: {
-            id: organizerProfileId,
-            userId: organizerId,
-            organizerType: "Synthetic integration organizer",
-            displayName: "Synthetic Organizer",
-            realName: "Synthetic Organizer",
-            contactNumber: "09000000000",
-            fbLink: "https://example.test/organizer",
-            reason: "Synthetic integration test only.",
-            pastEventLinks: [],
-            verificationStatus: "APPROVED",
-          },
-        });
-        await tx.event.create({
-          data: {
-            id: eventId,
-            slug: eventId,
-            title: "Synthetic live presentation event",
-            type: "BIKE_NIGHT",
-            status: "PUBLISHED",
-            organizerId: organizerProfileId,
-            dateLabel: "August 15, 2030",
-            timeLabel: "7:00 PM - 10:00 PM",
+            id: outsiderId,
+            displayName: "Synthetic Outsider",
+            email: `presentation-outsider-${suffix}@example.test`,
+            passwordHash: "integration-only",
+            role: "rider",
+            verificationStatus: "UNVERIFIED",
             area: "Antipolo",
-            expectedRiders: 1,
-            description: "Synthetic integration event.",
-            whatHappens: "Exercises live presentation consent.",
-            poster: "/integration-poster.png",
-            perkPreview: "Synthetic giveaway",
-            tags: [],
-            riskFlags: [],
-            safetyRules: [],
           },
         });
-        const rsvpId = `presentation-rsvp-${suffix}`;
-        await tx.rSVP.create({
+        await tx.session.create({
           data: {
-            id: rsvpId,
-            eventId,
-            userId: riderId,
-            status: "going",
-            goingAt: new Date(),
-            attendanceType: "direct",
+            id: `presentation-session-outsider-${suffix}`,
+            tokenHash: sessionTokenHash(outsiderSession),
+            userId: outsiderId,
+            expiresAt: new Date(Date.now() + 60_000),
           },
-        });
-        await tx.pass.create({
-          data: {
-            id: `presentation-pass-${suffix}`,
-            eventId,
-            userId: riderId,
-            rsvpId,
-            qrTokenHash: `presentation-pass-token-${suffix}`,
-            status: "active",
-          },
-        });
-        await tx.session.createMany({
-          data: [
-            {
-              id: `presentation-session-organizer-${suffix}`,
-              tokenHash: sessionTokenHash(organizerSession),
-              userId: organizerId,
-              expiresAt: new Date(Date.now() + 60_000),
-            },
-            {
-              id: `presentation-session-admin-${suffix}`,
-              tokenHash: sessionTokenHash(adminSession),
-              userId: adminId,
-              expiresAt: new Date(Date.now() + 60_000),
-            },
-            {
-              id: `presentation-session-rider-${suffix}`,
-              tokenHash: sessionTokenHash(riderSession),
-              userId: riderId,
-              expiresAt: new Date(Date.now() + 60_000),
-            },
-            {
-              id: `presentation-session-outsider-${suffix}`,
-              tokenHash: sessionTokenHash(outsiderSession),
-              userId: outsiderId,
-              expiresAt: new Date(Date.now() + 60_000),
-            },
-          ],
         });
       });
 
@@ -241,10 +139,14 @@ describe("Prisma live giveaway presentation", () => {
         true,
       );
       const afterOptIn = new Date();
+      const expectedPresentationLabel = optedInState.livePresentation.labelPreview;
+      if (!expectedPresentationLabel) {
+        throw new Error("PRESENTATION_LABEL_PREVIEW_MISSING");
+      }
       expect(optedInState.livePresentation).toEqual({
         optedIn: true,
         canUpdate: true,
-        labelPreview: "Synthetic R.",
+        labelPreview: expectedPresentationLabel,
       });
 
       const entry = await rawClients.primary.giveawayEntry.findUniqueOrThrow({
@@ -347,7 +249,7 @@ describe("Prisma live giveaway presentation", () => {
         select: { presentationLabel: true, presentationLabelKind: true },
       });
       expect(frozenEntry).toEqual({
-        presentationLabel: "Synthetic R.",
+        presentationLabel: expectedPresentationLabel,
         presentationLabelKind: "consented_name",
       });
       expect(locked.snapshot.candidateCount).toBe(1);
@@ -458,13 +360,13 @@ describe("Prisma live giveaway presentation", () => {
         drawStatus: "completed",
         resultDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
         candidateCount: 1,
-        labelBank: ["Synthetic R."],
+        labelBank: [expectedPresentationLabel],
         slides: [
           {
             position: 1,
             prizePoolTitle: "Synthetic helmet",
             prizeItemTitle: "Synthetic prize item",
-            winnerLabel: "Synthetic R.",
+            winnerLabel: expectedPresentationLabel,
           },
         ],
       });
