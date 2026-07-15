@@ -19,7 +19,7 @@ After the migration, the configured database has only these intentional account 
 | `florenmoya@gmail.com` | Existing real rider, including its RSVP, pass, sessions, and audit history. |
 | Future rider signups | Preserved normally. The migration does not delete unknown or real riders. |
 
-All existing events are reassigned to the retained organizer profile before any generated organizer profiles are deleted. The organizer profile keeps its stable primary key, while its display fields are updated to `Tambike Organizer`.
+All existing events are reassigned to the retained organizer profile before any generated organizer profiles are deleted. The organizer profile keeps its stable primary key. `User.displayName`, `User.clubName`, `OrganizerProfile.displayName`, `OrganizerProfile.realName`, and `OrganizerProfile.clubPageName` are all updated to `Tambike Organizer` so no stale Marco or former club identity remains on the canonical account.
 
 Deleting a known demo user may cascade its sessions, RSVP, pass, and check-in data according to the existing foreign keys. Audit records that support a nullable actor retain the event but lose the deleted demo actor reference. The migration must abort rather than rewrite immutable giveaway history if a removable account is unexpectedly referenced by giveaway entries, awards, fulfilments, or audit events.
 
@@ -29,10 +29,10 @@ The `Venue` model will be removed. It currently combines physical location data 
 
 Each `Event` stores its own location snapshot:
 
-- `locationName`: required display name, capped and trimmed.
-- `locationAddress`: required human-readable address.
-- `locationMapLink`: optional HTTP or HTTPS navigation link.
-- `area`: the existing required city or regional label.
+- `locationName`: required display name, trimmed and capped at 120 characters.
+- `locationAddress`: required human-readable address, trimmed and capped at 240 characters.
+- `locationMapLink`: optional trimmed HTTP or HTTPS navigation link capped at 500 characters.
+- `area`: the existing required city or regional label, trimmed and capped at 120 characters.
 
 The migration first adds nullable location fields, copies each event's current venue name, address, and map link, validates that every event has a location name and address, makes those fields required, then drops `Event.venueId`, `Venue.ownerUserId`, and the `Venue` table. Event IDs, slugs, dates, statuses, attendance, passes, check-ins, and giveaway history remain unchanged.
 
@@ -43,6 +43,10 @@ The organizer event form replaces the venue selector with free-text location nam
 `PENDING_VENUE_APPROVAL` is removed from the Prisma enum and TypeScript unions. Existing rows in that state move to `PENDING_ADMIN_REVIEW`. New organizer submissions also enter `PENDING_ADMIN_REVIEW` directly.
 
 The venue approval action, venue approval DTO state, venue-specific audit action, venue role checks, and venue routes are removed. The complete `/venue/**` route tree, venue console, venue navigation, and venue login redirect disappear rather than rendering dormant or misleading screens.
+
+Because admin review is the only remaining event approval kind, `EventApproval.approvalType` and the `ApprovalType` enum are removed instead of retaining a one-value discriminator. The nullable `CheckIn.scannedBy` foreign key changes from cascade deletion to `SET NULL`, so deleting a former demo staff account cannot delete another rider's check-in record.
+
+Because the MVP is intentionally limited to one organizer, organizer application, organizer verification, and admin-created organizer flows are also removed. Riders cannot upgrade themselves to organizer, and the admin UI cannot create a second organizer account. Restoring multi-organizer onboarding requires a later product decision and its own authorization design.
 
 Operational permissions become:
 
@@ -88,7 +92,7 @@ The migration targets known demo and generated identities, not broad email-domai
 
 The organizer console becomes the sole event-operations workspace. Its event list contains every current event after reassignment. Check-in, reports, giveaway configuration, live raffle presentation, and claim fulfilment remain reachable from organizer routes.
 
-The admin console removes venue-account counts, venue approval language, and venue-specific filters. Review copy refers to event location and organizer ownership. Account role labels and filters contain rider, organizer, and admin only.
+The admin console removes venue-account counts, venue approval language, venue-specific filters, organizer verification queues, and organizer-creation controls. Review copy refers to event location and organizer ownership. Account role labels and filters contain rider, organizer, and admin only.
 
 Public and rider-facing screens retain location information and map links, but no longer suggest that a venue has a Tambike account, approved an event, or owns the operational workspace.
 
@@ -108,6 +112,7 @@ The authoritative MVP requirements and route inventory are updated in the same c
 Automated coverage will prove:
 
 - `venue` and `PENDING_VENUE_APPROVAL` no longer exist in the generated client or public TypeScript contracts;
+- organizer application and organizer-creation routes/actions are absent, preventing a second organizer;
 - arbitrary event locations round-trip through in-memory and Prisma backends;
 - every migrated event belongs to Tambike Organizer and retains its prior location text;
 - the configured seed produces one organizer, no venue user, and no example or scan rider;
