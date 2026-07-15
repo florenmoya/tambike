@@ -348,9 +348,9 @@ function scanBodyFor(code: ScanPassCode) {
     case "NOT_FOUND":
       return "This QR token does not match an active Tambike Pass in the system.";
     case "UNAUTHENTICATED":
-      return "Log in again with an organizer, venue, or admin account before scanning.";
+      return "Log in again with the owning organizer or an admin account before scanning.";
     case "FORBIDDEN":
-      return "Only organizer, venue, and admin accounts can scan passes.";
+      return "Only the owning organizer or an admin can scan passes.";
     case "INVALID_INPUT":
       return "Upload a QR image, start the camera, or paste a pass token.";
     default:

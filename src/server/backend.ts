@@ -2670,10 +2670,7 @@ export class TambikeBackend {
       .map((award) => this.toOperatorGiveawayClaimView(giveaway, award));
   }
 
-  /**
-   * Event-scoped operator queue. Venue owners may see their venue's campaigns;
-   * explicitly assigned operators see only their assignments.
-   */
+  /** Event-scoped queue for the owning organizer, admins, and explicit assignments. */
   async listEventGiveawayOperatorClaims(
     sessionToken: string,
     eventId: string,
@@ -4386,10 +4383,9 @@ export class TambikeBackend {
   ) {
     if (user.role === "admin") return;
     if (
-      user.role === "venue" &&
+      user.role === "organizer" &&
       user.verificationStatus === "APPROVED" &&
-      Boolean(event.venueId) &&
-      user.venueId === event.venueId
+      user.organizerProfileId === event.organizerId
     ) {
       return;
     }
@@ -7230,13 +7226,6 @@ export class TambikeBackend {
       user.role === "organizer" &&
       user.verificationStatus === "APPROVED" &&
       user.organizerProfileId === event.organizerId
-    ) {
-      return;
-    }
-    if (
-      user.role === "venue" &&
-      user.verificationStatus === "APPROVED" &&
-      user.venueId === event.venueId
     ) {
       return;
     }

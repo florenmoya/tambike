@@ -7,6 +7,7 @@ import type {
   VerifyGiveawayClaimInput,
 } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type ClaimBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   issueGiveawayClaimToken(
@@ -126,24 +127,22 @@ async function createClaimableAward(
   options: { delivery?: boolean; presence?: boolean; globalPresence?: boolean; randomDraw?: boolean } = {},
   withRecoveryRider = false,
 ) {
-  const [organizer, admin, venue, rider] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-  ]);
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const { organizer, admin, rider, outsider } = await createTestActors(
+    backend,
+    `giveaway-claims-${++claimFixtureSequence}`,
+  );
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Secure claim test event",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2026",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Secure Claim Grounds",
+    locationAddress: "15 Claim Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/secure-claim-grounds",
     area: "Antipolo",
     expectedRiders: 20,
     perkPreview: "Secure claim",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-  await backend.approvePublish(admin.sessionToken, event.id);
   const giveaway = await backend.createGiveaway(
     organizer.sessionToken,
     event.id,
@@ -184,8 +183,19 @@ async function createClaimableAward(
   }
   if (!selected.award) throw new Error("TEST_CLAIM_AWARD_MISSING");
 
-  return { organizer, admin, venue, rider, recoveryRider, winner, giveaway, awardId: selected.award.awardId };
+  return {
+    organizer,
+    admin,
+    rider,
+    outsider,
+    recoveryRider,
+    winner,
+    giveaway,
+    awardId: selected.award.awardId,
+  };
 }
+
+let claimFixtureSequence = 0;
 
 function internalAward(backend: ClaimBackend, giveawayId: string, awardId: string) {
   const store = backend as unknown as {
@@ -231,8 +241,30 @@ function internalDeliveryDetail(backend: ClaimBackend, awardId: string) {
 
 describe("in-memory giveaway claim security", () => {
   test("issues hash-only tokens once, rotates atomically, and keeps the strict claim QR separate from attendance", async () => {
-    const backend = asClaimBackend(await createTambikeTestBackend());
+    const backend = asClaimBackend(
+      await createTambikeTestBackend({
+        fixture: {
+          users: [
+            {
+              id: "user-unrelated-organizer-claims",
+              displayName: "Unrelated Organizer",
+              email: "unrelated-organizer-claims@example.test",
+              password: "password123",
+              role: "organizer",
+              verificationStatus: "APPROVED",
+              area: "Cebu City",
+              joinedAt: "July 15, 2026",
+              organizerProfileId: "unrelated-organizer-profile-claims",
+            },
+          ],
+        },
+      }),
+    );
     const context = await createClaimableAward(backend);
+    const unrelatedOrganizer = await backend.loginWithPassword(
+      "unrelated-organizer-claims@example.test",
+      "password123",
+    );
 
     const first = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
     expect(first.token).toMatch(/^tbk_gc1_[A-Za-z0-9_-]{43}$/);
@@ -251,15 +283,26 @@ describe("in-memory giveaway claim security", () => {
     });
     expect(rotated.version).toBe(2);
     await expect(
-      backend.resolveGiveawayClaim(context.venue.sessionToken, first.qrPayload),
+      backend.resolveGiveawayClaim(context.organizer.sessionToken, first.qrPayload),
     ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
     await expect(
-      backend.resolveGiveawayClaim(context.venue.sessionToken, `TAMBIKE:PASS:v1:${rotated.token}`),
+      backend.resolveGiveawayClaim(context.organizer.sessionToken, `TAMBIKE:PASS:v1:${rotated.token}`),
     ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
+    await expect(
+      backend.listGiveawayOperatorClaims(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toBeDefined();
+    await expect(
+      backend.listGiveawayOperatorClaims(context.admin.sessionToken, context.giveaway.id),
+    ).resolves.toBeDefined();
+    await expect(
+      backend.listGiveawayOperatorClaims(context.outsider.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      backend.listGiveawayOperatorClaims(unrelatedOrganizer.sessionToken, context.giveaway.id),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
       backend.resolveGiveawayClaim(context.organizer.sessionToken, rotated.qrPayload),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(backend.resolveGiveawayClaim(context.venue.sessionToken, rotated.qrPayload)).resolves.toMatchObject({
+    ).resolves.toMatchObject({
       awardId: context.awardId,
       status: "claimable",
     });
@@ -271,14 +314,14 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "camera",
         idempotencyKey: "verify-presence",
       }),
     ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "upload",
         idempotencyKey: "verify-presence",
@@ -286,7 +329,7 @@ describe("in-memory giveaway claim security", () => {
       }),
     ).resolves.toMatchObject({ awardId: context.awardId, status: "verified" });
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "upload",
         idempotencyKey: "verify-presence",
@@ -294,14 +337,14 @@ describe("in-memory giveaway claim security", () => {
       }),
     ).resolves.toMatchObject({ awardId: context.awardId, status: "verified" });
     await expect(
-      backend.fulfillGiveawayAward(context.venue.sessionToken, {
+      backend.fulfillGiveawayAward(context.organizer.sessionToken, {
         awardId: context.awardId,
         idempotencyKey: "fulfill-onsite",
         reference: "desk-1",
       }),
     ).resolves.toMatchObject({ awardId: context.awardId, status: "fulfilled" });
     await expect(
-      backend.fulfillGiveawayAward(context.venue.sessionToken, {
+      backend.fulfillGiveawayAward(context.organizer.sessionToken, {
         awardId: context.awardId,
         idempotencyKey: "fulfill-onsite",
         reference: "desk-1",
@@ -333,7 +376,7 @@ describe("in-memory giveaway claim security", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     await withGiveawayKeys(async () => {
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "verify-delivery",
@@ -341,20 +384,17 @@ describe("in-memory giveaway claim security", () => {
       await backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
         consent: true,
         consentVersion: "delivery-consent-v1",
-        details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+        details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
       });
       await expect(
         backend.readGiveawayDeliveryDetails(context.organizer.sessionToken, context.awardId),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-      await expect(
-        backend.readGiveawayDeliveryDetails(context.venue.sessionToken, context.awardId),
       ).resolves.toMatchObject({
         awardId: context.awardId,
-        details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+        details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
       });
       await backend.withdrawGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId);
       await expect(
-        backend.readGiveawayDeliveryDetails(context.venue.sessionToken, context.awardId),
+        backend.readGiveawayDeliveryDetails(context.organizer.sessionToken, context.awardId),
       ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
     });
   });
@@ -365,7 +405,7 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await withGiveawayKeys(async () => {
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "verify-before-deadline",
@@ -377,11 +417,11 @@ describe("in-memory giveaway claim security", () => {
         backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
           consent: true,
           consentVersion: "delivery-consent-v1",
-          details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+          details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
         }),
       ).resolves.toBeUndefined();
       await expect(
-        backend.fulfillGiveawayAward(context.venue.sessionToken, {
+        backend.fulfillGiveawayAward(context.organizer.sessionToken, {
           awardId: context.awardId,
           idempotencyKey: "fulfill-after-deadline",
           reference: "courier:TRK_after_deadline",
@@ -396,7 +436,7 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await withGiveawayKeys(async () => {
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "verify-expired-retention",
@@ -404,12 +444,12 @@ describe("in-memory giveaway claim security", () => {
       await backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
         consent: true,
         consentVersion: "delivery-consent-v1",
-        details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+        details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
       });
       internalDeliveryDetail(backend, context.awardId).retentionExpiresAt = new Date().toISOString();
 
       await expect(
-        backend.fulfillGiveawayAward(context.venue.sessionToken, {
+        backend.fulfillGiveawayAward(context.organizer.sessionToken, {
           awardId: context.awardId,
           idempotencyKey: "fulfill-expired-retention",
           reference: "courier:TRK_expired_retention",
@@ -426,7 +466,7 @@ describe("in-memory giveaway claim security", () => {
     const rawSecret = `tbk_gc1_${"a".repeat(43)}`;
 
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: rawSecret,
@@ -434,7 +474,7 @@ describe("in-memory giveaway claim security", () => {
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
 
     await withGiveawayKeys(async () => {
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "verify-secret-guard",
@@ -443,23 +483,23 @@ describe("in-memory giveaway claim security", () => {
         backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
           consent: true,
           consentVersion: rawSecret,
-          details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+          details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
         }),
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
       await backend.submitGiveawayDeliveryDetails(context.rider.sessionToken, context.awardId, {
         consent: true,
         consentVersion: "delivery-consent-v1",
-        details: { recipientName: "Mina Rider", address: { line1: "42 Test Street" } },
+        details: { recipientName: "Fixture Rider", address: { line1: "42 Test Street" } },
       });
       await expect(
-        backend.fulfillGiveawayAward(context.venue.sessionToken, {
+        backend.fulfillGiveawayAward(context.organizer.sessionToken, {
           awardId: context.awardId,
           idempotencyKey: rawSecret,
           reference: "courier:TRK_secret_guard",
         }),
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
       await expect(
-        backend.fulfillGiveawayAward(context.venue.sessionToken, {
+        backend.fulfillGiveawayAward(context.organizer.sessionToken, {
           awardId: context.awardId,
           idempotencyKey: "fulfill-secret-reference",
           reference: `TAMBIKE:GIVEAWAY-CLAIM:v1:${rawSecret}`,
@@ -474,7 +514,7 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await withGiveawayKeys(async () => {
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "verify-nested-secret-guard",
@@ -485,7 +525,7 @@ describe("in-memory giveaway claim security", () => {
           consent: true,
           consentVersion: "delivery-consent-v1",
           details: {
-            recipientName: "Mina Rider",
+            recipientName: "Fixture Rider",
             deliveryNotes: {
               rawClaimToken: claim.token,
               scans: [{ rawClaimQr: claim.qrPayload }],
@@ -532,14 +572,14 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "camera",
         idempotencyKey: "global-presence",
       }),
     ).rejects.toMatchObject({ code: "GIVEAWAY_AWARD_INVALID" });
     await expect(
-      backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "camera",
         idempotencyKey: "global-presence",
@@ -594,20 +634,20 @@ describe("in-memory giveaway claim security", () => {
 
     award.claimDeadlineAt = new Date(Date.now() + 60_000).toISOString();
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
-    await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+    await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
       payload: claim.qrPayload,
       method: "manual",
       idempotencyKey: "verify-opaque-reference",
     });
     await expect(
-      backend.fulfillGiveawayAward(context.venue.sessionToken, {
+      backend.fulfillGiveawayAward(context.organizer.sessionToken, {
         awardId: context.awardId,
         idempotencyKey: "fulfill-unsafe-reference",
-        reference: "Mina Rider, 42 Test Street, Antipolo",
+        reference: "Fixture Rider, 42 Test Street, Antipolo",
       }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     await expect(
-      backend.fulfillGiveawayAward(context.venue.sessionToken, {
+      backend.fulfillGiveawayAward(context.organizer.sessionToken, {
         awardId: context.awardId,
         idempotencyKey: "fulfill-opaque-reference",
         reference: "courier:TRK_4pa8-92Z",

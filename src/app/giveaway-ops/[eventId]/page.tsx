@@ -8,7 +8,7 @@ import {
 } from "@/server/giveaway-actions";
 
 /**
- * An event-scoped desk for venue owners and explicitly assigned operators.
+ * An event-scoped desk for owning organizers, admins, and explicitly assigned operators.
  * Configurer-only campaign/candidate reads fail closed and simply omit the
  * assignment controls for ordinary claim-desk operators.
  */

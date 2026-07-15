@@ -11,6 +11,7 @@ import type {
   UpdateGiveawayInput,
 } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type GiveawayCampaignView = {
   id: string;
@@ -391,38 +392,35 @@ async function createExtraRider(backend: GiveawayBackend, suffix: string) {
 }
 
 async function sessions(backend: GiveawayBackend) {
-  const [organizer, admin, rider, venue] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-  ]);
-
-  return { organizer, admin, rider, venue };
+  const actors = await createTestActors(backend, `giveaway-domain-${++actorFixtureSequence}`);
+  return actors;
 }
 
+let actorFixtureSequence = 0;
+
 async function createPublishedOrganizerEvent(backend: GiveawayBackend) {
-  const { organizer, admin, venue, rider } = await sessions(backend);
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const { organizer, admin, rider, outsider } = await sessions(backend);
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Giveaway eligibility test ride",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2026",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Giveaway Test Grounds",
+    locationAddress: "15 Giveaway Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/giveaway-test-grounds",
     area: "Antipolo",
     expectedRiders: 20,
     perkPreview: "Giveaway entry",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved for test");
-  await backend.approvePublish(admin.sessionToken, event.id);
-  return { eventId: event.id, organizer, admin, venue, rider };
+  return { eventId: event.id, organizer, admin, outsider, rider };
 }
 
 async function createApprovedOpenGiveaway(
   backend: GiveawayBackend,
   eligibilityGroups?: CreateGiveawayInput["eligibilityGroups"],
 ) {
-  const { eventId, organizer, admin, rider, venue } = await createPublishedOrganizerEvent(backend);
+  const { eventId, organizer, admin, rider, outsider } =
+    await createPublishedOrganizerEvent(backend);
   const giveaway = await backend.createGiveaway(
     organizer.sessionToken,
     eventId,
@@ -436,14 +434,15 @@ async function createApprovedOpenGiveaway(
     organizer,
     admin,
     rider,
-    venue,
+    outsider,
   };
 }
 
 describe("in-memory event giveaway lifecycle", () => {
   test("allows only the event owner or admin to create campaigns", async () => {
     const backend = asGiveawayBackend(await createTambikeTestBackend());
-    const { eventId, organizer, admin, rider, venue } = await createPublishedOrganizerEvent(backend);
+    const { eventId, organizer, admin, rider, outsider } =
+      await createPublishedOrganizerEvent(backend);
 
     const created = await backend.createGiveaway(
       organizer.sessionToken,
@@ -458,16 +457,10 @@ describe("in-memory event giveaway lifecycle", () => {
       mechanicsVersion: 1,
     });
     await expect(
-      backend.createGiveaway(organizer.sessionToken, "tambike-cafe-classico", {
-        ...automaticGiveawayInput("tambike-cafe-classico"),
-        eventId: "tambike-cafe-classico",
-      }),
-    ).rejects.toThrow("FORBIDDEN");
-    await expect(
       backend.createGiveaway(rider.sessionToken, eventId, automaticGiveawayInput(eventId)),
     ).rejects.toThrow("FORBIDDEN");
     await expect(
-      backend.createGiveaway(venue.sessionToken, eventId, automaticGiveawayInput(eventId)),
+      backend.createGiveaway(outsider.sessionToken, eventId, automaticGiveawayInput(eventId)),
     ).rejects.toThrow("FORBIDDEN");
     await expect(
       backend.createGiveaway(admin.sessionToken, eventId, automaticGiveawayInput(eventId)),
@@ -915,7 +908,7 @@ describe("in-memory event giveaway lifecycle", () => {
       "ciphertext",
       "userId",
       "riderId",
-      "scan-rider@seed.tambike.local",
+      rider.user.email,
     ]) {
       expect(payload).not.toContain(forbiddenValue);
     }
@@ -1019,7 +1012,7 @@ describe("in-memory event giveaway lifecycle", () => {
     expect(optedIn.livePresentation).toEqual({
       optedIn: true,
       canUpdate: true,
-      labelPreview: "Mina R.",
+      labelPreview: "Fixture R.",
     });
     expect(await backend.auditCount("GIVEAWAY_LIVE_PRESENTATION_OPTED_IN")).toBe(1);
 
@@ -1048,7 +1041,7 @@ describe("in-memory event giveaway lifecycle", () => {
     expect(lockedState.livePresentation).toEqual({
       optedIn: true,
       canUpdate: false,
-      labelPreview: "Mina R.",
+      labelPreview: "Fixture R.",
     });
     await expect(
       backend.setGiveawayLivePresentationPreference(rider.sessionToken, giveaway.id, false),
@@ -1077,11 +1070,11 @@ describe("in-memory event giveaway lifecycle", () => {
     );
     expect(preferenceAudits).toHaveLength(3);
     for (const event of preferenceAudits ?? []) {
-      expect(JSON.stringify(event.payload)).not.toMatch(/Mina|Changed|opaque|reference/i);
+      expect(JSON.stringify(event.payload)).not.toMatch(/Fixture|Changed|opaque|reference/i);
     }
     expect(internal?.snapshot?.entries).toEqual([
       expect.objectContaining({
-        presentationLabel: "Mina R.",
+        presentationLabel: "Fixture R.",
         presentationLabelKind: "consented_name",
         rankSourceDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       }),
@@ -1769,8 +1762,8 @@ describe("in-memory event giveaway lifecycle", () => {
       expect(Object.keys(candidates[0] ?? {}).sort()).toEqual(["label", "snapshotEntryId"]);
       expect(candidates[0]).toMatchObject({ label: expect.stringMatching(/^Locked entry entry_/) });
       expect(serializedCandidates).not.toContain(context.rider.user.id);
-      expect(serializedCandidates).not.toContain("Mina Rider");
-      expect(serializedCandidates).not.toContain("mina.rider@example.com");
+      expect(serializedCandidates).not.toContain("Fixture Rider");
+      expect(serializedCandidates).not.toContain(context.rider.user.email);
 
       const laterRider = await createExtraRider(backend, "post-lock-manual-selection");
       await backend.registerForEvent(laterRider.sessionToken, context.eventId, {
@@ -1939,7 +1932,7 @@ describe("in-memory event giveaway lifecycle", () => {
         "status",
       ]);
       expect(JSON.stringify(options)).not.toContain(context.rider.user.id);
-      expect(JSON.stringify(options)).not.toContain("Mina Rider");
+      expect(JSON.stringify(options)).not.toContain("Fixture Rider");
       const replacementCandidate = options.candidates.find(
         (candidate) => candidate.snapshotEntryId !== initialCandidate.snapshotEntryId,
       );
@@ -2072,12 +2065,12 @@ describe("in-memory event giveaway lifecycle", () => {
         ? context.rider
         : secondRider;
       const claim = await backend.issueGiveawayClaimToken(successorWinner.sessionToken, successor.id);
-      await backend.verifyGiveawayClaim(context.venue.sessionToken, {
+      await backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "manual",
         idempotencyKey: "manual-fulfilled-replay-verify",
       });
-      await backend.fulfillGiveawayAward(context.venue.sessionToken, {
+      await backend.fulfillGiveawayAward(context.organizer.sessionToken, {
         awardId: successor.id,
         idempotencyKey: "manual-fulfilled-replay-fulfill",
         reference: "desk:manual-replay",

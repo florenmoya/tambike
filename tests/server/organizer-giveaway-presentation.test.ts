@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { CreateGiveawayInput } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type TestBackend = Awaited<ReturnType<typeof createTambikeTestBackend>>;
 
@@ -172,30 +173,28 @@ async function createCompletedCampaign(input: {
 
 async function createScenario(options: { withRiders?: boolean } = {}) {
   const backend = await createTambikeTestBackend();
-  const [organizer, admin, venue, primaryRider] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-  ]);
+  const { organizer, admin, outsider, rider: primaryRider } = await createTestActors(
+    backend,
+    "organizer-giveaway-presentation",
+  );
   const secondRider = await backend.signUpRider({
     displayName: "Historical Legacy Rider",
     email: "presentation-legacy-rider@example.test",
     password: "password123",
     area: "Antipolo",
   });
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Organizer presentation test event",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2030",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Organizer Presentation Grounds",
+    locationAddress: "15 Presentation Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/organizer-presentation-grounds",
     area: "Antipolo",
     expectedRiders: 2,
     perkPreview: "Synthetic giveaway",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Synthetic approval");
-  await backend.approvePublish(admin.sessionToken, event.id);
 
   if (options.withRiders !== false) {
     for (const rider of [primaryRider, secondRider]) {
@@ -233,7 +232,7 @@ async function createScenario(options: { withRiders?: boolean } = {}) {
     backend,
     organizer,
     admin,
-    venue,
+    outsider,
     primaryRider,
     secondRider,
     eventId: event.id,
@@ -259,7 +258,7 @@ describe("organizer giveaway presentation read", () => {
     ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     for (const sessionToken of [
       scenario.primaryRider.sessionToken,
-      scenario.venue.sessionToken,
+      scenario.outsider.sessionToken,
     ]) {
       await expect(
         scenario.backend.getOrganizerGiveawayPresentation(
@@ -359,7 +358,7 @@ describe("organizer giveaway presentation read", () => {
     expect(first.candidateCount).toBe(2);
     expect(first.labelBank).toHaveLength(2);
     expect(first.labelBank).toEqual(
-      expect.arrayContaining(["Mina R.", expect.stringMatching(/^Rider [0-9A-F]{4,8}$/)]),
+      expect.arrayContaining(["Fixture R.", expect.stringMatching(/^Rider [0-9A-F]{4,8}$/)]),
     );
     expect(first.slides).toHaveLength(2);
     for (const slide of first.slides) {

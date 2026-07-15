@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import type { CreateGiveawayInput, GiveawayPrizeItemInput } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type GiveawayLifecycleBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   createGiveaway(
@@ -127,23 +128,22 @@ async function createScheduledCampaign(
     winnerTotal?: number;
   } = {},
 ) {
-  const [organizer, admin, venue] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-  ]);
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const { organizer, admin, rider } = await createTestActors(
+    backend,
+    `giveaway-lifecycle-${++lifecycleFixtureSequence}`,
+  );
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Scheduled lifecycle test",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2026",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Lifecycle Test Grounds",
+    locationAddress: "15 Lifecycle Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/lifecycle-test-grounds",
     area: "Antipolo",
     expectedRiders: 20,
     perkPreview: "Lifecycle",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-  await backend.approvePublish(admin.sessionToken, event.id);
   const giveaway = await backend.createGiveaway(
     organizer.sessionToken,
     event.id,
@@ -152,8 +152,10 @@ async function createScheduledCampaign(
   await backend.submitGiveawayForReview(organizer.sessionToken, giveaway.id);
   await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, { decision: "approved" });
   await backend.scheduleGiveaway(organizer.sessionToken, giveaway.id);
-  return { organizer, admin, event, giveaway };
+  return { organizer, admin, rider, event, giveaway };
 }
+
+let lifecycleFixtureSequence = 0;
 
 describe("scheduled giveaway lifecycle", () => {
   test("advances only scheduled/open campaigns and records one initial cron draw", async () => {
@@ -301,7 +303,7 @@ describe("scheduled giveaway lifecycle", () => {
     const backend = asLifecycleBackend(await createTambikeTestBackend());
     const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now, { directPrize: true });
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const rider = context.rider;
     const replacementRider = await backend.signUpRider({
       displayName: "Lifecycle replacement rider",
       email: "lifecycle-replacement@example.com",
@@ -365,7 +367,7 @@ describe("scheduled giveaway lifecycle", () => {
     const backend = asLifecycleBackend(await createTambikeTestBackend());
     const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now, { directPrize: true });
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const rider = context.rider;
     await backend.registerForEvent(rider.sessionToken, context.event.id, {
       status: "going",
       attendanceType: "direct",
@@ -446,7 +448,7 @@ describe("scheduled giveaway lifecycle", () => {
     const backend = asLifecycleBackend(await createTambikeTestBackend());
     const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now, { directPrize: true });
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const rider = context.rider;
     await backend.registerForEvent(rider.sessionToken, context.event.id, {
       status: "going",
       attendanceType: "direct",
@@ -499,7 +501,7 @@ describe("scheduled giveaway lifecycle", () => {
       directAwardMode: "guaranteed",
       winnerTotal: 1,
     });
-    const firstRider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const firstRider = context.rider;
     const secondRider = await backend.signUpRider({
       displayName: "Automatic replacement rider",
       email: "automatic-replacement@example.com",
@@ -564,7 +566,7 @@ describe("scheduled giveaway lifecycle", () => {
       directItemCount: 2,
       winnerTotal: 4,
     });
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const rider = context.rider;
     const extraRiders = await Promise.all(
       ["slot-one", "slot-two", "slot-three"].map((suffix) =>
         backend.signUpRider({
@@ -654,7 +656,7 @@ describe("scheduled giveaway lifecycle", () => {
       directAwardMode: "guaranteed",
       winnerTotal: 2,
     });
-    const initialRider = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const initialRider = context.rider;
     const extraRiders = await Promise.all(
       ["unlimited-one", "unlimited-two", "unlimited-three"].map((suffix) =>
         backend.signUpRider({

@@ -1,24 +1,22 @@
 import { describe, expect, test, vi } from "vitest";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createTestActors, registerTestPass } from "./support/tambike-fixtures";
 
 const eventId = "tambike-cafe-classico";
 
 async function signInForCheckInPolicy() {
   const backend = await createTambikeTestBackend();
-  const operator = await backend.loginWithPassword(
-    "admin@bayanko.ph",
-    "secret_123",
-  );
-  const rider = await backend.loginWithPassword(
-    "mina.rider@example.com",
-    "password123",
-  );
-  const registration = await backend.registerForEvent(rider.sessionToken, eventId, {
-    status: "going",
-    attendanceType: "direct",
-  });
+  const actors = await createTestActors(backend, "check-in-policy");
+  const pass = await registerTestPass(backend, actors.rider, eventId);
 
-  return { backend, operator, rider, pass: registration.pass! };
+  return {
+    backend,
+    operator: actors.organizer,
+    admin: actors.admin,
+    rider: actors.rider,
+    outsider: actors.outsider,
+    pass,
+  };
 }
 
 describe("event self-check-in policies", () => {
@@ -70,7 +68,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("reports the staff confirmation time rather than the pending request time", async () => {
-    const { backend, operator, rider, pass } = await signInForCheckInPolicy();
+    const { backend, operator, admin, rider, pass } = await signInForCheckInPolicy();
 
     vi.useFakeTimers();
     try {
@@ -85,7 +83,7 @@ describe("event self-check-in policies", () => {
 
       vi.advanceTimersByTime(60_000);
       await backend.scanPass(operator.sessionToken, eventId, pass.qrToken, "staff_upload");
-      const csv = await backend.exportAttendeesCsv(operator.sessionToken, eventId);
+      const csv = await backend.exportAttendeesCsv(admin.sessionToken, eventId);
 
       expect(csv).toContain("2026-07-11T01:01:00.000Z");
       expect(csv).not.toContain("2026-07-11T01:00:00.000Z");
@@ -140,23 +138,39 @@ describe("event self-check-in policies", () => {
     );
   });
 
-  test("does not let another organizer or venue operator configure the event policy", async () => {
-    const { backend } = await signInForCheckInPolicy();
-    const organizer = await backend.loginWithPassword(
-      "marco.organizer@example.com",
+  test("does not let another organizer or a rider configure the event policy", async () => {
+    const backend = await createTambikeTestBackend({
+      fixture: {
+        users: [
+          {
+            id: "user-unrelated-organizer-check-in",
+            displayName: "Unrelated Organizer",
+            email: "unrelated-organizer-check-in@example.test",
+            password: "password123",
+            role: "organizer",
+            verificationStatus: "APPROVED",
+            area: "Cebu City",
+            joinedAt: "July 15, 2026",
+            organizerProfileId: "unrelated-organizer-profile-check-in",
+          },
+        ],
+      },
+    });
+    const actors = await createTestActors(backend, "check-in-policy-denial");
+    const unrelatedOrganizer = await backend.loginWithPassword(
+      "unrelated-organizer-check-in@example.test",
       "password123",
     );
-    const venue = await backend.loginWithPassword("ana.venue@example.com", "password123");
 
     await expect(
-      backend.configureCheckIn(organizer.sessionToken, eventId, {
+      backend.configureCheckIn(unrelatedOrganizer.sessionToken, eventId, {
         mode: "self_instant",
         state: "open",
         qrMode: "rotating",
       }),
     ).rejects.toThrow("FORBIDDEN");
     await expect(
-      backend.configureCheckIn(venue.sessionToken, eventId, {
+      backend.configureCheckIn(actors.outsider.sessionToken, eventId, {
         mode: "self_instant",
         state: "open",
         qrMode: "rotating",

@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import type { CreateGiveawayInput } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type TestBackend = Awaited<ReturnType<typeof createTambikeTestBackend>>;
 
@@ -90,30 +91,28 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
 }
 
 async function createOpenScenario(backend: TestBackend) {
-  const [organizer, admin, venue, primaryRider] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-  ]);
+  const { organizer, admin, rider: primaryRider } = await createTestActors(
+    backend,
+    "giveaway-live-presentation",
+  );
   const secondRider = await backend.signUpRider({
     displayName: "Synthetic Second Rider",
     email: "synthetic-second-rider@example.test",
     password: "password123",
     area: "Antipolo",
   });
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Deterministic presentation comparison event",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2030",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Presentation Test Grounds",
+    locationAddress: "15 Presentation Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/presentation-test-grounds",
     area: "Antipolo",
     expectedRiders: 2,
     perkPreview: "Synthetic giveaway",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Synthetic approval");
-  await backend.approvePublish(admin.sessionToken, event.id);
   const created = await backend.createGiveaway(
     organizer.sessionToken,
     event.id,

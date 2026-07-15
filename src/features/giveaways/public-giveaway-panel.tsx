@@ -22,7 +22,7 @@ type PublicGiveawayPanelProps = {
   viewerRole?: PublicGiveawayViewerRole;
 };
 
-type PublicGiveawayViewerRole = "guest" | "rider" | "organizer" | "venue" | "admin";
+type PublicGiveawayViewerRole = "guest" | "rider" | "organizer" | "admin";
 
 type PublicGiveawayLoadState = "loading" | "ready" | "unavailable";
 

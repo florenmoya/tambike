@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import type { CreateGiveawayInput } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type ReportNotificationBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   createGiveaway(
@@ -70,24 +71,21 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
 describe("giveaway report and notification privacy", () => {
   test("creates deduplicated nonsecret entry notifications outside the global snapshot", async () => {
     const backend = asReportNotificationBackend(await createTambikeTestBackend());
-    const [organizer, admin, venue, rider] = await Promise.all([
-      backend.loginWithPassword("marco.organizer@example.com", "password123"),
-      backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-      backend.loginWithPassword("ana.venue@example.com", "password123"),
-      backend.loginWithPassword("mina.rider@example.com", "password123"),
-    ]);
-    const event = await backend.createEventDraft(organizer.sessionToken, {
+    const { organizer, admin, rider } = await createTestActors(
+      backend,
+      "giveaway-report-notifications-entry",
+    );
+    const event = await createPublishedTestEvent(backend, { organizer, admin }, {
       title: "Notification event",
       type: "Bike Night",
-      venueId: "shell-pugon",
       date: "August 15, 2026",
       time: "7:00 PM - 10:00 PM",
+      locationName: "Notification Test Grounds",
+      locationAddress: "15 Notification Avenue, Antipolo",
       area: "Antipolo",
       expectedRiders: 20,
       perkPreview: "Notification prize",
     });
-    await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-    await backend.approvePublish(admin.sessionToken, event.id);
     const giveaway = await backend.createGiveaway(
       organizer.sessionToken,
       event.id,
@@ -114,23 +112,21 @@ describe("giveaway report and notification privacy", () => {
 
   test("keeps aggregate reports identity-free and admin audit events payload-free", async () => {
     const backend = asReportNotificationBackend(await createTambikeTestBackend());
-    const [organizer, admin, venue] = await Promise.all([
-      backend.loginWithPassword("marco.organizer@example.com", "password123"),
-      backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-      backend.loginWithPassword("ana.venue@example.com", "password123"),
-    ]);
-    const event = await backend.createEventDraft(organizer.sessionToken, {
+    const { organizer, admin } = await createTestActors(
+      backend,
+      "giveaway-report-notifications-audit",
+    );
+    const event = await createPublishedTestEvent(backend, { organizer, admin }, {
       title: "Report event",
       type: "Bike Night",
-      venueId: "shell-pugon",
       date: "August 16, 2026",
       time: "7:00 PM - 10:00 PM",
+      locationName: "Report Test Grounds",
+      locationAddress: "16 Report Avenue, Antipolo",
       area: "Antipolo",
       expectedRiders: 20,
       perkPreview: "Report prize",
     });
-    await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-    await backend.approvePublish(admin.sessionToken, event.id);
     const giveaway = await backend.createGiveaway(
       organizer.sessionToken,
       event.id,

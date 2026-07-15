@@ -107,7 +107,7 @@ export function GiveawayOperatorWorkspace({
       <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 py-5 sm:px-6 lg:py-8">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <Link href={`/venue/events/${encodeURIComponent(eventId)}/giveaways`} className="text-sm font-semibold text-muted-foreground hover:text-foreground">Event claim queue</Link>
+            <Link href={`/organizer/events/${encodeURIComponent(eventId)}/giveaways`} className="text-sm font-semibold text-muted-foreground hover:text-foreground">Event claim queue</Link>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">Giveaway claim desk</h1>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={refreshQueue} disabled={isRefreshing}>
@@ -141,7 +141,7 @@ export function GiveawayOperatorWorkspace({
 
           {initialCampaigns.length > 0 && initialCandidates.length > 0 ? (
             <Card className="h-fit">
-              <CardHeader><CardTitle>Assign a claim operator</CardTitle><CardDescription>Event owners and admins can add an approved candidate to one campaign. Other operators only see the claim desk.</CardDescription></CardHeader>
+              <CardHeader><CardTitle>Assign a claim operator</CardTitle><CardDescription>Owning organizers and admins can add an approved candidate to one campaign. Other operators only see the claim desk.</CardDescription></CardHeader>
               <CardContent className="grid gap-3">
                 <label className="grid gap-1 text-sm font-medium">Campaign<select className="h-9 rounded-md border bg-background px-2 text-sm" value={campaignId} onChange={(event) => setCampaignId(event.target.value)} disabled={isAssigning}>{initialCampaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.title}</option>)}</select></label>
                 <label className="grid gap-1 text-sm font-medium">Candidate<select className="h-9 rounded-md border bg-background px-2 text-sm" value={candidateId} onChange={(event) => setCandidateId(event.target.value)} disabled={isAssigning}>{initialCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}</select></label>
@@ -149,7 +149,7 @@ export function GiveawayOperatorWorkspace({
               </CardContent>
             </Card>
           ) : (
-            <Card className="h-fit"><CardHeader><CardTitle>Access scope</CardTitle><CardDescription>This account can operate only the campaigns assigned to it. Campaign owners and admins manage claim-desk assignments.</CardDescription></CardHeader></Card>
+            <Card className="h-fit"><CardHeader><CardTitle>Access scope</CardTitle><CardDescription>This account can operate only the campaigns assigned to it. Owning organizers and admins manage claim-desk assignments.</CardDescription></CardHeader></Card>
           )}
         </section>
       </div>
@@ -174,7 +174,7 @@ function EmptyQueue() {
 }
 
 function OperatorUnavailable({ eventId }: { eventId: string }) {
-  return <main className="grid min-h-dvh place-items-center bg-background px-4 py-8 text-foreground"><Card className="w-full max-w-md"><CardHeader><CardTitle>Claim desk unavailable</CardTitle><CardDescription>This event’s giveaway claim desk is not assigned to the current venue or operator account.</CardDescription></CardHeader><CardContent><Button asChild variant="outline" className="w-full"><Link href={`/venue/events/${encodeURIComponent(eventId)}/giveaways`}>Back to venue claim queue</Link></Button></CardContent></Card></main>;
+  return <main className="grid min-h-dvh place-items-center bg-background px-4 py-8 text-foreground"><Card className="w-full max-w-md"><CardHeader><CardTitle>Claim desk unavailable</CardTitle><CardDescription>This event’s giveaway claim desk is available only to the owning organizer, an admin, or an assigned operator.</CardDescription></CardHeader><CardContent><Button asChild variant="outline" className="w-full"><Link href={`/organizer/events/${encodeURIComponent(eventId)}/giveaways`}>Back to organizer giveaways</Link></Button></CardContent></Card></main>;
 }
 
 function formatLabel(value: string) { return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()); }

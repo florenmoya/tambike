@@ -7,6 +7,7 @@ import { TooltipProvider } from "../../src/components/ui/tooltip";
 import { OrganizerConsole } from "../../src/features/organizer/organizer-console";
 import { DemoProvider } from "../../src/features/tambike-demo/demo-provider";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createTestActors } from "./support/tambike-fixtures";
 import type {
   OrganizerGiveawayOperations,
   OrganizerGiveawayPresentation,
@@ -209,13 +210,15 @@ describe("organizer giveaway lifecycle route", () => {
 
   test("places Giveaways beside scanner and report links for the selected event", async () => {
     const backend = await createTambikeTestBackend();
-    const organizer = await backend.loginWithPassword("marco.organizer@example.com", "password123");
+    const { organizer } = await createTestActors(backend, "organizer-workspace-navigation");
     const event = await backend.createEventDraft(organizer.sessionToken, {
       title: "Giveaway navigation event",
       type: "Bike Night",
-      venueId: "shell-pugon",
       date: "August 18, 2026",
       time: "7:00 PM - 10:00 PM",
+      locationName: "Giveaway Navigation Grounds",
+      locationAddress: "18 Navigation Avenue, Antipolo",
+      locationMapLink: "https://maps.example.test/giveaway-navigation-grounds",
       area: "Antipolo",
       expectedRiders: 40,
       perkPreview: "Prize draw",

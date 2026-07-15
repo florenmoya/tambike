@@ -32,13 +32,13 @@ export async function createTestActors(
     backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
     backend.loginWithPassword("organizer@bayanko.ph", "password123"),
     backend.signUpRider({
-      displayName: `Test Rider ${suffix}`,
+      displayName: "Fixture Rider",
       email: `rider-${suffix}@example.test`,
       password: "password123",
       area: "Quezon City",
     }),
     backend.signUpRider({
-      displayName: `Test Outsider ${suffix}`,
+      displayName: "Fixture Outsider",
       email: `outsider-${suffix}@example.test`,
       password: "password123",
       area: "Makati City",

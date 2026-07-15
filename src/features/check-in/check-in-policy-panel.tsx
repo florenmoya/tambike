@@ -66,7 +66,7 @@ const modeOptions: Array<{
   {
     value: "staff_only",
     label: "Staff only",
-    description: "Only an authorized organizer, venue operator, or admin can record arrival.",
+    description: "Only the owning organizer or an admin can record arrival.",
   },
   {
     value: "self_review",

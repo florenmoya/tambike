@@ -15,6 +15,7 @@ import type {
   RiderGiveawayClaimContext,
 } from "../../src/features/giveaways/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
 type GiveawayUiDataBackend = Awaited<ReturnType<typeof createTambikeTestBackend>> & {
   listPublicGiveawaysForEvent(eventId: string, sessionToken?: string): Promise<PublicEventGiveaway[]>;
@@ -119,24 +120,22 @@ async function createPublishedGiveaway(
   backend: GiveawayUiDataBackend,
   options: { publish?: boolean } = {},
 ) {
-  const [organizer, admin, venue, rider] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-  ]);
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const { organizer, admin, rider, outsider } = await createTestActors(
+    backend,
+    `giveaway-ui-published-${++uiFixtureSequence}`,
+  );
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Scoped giveaway data ride",
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 15, 2026",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Scoped Giveaway Grounds",
+    locationAddress: "15 Scoped Avenue, Antipolo",
+    locationMapLink: "https://maps.example.test/scoped-giveaway-grounds",
     area: "Antipolo",
     expectedRiders: 20,
     perkPreview: "Scoped giveaway data",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-  await backend.approvePublish(admin.sessionToken, event.id);
 
   const giveaway = await backend.createGiveaway(
     organizer.sessionToken,
@@ -168,31 +167,28 @@ async function createPublishedGiveaway(
   );
   if (!riderState.award) throw new Error("TEST_AWARD_MISSING");
 
-  return { organizer, admin, venue, rider, event, giveaway, awardId: riderState.award.awardId };
+  return { organizer, admin, outsider, rider, event, giveaway, awardId: riderState.award.awardId };
 }
 
 async function createOpenEntryGiveaway(
   backend: GiveawayUiDataBackend,
   entryMode: "claim_code" | "manual_only",
 ) {
-  const [organizer, admin, venue, rider] = await Promise.all([
-    backend.loginWithPassword("marco.organizer@example.com", "password123"),
-    backend.loginWithPassword("admin@bayanko.ph", "secret_123"),
-    backend.loginWithPassword("ana.venue@example.com", "password123"),
-    backend.loginWithPassword("mina.rider@example.com", "password123"),
-  ]);
-  const event = await backend.createEventDraft(organizer.sessionToken, {
+  const { organizer, admin, rider, outsider } = await createTestActors(
+    backend,
+    `giveaway-ui-entry-${++uiFixtureSequence}`,
+  );
+  const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: `${entryMode} organizer controls`,
     type: "Bike Night",
-    venueId: "shell-pugon",
     date: "August 21, 2026",
     time: "7:00 PM - 10:00 PM",
+    locationName: "Entry Control Grounds",
+    locationAddress: "21 Entry Avenue, Antipolo",
     area: "Antipolo",
     expectedRiders: 20,
     perkPreview: "Flexible entry controls",
   });
-  await backend.approveVenueWithConditions(venue.sessionToken, event.id, "Approved");
-  await backend.approvePublish(admin.sessionToken, event.id);
   const giveaway = await backend.createGiveaway(organizer.sessionToken, event.id, {
     ...giveawayInput(event.id),
     title: `${entryMode} campaign`,
@@ -224,8 +220,10 @@ async function createOpenEntryGiveaway(
   await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, { decision: "approved" });
   await backend.openGiveaway(organizer.sessionToken, giveaway.id);
 
-  return { organizer, admin, venue, rider, event, giveaway };
+  return { organizer, admin, outsider, rider, event, giveaway };
 }
+
+let uiFixtureSequence = 0;
 
 describe("giveaway UI data contracts", () => {
   test("publishes only a safe draw receipt and opted-in winner aliases", async () => {
@@ -268,18 +266,20 @@ describe("giveaway UI data contracts", () => {
       "snapshotDigest",
     ]);
     expect(JSON.stringify(campaigns)).not.toMatch(
-      /mina\.rider@example\.com|winnerUserId|awardId|claimReference|claimToken|sourceFact|encrypted|ciphertext|delivery/i,
+      /winnerUserId|awardId|claimReference|claimToken|sourceFact|encrypted|ciphertext|delivery/i,
     );
     await expect(backend.getPublicGiveaway(unpublished.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
       published: true,
-      alias: "Mina R.",
+      alias: "Fixture R.",
     });
     const optedIn = await withDrawEncryptionKey(() =>
       backend.listPublicGiveawaysForEvent(context.event.id),
     );
-    expect(optedIn[0]?.results).toEqual([{ prizePoolTitle: "Helmet prize", winnerAlias: "Mina R." }]);
+    expect(optedIn[0]?.results).toEqual([
+      { prizePoolTitle: "Helmet prize", winnerAlias: "Fixture R." },
+    ]);
 
     await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
       published: false,
@@ -291,13 +291,13 @@ describe("giveaway UI data contracts", () => {
 
     await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
       published: true,
-      alias: "Mina Rejoined",
+      alias: "Fixture Rejoined",
     });
     const reopted = await withDrawEncryptionKey(() =>
       backend.listPublicGiveawaysForEvent(context.event.id),
     );
     expect(reopted[0]?.results).toEqual([
-      { prizePoolTitle: "Helmet prize", winnerAlias: "Mina Rejoined" },
+      { prizePoolTitle: "Helmet prize", winnerAlias: "Fixture Rejoined" },
     ]);
   });
 
@@ -418,7 +418,7 @@ describe("giveaway UI data contracts", () => {
       backend.listAdminGiveaways(context.admin.sessionToken),
       backend.getOrganizerGiveawayWorkspace(context.organizer.sessionToken, context.giveaway.id),
       backend.listGiveawayOperatorCandidates(context.organizer.sessionToken, context.event.id),
-      backend.listEventGiveawayOperatorClaims(context.venue.sessionToken, context.event.id),
+      backend.listEventGiveawayOperatorClaims(context.organizer.sessionToken, context.event.id),
     ]);
 
     expect(adminCampaigns).toContainEqual(
@@ -444,11 +444,11 @@ describe("giveaway UI data contracts", () => {
       }),
     ]);
     expect(JSON.stringify({ workspace, candidates, queue })).not.toMatch(
-      /mina\.rider@example\.com|checksum|auditEvents|sourceFact|sourceSnapshot|seedRevealedAt|encryptedPayload|deliveryDetail/i,
+      /checksum|auditEvents|sourceFact|sourceSnapshot|seedRevealedAt|encryptedPayload|deliveryDetail/i,
     );
 
     await expect(
-      backend.listGiveawayOperatorCandidates(context.venue.sessionToken, context.event.id),
+      backend.listGiveawayOperatorCandidates(context.outsider.sessionToken, context.event.id),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
       backend.listEventGiveawayOperatorClaims(context.rider.sessionToken, context.event.id),
@@ -501,7 +501,7 @@ describe("giveaway UI data contracts", () => {
       expect.objectContaining({ id: issued.id, usedUses: 1, status: "exhausted" }),
     ]);
     await expect(
-      backend.listGiveawayCampaignCodes(context.venue.sessionToken, context.giveaway.id),
+      backend.listGiveawayCampaignCodes(context.outsider.sessionToken, context.giveaway.id),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
@@ -543,7 +543,7 @@ describe("giveaway UI data contracts", () => {
     ]);
     expect(candidates.some((candidate) => candidate.riderId === unrelatedRider.user.id)).toBe(false);
     expect(Object.keys(candidates[0] ?? {}).sort()).toEqual(["label", "riderId"]);
-    expect(JSON.stringify(candidates)).not.toMatch(/mina\.rider@example\.com|passId|sourceFact|phone/i);
+    expect(JSON.stringify(candidates)).not.toMatch(/passId|sourceFact|phone/i);
     await expect(
       backend.listGiveawayManualEntryCandidates(context.admin.sessionToken, context.giveaway.id),
     ).resolves.toEqual(candidates);
