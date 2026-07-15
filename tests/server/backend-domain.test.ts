@@ -1,39 +1,72 @@
 import { describe, expect, test } from "vitest";
-import type {
-  AdminCreateOrganizerInput,
-  CreateEventInput,
-  OrganizerApplicationInput,
-} from "../../src/features/tambike-demo/types";
+import {
+  TAMBIKE_ORGANIZER_PROFILE_ID,
+  TAMBIKE_ORGANIZER_USER_ID,
+} from "../../src/features/tambike-demo/data";
+import {
+  EVENT_LOCATION_LIMITS,
+  normalizeEventLocation,
+} from "../../src/features/tambike-demo/event-location";
+import type { CreateEventInput } from "../../src/features/tambike-demo/types";
 import { createTambikeTestBackend } from "../../src/server/testing";
-
-const validApplicationInput: OrganizerApplicationInput = {
-  organizerType: "Rider community",
-  displayName: "Mina's Weekend Rides",
-  realName: "Mina Rider",
-  contactNumber: "09171234567",
-  fbLink: "https://facebook.com/minas-weekend-rides",
-  pastEventLinks: ["https://facebook.com/events/minas-weekend-ride"],
-};
-
-const validAdminOrganizerInput: AdminCreateOrganizerInput = {
-  ...validApplicationInput,
-  email: "host@example.com",
-  password: "password123",
-  area: "Quezon City",
-};
+import {
+  createPublishedTestEvent,
+  createTestActors,
+  registerTestPass,
+} from "./support/tambike-fixtures";
 
 const validDraftInput: CreateEventInput = {
-  title: "Mina's First Tambike",
-  type: "Tambike",
-  venueId: "shell-pugon",
+  title: "Tambike Night at Katipunan",
+  type: "Bike Night",
   date: "Sat · July 18",
   time: "7:00 PM - 10:00 PM",
-  area: "Katipunan, Quezon City",
   expectedRiders: 45,
   perkPreview: "Free sticker for checked-in riders",
+  locationName: "Katipunan Community Grounds",
+  locationAddress: "123 Katipunan Avenue, Quezon City",
+  locationMapLink: "https://maps.example.test/katipunan-community-grounds",
+  area: "Katipunan, Quezon City",
 };
 
 describe("Tambike backend domain rules", () => {
+  test("seeds only the canonical organizer and admin with curated location snapshots", async () => {
+    const backend = await createTambikeTestBackend();
+    const snapshot = backend.getSnapshot();
+
+    expect(snapshot.users).toHaveLength(2);
+    expect(snapshot.users.map((user) => user.email).sort()).toEqual([
+      "admin@bayanko.ph",
+      "organizer@bayanko.ph",
+    ]);
+    expect(snapshot.users.find((user) => user.id === TAMBIKE_ORGANIZER_USER_ID)).toMatchObject({
+      displayName: "Tambike Organizer",
+      organizerProfileId: TAMBIKE_ORGANIZER_PROFILE_ID,
+      role: "organizer",
+    });
+    expect(snapshot.users.some((user) => user.role === "venue")).toBe(false);
+    expect(
+      snapshot.users.some((user) =>
+        [
+          "mina.rider@example.com",
+          "scan-rider@seed.tambike.local",
+          "ana.venue@example.com",
+        ].includes(user.email),
+      ),
+    ).toBe(false);
+    expect(snapshot.users.some((user) => user.email.endsWith("@seed.tambike.local"))).toBe(false);
+
+    expect(snapshot.events).toHaveLength(24);
+    expect(snapshot.events.every((event) => event.organizerId === TAMBIKE_ORGANIZER_PROFILE_ID)).toBe(
+      true,
+    );
+    expect(snapshot.events.every((event) => normalizeEventLocation(event) !== null)).toBe(true);
+    expect(snapshot.passes).toEqual([]);
+    expect(backend).not.toHaveProperty("applyAsOrganizer");
+    expect(backend).not.toHaveProperty("reviewOrganizerApplication");
+    expect(backend).not.toHaveProperty("createOrganizerForAdmin");
+    expect(backend).not.toHaveProperty("listOrganizerVerifications");
+  });
+
   test("signs up a rider with an unverified role and a server session", async () => {
     const backend = await createTambikeTestBackend();
 
@@ -74,325 +107,135 @@ describe("Tambike backend domain rules", () => {
     ).rejects.toThrow("INVALID_INPUT");
   });
 
-  test("supports email and password login for seeded accounts", async () => {
+  test("supports email and password login for canonical accounts", async () => {
     const backend = await createTambikeTestBackend();
 
-    const result = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const result = await backend.loginWithPassword("organizer@bayanko.ph", "password123");
 
     expect(result.user).toMatchObject({
-      email: "mina.rider@example.com",
-      role: "rider",
+      id: TAMBIKE_ORGANIZER_USER_ID,
+      email: "organizer@bayanko.ph",
+      role: "organizer",
+      organizerProfileId: TAMBIKE_ORGANIZER_PROFILE_ID,
     });
     await expect(backend.getCurrentUser(result.sessionToken)).resolves.toMatchObject({
-      email: "mina.rider@example.com",
+      email: "organizer@bayanko.ph",
     });
   });
 
-  test("exposes one seeded public account per role", async () => {
+  test("allows the approved organizer to submit an arbitrary location directly for admin review", async () => {
     const backend = await createTambikeTestBackend();
-
-    const users = backend.getSnapshot().users;
-    const roles = users.map((user) => user.role).sort();
-
-    expect(roles).toEqual(["admin", "organizer", "rider", "venue"]);
-    expect(users).toHaveLength(4);
-    expect(users.map((user) => user.email).sort()).toEqual([
-      "marco.organizer@example.com",
-      "mina.rider@example.com",
-      "admin@bayanko.ph",
-      "ana.venue@example.com",
-    ].sort());
-  });
-
-  test("allows approved organizers to create drafts while blocking riders from event creation", async () => {
-    const backend = await createTambikeTestBackend();
-    const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");
-    const organizerSession = await backend.loginWithPassword(
-      "marco.organizer@example.com",
-      "password123",
-    );
+    const actors = await createTestActors(backend, "domain-create");
 
     await expect(
-      backend.createEventDraft(riderSession.sessionToken, {
+      backend.createEventDraft(actors.rider.sessionToken, {
+        ...validDraftInput,
         title: "Rider Attempt",
-        type: "Bike Night",
-        venueId: "shell-pugon",
-        date: "Sat · July 18",
-        time: "7:00 PM - 10:00 PM",
-        area: "Katipunan, Quezon City",
-        expectedRiders: 45,
-        perkPreview: "Free sticker",
       }),
-    ).rejects.toThrow("FORBIDDEN");
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    const draft = await backend.createEventDraft(organizerSession.sessionToken, {
-      title: "Tambike Night at Katipunan",
-      type: "Bike Night",
-      venueId: "shell-pugon",
-      date: "Sat · July 18",
-      time: "7:00 PM - 10:00 PM",
+    await expect(
+      backend.createEventDraft(actors.organizer.sessionToken, {
+        ...validDraftInput,
+        locationName: "  Katipunan Community Grounds  ",
+        locationAddress: "  123 Katipunan Avenue, Quezon City  ",
+        locationMapLink: "  https://maps.example.test/katipunan-community-grounds  ",
+        area: "  Katipunan, Quezon City  ",
+      }),
+    ).resolves.toMatchObject({
+      title: validDraftInput.title,
+      status: "PENDING_ADMIN_REVIEW",
+      organizerId: TAMBIKE_ORGANIZER_PROFILE_ID,
+      locationName: "Katipunan Community Grounds",
+      locationAddress: "123 Katipunan Avenue, Quezon City",
+      locationMapLink: "https://maps.example.test/katipunan-community-grounds",
       area: "Katipunan, Quezon City",
       expectedRiders: 45,
-      perkPreview: "Free sticker for checked-in riders",
-    });
-
-    expect(draft).toMatchObject({
-      title: "Tambike Night at Katipunan",
-      status: "PENDING_VENUE_APPROVAL",
-      expectedRiders: 45,
     });
   });
 
-  test("moves a rider into a pending organizer application and keeps event creation blocked", async () => {
+  test.each([
+    ["blank location name", { locationName: "   " }],
+    ["over-limit address", { locationAddress: "x".repeat(EVENT_LOCATION_LIMITS.address + 1) }],
+    ["unsafe map URL", { locationMapLink: "javascript:alert(1)" }],
+  ])("rejects %s", async (_label, locationOverride) => {
     const backend = await createTambikeTestBackend();
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
-
-    const application = await backend.applyAsOrganizer(rider.sessionToken, validApplicationInput);
-
-    expect(application).toMatchObject({ status: "PENDING", ownerEmail: "mina.rider@example.com" });
-    await expect(backend.getCurrentUser(rider.sessionToken)).resolves.toMatchObject({
-      role: "organizer",
-      verificationStatus: "PENDING",
-      organizerProfileId: application.id,
-    });
-    await expect(backend.createEventDraft(rider.sessionToken, validDraftInput)).rejects.toThrow(
-      "FORBIDDEN",
-    );
-  });
-
-  test("allows only an admin to approve a pending organizer and unlocks event creation", async () => {
-    const backend = await createTambikeTestBackend();
-    const rider = await backend.loginWithPassword("mina.rider@example.com", "password123");
-    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-    const application = await backend.applyAsOrganizer(rider.sessionToken, validApplicationInput);
+    const actors = await createTestActors(backend, `invalid-${_label}`);
 
     await expect(
-      backend.reviewOrganizerApplication(rider.sessionToken, application.id, "APPROVED"),
-    ).rejects.toThrow("FORBIDDEN");
-    await backend.reviewOrganizerApplication(
-      admin.sessionToken,
-      application.id,
-      "APPROVED",
-      "Verified page",
-    );
-    await expect(backend.createEventDraft(rider.sessionToken, validDraftInput)).resolves.toMatchObject({
-      title: validDraftInput.title,
-    });
-  });
-
-  test("lets an admin create an immediately approved organizer and rejects duplicate email", async () => {
-    const backend = await createTambikeTestBackend();
-    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-
-    const created = await backend.createOrganizerForAdmin(
-      admin.sessionToken,
-      validAdminOrganizerInput,
-    );
-
-    expect(created).toMatchObject({
-      ownerEmail: "host@example.com",
-      status: "APPROVED",
-      ownerRole: "organizer",
-    });
-    await expect(
-      backend.createOrganizerForAdmin(admin.sessionToken, validAdminOrganizerInput),
-    ).rejects.toThrow("INVALID_INPUT");
-  });
-
-  test("allows only one concurrent admin organizer creation for the same email", async () => {
-    const backend = await createTambikeTestBackend();
-    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-
-    const results = await Promise.allSettled([
-      backend.createOrganizerForAdmin(admin.sessionToken, validAdminOrganizerInput),
-      backend.createOrganizerForAdmin(admin.sessionToken, validAdminOrganizerInput),
-    ]);
-
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    const rejected = results.find((result) => result.status === "rejected");
-    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: "INVALID_INPUT" }) });
-
-    const verifications = await backend.listOrganizerVerifications(admin.sessionToken);
-    expect(
-      verifications.filter((verification) => verification.ownerEmail === validAdminOrganizerInput.email),
-    ).toHaveLength(1);
-    expect(
-      backend
-        .getSnapshot()
-        .users.filter((user) => user.email === validAdminOrganizerInput.email),
-    ).toHaveLength(1);
-  });
-
-  test("allows only one concurrent account creation across admin organizer creation and rider signup", async () => {
-    const backend = await createTambikeTestBackend();
-    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-    const email = "shared-account@example.com";
-
-    const results = await Promise.allSettled([
-      backend.createOrganizerForAdmin(admin.sessionToken, {
-        ...validAdminOrganizerInput,
-        email: ` ${email.toUpperCase()} `,
+      backend.createEventDraft(actors.organizer.sessionToken, {
+        ...validDraftInput,
+        ...locationOverride,
       }),
-      backend.signUpRider({
-        displayName: "Shared Account Rider",
-        email,
-        password: "password123",
-        area: "Quezon City",
-      }),
-    ]);
-
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    const rejected = results.find((result) => result.status === "rejected");
-    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: "INVALID_INPUT" }) });
-    expect(backend.getSnapshot().users.filter((user) => user.email === email)).toHaveLength(1);
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  test("releases a reserved organizer email after invalid-password creation fails", async () => {
+  test("publishes directly from admin review without a venue transition", async () => {
     const backend = await createTambikeTestBackend();
-    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-    const email = "retry-organizer@example.com";
+    const actors = await createTestActors(backend, "domain-publish");
 
-    await expect(
-      backend.createOrganizerForAdmin(admin.sessionToken, {
-        ...validAdminOrganizerInput,
-        email,
-        password: "short",
-      }),
-    ).rejects.toThrow("INVALID_INPUT");
-
-    await expect(
-      backend.createOrganizerForAdmin(admin.sessionToken, {
-        ...validAdminOrganizerInput,
-        email,
-      }),
-    ).resolves.toMatchObject({ ownerEmail: email, status: "APPROVED" });
-    expect(backend.getSnapshot().users.filter((user) => user.email === email)).toHaveLength(1);
-  });
-
-  test("creates non-guessable pass tokens when a rider registers going", async () => {
-    const backend = await createTambikeTestBackend();
-    const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");
-
-    const first = await backend.registerForEvent(riderSession.sessionToken, "tambike-cafe-classico", {
-      status: "going",
-      attendanceType: "direct",
-    });
-    const second = await backend.registerForEvent(riderSession.sessionToken, "motoir-national-round-4", {
-      status: "going",
-      attendanceType: "club",
-      clubName: "Davao Riders",
+    const published = await createPublishedTestEvent(backend, actors, {
+      title: "Direct Review Event",
     });
 
-    expect(first.pass?.qrToken).toMatch(/^tbk_[A-Za-z0-9_-]{32,}$/);
-    expect(second.pass?.qrToken).toMatch(/^tbk_[A-Za-z0-9_-]{32,}$/);
-    expect(first.pass?.qrToken).not.toContain("arai");
-    expect(first.pass?.qrToken).not.toEqual(second.pass?.qrToken);
+    expect(published).toMatchObject({
+      title: "Direct Review Event",
+      status: "PUBLISHED",
+      organizerId: TAMBIKE_ORGANIZER_PROFILE_ID,
+    });
+    expect(backend).not.toHaveProperty("approveVenueWithConditions");
+  });
+
+  test("creates non-guessable pass tokens through explicit rider fixtures", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "domain-pass");
+    const firstEvent = await createPublishedTestEvent(backend, actors, {
+      title: "First Pass Event",
+    });
+    const secondEvent = await createPublishedTestEvent(backend, actors, {
+      title: "Second Pass Event",
+    });
+
+    const first = await registerTestPass(backend, actors.rider, firstEvent.id);
+    const second = await registerTestPass(backend, actors.rider, secondEvent.id);
+
+    expect(first.qrToken).toMatch(/^tbk_[A-Za-z0-9_-]{32,}$/);
+    expect(second.qrToken).toMatch(/^tbk_[A-Za-z0-9_-]{32,}$/);
+    expect(first.qrToken).not.toEqual(second.qrToken);
   });
 
   test("searches events by text query before returning public results", async () => {
     const backend = await createTambikeTestBackend();
-    const searchableBackend = backend as typeof backend & {
-      listEvents(input?: { q?: string }): ReturnType<typeof backend.listEvents>;
-    };
 
-    const results = searchableBackend.listEvents({ q: "makina" });
+    const results = backend.listEvents({ q: "makina" });
 
     expect(results.map((event) => event.title)).toEqual(["Makina Moto Expo Cebu"]);
   });
 
   test("blocks registration for explicit past-year events", async () => {
     const backend = await createTambikeTestBackend();
-    const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");
+    const actors = await createTestActors(backend, "domain-past-event");
 
     await expect(
-      backend.registerForEvent(riderSession.sessionToken, "fullprint-manila-tambike", {
+      backend.registerForEvent(actors.rider.sessionToken, "fullprint-manila-tambike", {
         status: "going",
         attendanceType: "direct",
       }),
-    ).rejects.toThrow("INVALID_INPUT");
-  });
-
-  test("enforces scanner event ownership while allowing admin overrides and blocking duplicates", async () => {
-    const backend = await createTambikeTestBackend();
-    const riderSession = await backend.loginWithPassword("mina.rider@example.com", "password123");
-    const organizerSession = await backend.loginWithPassword(
-      "marco.organizer@example.com",
-      "password123",
-    );
-    const adminSession = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
-    const registration = await backend.registerForEvent(
-      riderSession.sessionToken,
-      "tambike-cafe-classico",
-      { status: "going", attendanceType: "direct" },
-    );
-
-    await expect(
-      backend.scanPass(
-        organizerSession.sessionToken,
-        "tambike-cafe-classico",
-        registration.pass!.qrToken,
-        "staff_camera",
-      ),
-    ).rejects.toThrow("FORBIDDEN");
-
-    await expect(
-      backend.scanPass(
-        riderSession.sessionToken,
-        "tambike-cafe-classico",
-        registration.pass!.qrToken,
-        "staff_camera",
-      ),
-    ).rejects.toThrow("FORBIDDEN");
-
-    await expect(
-      backend.scanPass(
-        adminSession.sessionToken,
-        "tambike-cafe-classico",
-        registration.pass!.qrToken,
-        "rider_qr",
-      ),
-    ).rejects.toThrow("INVALID_INPUT");
-
-    const checkIn = await backend.scanPass(
-      adminSession.sessionToken,
-      "tambike-cafe-classico",
-      registration.pass!.qrToken,
-      "staff_camera",
-    );
-
-    expect(checkIn.status).toBe("checked_in");
-    await expect(
-      backend.scanPass(
-        adminSession.sessionToken,
-        "motoir-national-round-4",
-        registration.pass!.qrToken,
-        "staff_camera",
-      ),
-    ).rejects.toThrow("WRONG_EVENT");
-    await expect(
-      backend.scanPass(
-        adminSession.sessionToken,
-        "tambike-cafe-classico",
-        registration.pass!.qrToken,
-        "staff_camera",
-      ),
-    ).rejects.toThrow("ALREADY_CHECKED_IN");
-    expect(await backend.auditCount("CHECK_IN_CREATED")).toBe(1);
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   test("requires admin access for attendee CSV exports and logs the export", async () => {
     const backend = await createTambikeTestBackend();
-    const organizerSession = await backend.loginWithPassword(
-      "marco.organizer@example.com",
-      "password123",
-    );
-    const adminSession = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+    const actors = await createTestActors(backend, "domain-export");
 
     await expect(
-      backend.exportAttendeesCsv(organizerSession.sessionToken, "arai-hjc-charity-ride"),
-    ).rejects.toThrow("FORBIDDEN");
+      backend.exportAttendeesCsv(actors.organizer.sessionToken, "arai-hjc-charity-ride"),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    const csv = await backend.exportAttendeesCsv(adminSession.sessionToken, "arai-hjc-charity-ride");
+    const csv = await backend.exportAttendeesCsv(
+      actors.admin.sessionToken,
+      "arai-hjc-charity-ride",
+    );
 
     expect(csv).toContain("event_id,user_email,rsvp_status,pass_status,checked_in_at");
     expect(csv).toContain("arai-hjc-charity-ride");

@@ -1,4 +1,4 @@
-export type Role = "guest" | "rider" | "organizer" | "venue" | "admin";
+export type Role = "guest" | "rider" | "organizer" | "admin";
 
 export type AccountRole = Exclude<Role, "guest">;
 
@@ -11,7 +11,6 @@ export type VerificationStatus =
 
 export type EventStatus =
   | "DRAFT"
-  | "PENDING_VENUE_APPROVAL"
   | "PENDING_ADMIN_REVIEW"
   | "PUBLISHED"
   | "ONGOING"
@@ -89,17 +88,6 @@ export type ScanPassCode =
   | "INVALID_INPUT"
   | "ERROR";
 
-export interface Venue {
-  id: string;
-  name: string;
-  area: string;
-  address: string;
-  mapLink: string;
-  capacityNote: string;
-  status: VerificationStatus;
-  houseRules: string[];
-}
-
 export interface OrganizerProfile {
   id: string;
   displayName: string;
@@ -107,39 +95,6 @@ export interface OrganizerProfile {
   fbLink: string;
   verificationStatus: VerificationStatus;
   pastEvents: number;
-}
-
-export interface OrganizerApplicationInput {
-  organizerType: string;
-  displayName: string;
-  realName: string;
-  contactNumber: string;
-  fbLink: string;
-  pastEventLinks: string[];
-}
-
-export interface AdminCreateOrganizerInput extends OrganizerApplicationInput {
-  email: string;
-  password: string;
-  area: string;
-}
-
-export interface OrganizerVerificationRecord {
-  id: string;
-  ownerUserId: string;
-  ownerEmail: string;
-  ownerName: string;
-  ownerRole: "organizer";
-  status: VerificationStatus;
-  organizerType: string;
-  displayName: string;
-  realName: string;
-  contactNumber: string;
-  fbLink: string;
-  pastEventLinks: string[];
-  pastEvents: number;
-  activeEvents: number;
-  adminNotes?: string;
 }
 
 export interface UserProfile {
@@ -153,7 +108,6 @@ export interface UserProfile {
   clubName?: string;
   joinedAt: string;
   organizerProfileId?: string;
-  venueId?: string;
 }
 
 export interface ProfileInput {
@@ -175,13 +129,11 @@ export interface EventLocationInput {
   area: string;
 }
 
-export interface CreateEventInput {
+export interface CreateEventInput extends EventLocationInput {
   title: string;
   type: EventType;
-  venueId: string;
   date: string;
   time: string;
-  area: string;
   expectedRiders: number;
   perkPreview: string;
 }
@@ -193,17 +145,15 @@ export interface Perk {
   quantity?: number;
 }
 
-export interface Event {
+export interface Event extends EventLocationInput {
   id: string;
   title: string;
   type: EventType;
   status: EventStatus;
   organizerId: string;
-  venueId: string;
   poster: string;
   date: string;
   time: string;
-  area: string;
   shortDescription: string;
   whatHappens: string;
   going: number;
@@ -231,7 +181,6 @@ export interface Event {
 export interface Approval {
   id: string;
   eventId: string;
-  type: "venue" | "admin";
   decision: "pending" | "approved" | "approved_with_conditions" | "published";
   reviewer: string;
   notes: string;

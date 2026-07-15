@@ -58,7 +58,8 @@ import {
   parseCreateGiveawayInput,
   validateGiveawayUpdateInput,
 } from "@/features/giveaways/validation";
-import { demoEvents, mockUsers, organizers, venues } from "@/features/tambike-demo/data";
+import { demoEvents, seedUsers } from "@/features/tambike-demo/data";
+import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -66,7 +67,6 @@ import {
 } from "@/features/tambike-demo/event-state";
 import type {
   AccountRole,
-  AdminCreateOrganizerInput,
   AttendanceType,
   CheckInConfiguration,
   CheckInMode,
@@ -76,8 +76,6 @@ import type {
   Event,
   EventType,
   OrganizerQrMode,
-  OrganizerApplicationInput,
-  OrganizerVerificationRecord,
   Pass,
   ProfileInput,
   RSVP,
@@ -188,7 +186,6 @@ export type AuditAction =
   | "CHECK_IN_CONFIRMED"
   | "CHECK_IN_SETTINGS_UPDATED"
   | "SELF_CHECK_IN_REQUESTED"
-  | "VENUE_APPROVED"
   | "ADMIN_PUBLISHED"
   | "ATTENDEE_EXPORT_CREATED"
   | "LEAD_EXPORT_CREATED"
@@ -675,25 +672,24 @@ type BackendSeed = {
   users: BackendUser[];
   events: Event[];
   rsvps: Array<RSVP & { userId: string; goingAt?: string }>;
-  organizerVerifications: OrganizerVerificationRecord[];
   passes: Array<Pass & { userId: string }>;
   giveaways: GiveawayAggregate[];
   perkRedemptions: PerkRedemptionRecord[];
 };
 
+export type TambikeTestFixture = {
+  users?: Array<UserProfile & { password: string }>;
+  rsvps?: Array<RSVP & { userId: string; goingAt?: string }>;
+  passes?: Array<Pass & { userId: string }>;
+};
+
 export type TambikeTestSeedOptions = {
+  fixture?: TambikeTestFixture;
   perkQuantities?: Record<string, number>;
   /** Deterministic test seam for counterfactual draw comparisons. */
   generateGiveawayDrawSeed?: () => Uint8Array;
   /** Deterministic test seam for IDs that participate in frozen draw state. */
   generateGiveawayUuid?: () => string;
-};
-
-const demoScannerPass = {
-  eventId: "arai-hjc-charity-ride",
-  userId: "user-demo-scan-rider",
-  passId: "pass-arai-hjc-charity-ride-user-demo-scan-rider",
-  qrToken: "tbk_yKZKcLiDPmQ91TgS-eqvp4hLRR2PBumJtKt6e2HMA0s",
 };
 
 function slugify(value: string) {
@@ -719,15 +715,6 @@ function cloneUser(user: BackendUser): UserProfile {
   const { passwordHash, ...profile } = user;
   void passwordHash;
   return { ...profile };
-}
-
-function cloneOrganizerVerification(
-  organizerVerification: OrganizerVerificationRecord,
-): OrganizerVerificationRecord {
-  return {
-    ...organizerVerification,
-    pastEventLinks: [...organizerVerification.pastEventLinks],
-  };
 }
 
 function makeSessionToken() {
@@ -774,63 +761,30 @@ function passIdForEvent(eventId: string, userId: string) {
   return `pass-${eventId}-${userId}`;
 }
 
-function requiredTrimmedOrganizerField(value: string) {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  if (!trimmed) {
-    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-  }
-
-  return trimmed;
-}
-
-function validateOrganizerApplicationInput(input: OrganizerApplicationInput) {
-  const pastEventLinks = Array.isArray(input.pastEventLinks)
-    ? input.pastEventLinks
-        .filter((link): link is string => typeof link === "string")
-        .map((link) => link.trim())
-        .filter(Boolean)
-    : [];
-  if (pastEventLinks.length === 0) {
-    throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-  }
-
-  return {
-    organizerType: requiredTrimmedOrganizerField(input.organizerType),
-    displayName: requiredTrimmedOrganizerField(input.displayName),
-    realName: requiredTrimmedOrganizerField(input.realName),
-    contactNumber: requiredTrimmedOrganizerField(input.contactNumber),
-    fbLink: requiredTrimmedOrganizerField(input.fbLink),
-    pastEventLinks,
-  };
-}
-
 function defaultRulesForEvent(type: EventType) {
   const baseRules = ["Helmet required", "No racing", "No stunts", "No revving"];
   if (type === "Track Day" || type === "Race") {
     return [...baseRules, "Follow marshal instructions"];
   }
 
-  return [...baseRules, "Respect venue staff"];
+  return [...baseRules, "Respect event staff"];
 }
 
 async function createSeed(options: TambikeTestSeedOptions = {}): Promise<BackendSeed> {
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
+  const fixtureUsers = await Promise.all(
+    (options.fixture?.users ?? []).map(async ({ password, ...user }) => ({
+      ...user,
+      passwordHash: await bcrypt.hash(password, 10),
+    })),
+  );
   const users: BackendUser[] = [
-    ...mockUsers.map<BackendUser>((user) => ({
+    ...seedUsers.map<BackendUser>((user) => ({
       ...user,
       passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
     })),
-    {
-      id: demoScannerPass.userId,
-      displayName: "Seeded Scan Rider",
-      email: "scan-rider@seed.tambike.local",
-      role: "rider",
-      verificationStatus: "UNVERIFIED",
-      area: "Antipolo",
-      joinedAt: "July 9, 2026",
-      passwordHash,
-    },
+    ...fixtureUsers,
   ];
 
   const events = demoEvents.map(cloneEvent);
@@ -846,59 +800,11 @@ async function createSeed(options: TambikeTestSeedOptions = {}): Promise<Backend
     }
   }
 
-  const organizerVerifications: OrganizerVerificationRecord[] = [];
-  const seededOrganizer = users.find(
-    (user) => user.role === "organizer" && user.organizerProfileId,
-  );
-  const seededOrganizerProfile = organizers.find(
-    (organizer) => organizer.id === seededOrganizer?.organizerProfileId,
-  );
-  if (seededOrganizer && seededOrganizerProfile) {
-    organizerVerifications.push({
-      id: seededOrganizerProfile.id,
-      ownerUserId: seededOrganizer.id,
-      ownerEmail: seededOrganizer.email,
-      ownerName: seededOrganizer.displayName,
-      ownerRole: "organizer",
-      status: seededOrganizer.verificationStatus,
-      organizerType: seededOrganizerProfile.type,
-      displayName: seededOrganizerProfile.displayName,
-      realName: seededOrganizer.displayName,
-      contactNumber: "09000000000",
-      fbLink: seededOrganizerProfile.fbLink,
-      pastEventLinks: [],
-      pastEvents: seededOrganizerProfile.pastEvents,
-      activeEvents: events.filter(
-        (event) =>
-          event.organizerId === seededOrganizerProfile.id &&
-          !["COMPLETED", "CANCELLED", "REJECTED"].includes(event.status),
-      ).length,
-    });
-  }
-
   return {
     users,
     events,
-    organizerVerifications,
-    rsvps: [
-      {
-        eventId: demoScannerPass.eventId,
-        userId: demoScannerPass.userId,
-        status: "going",
-        attendanceType: "direct",
-        clubName: "Weekend Tambike Crew",
-      },
-    ],
-    passes: [
-      {
-        id: demoScannerPass.passId,
-        eventId: demoScannerPass.eventId,
-        userId: demoScannerPass.userId,
-        qrToken: demoScannerPass.qrToken,
-        status: "active",
-        generatedAt: "2026-07-09T00:00:00.000Z",
-      },
-    ],
+    rsvps: (options.fixture?.rsvps ?? []).map((rsvp) => ({ ...rsvp })),
+    passes: (options.fixture?.passes ?? []).map((pass) => ({ ...pass })),
     giveaways: [],
     perkRedemptions: [],
   };
@@ -909,8 +815,6 @@ export class TambikeBackend {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
   private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string }>();
-  private readonly organizerVerifications = new Map<string, OrganizerVerificationRecord>();
-  private readonly reservedUserEmails = new Set<string>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly checkIns = new Map<string, CheckInRecord>();
   private readonly checkInSettings = new Map<string, CheckInSettings>();
@@ -956,13 +860,6 @@ export class TambikeBackend {
 
     for (const event of seed.events) {
       this.events.set(event.id, cloneEvent(event));
-    }
-
-    for (const organizerVerification of seed.organizerVerifications) {
-      this.organizerVerifications.set(
-        organizerVerification.id,
-        cloneOrganizerVerification(organizerVerification),
-      );
     }
 
     for (const rsvp of seed.rsvps) {
@@ -1014,35 +911,33 @@ export class TambikeBackend {
 
   async signUpRider(input: SignupWithPasswordInput) {
     const email = input.email.trim().toLowerCase();
-    this.reserveNewUserEmail(email);
-
-    try {
-      validateSignupPassword(input.password);
-
-      const user: BackendUser = {
-        id: `user-${slugify(email || input.displayName)}`,
-        displayName: input.displayName.trim(),
-        email,
-        role: "rider",
-        verificationStatus: "UNVERIFIED",
-        area: input.area.trim(),
-        bikeModel: input.bikeModel?.trim() || undefined,
-        clubName: input.clubName?.trim() || undefined,
-        joinedAt: "July 4, 2026",
-        passwordHash: await bcrypt.hash(input.password, 10),
-      };
-
-      this.users.set(user.id, user);
-      this.audit("USER_CREATED", user.id, user.id);
-      const session = this.createSessionForUser(user.id);
-
-      return {
-        user: cloneUser(user),
-        sessionToken: session.token,
-      };
-    } finally {
-      this.reservedUserEmails.delete(email);
+    validateSignupPassword(input.password);
+    const passwordHash = await bcrypt.hash(input.password, 10);
+    if (!email || this.findUserByEmail(email)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
+
+    const user: BackendUser = {
+      id: `user-${slugify(email || input.displayName)}`,
+      displayName: input.displayName.trim(),
+      email,
+      role: "rider",
+      verificationStatus: "UNVERIFIED",
+      area: input.area.trim(),
+      bikeModel: input.bikeModel?.trim() || undefined,
+      clubName: input.clubName?.trim() || undefined,
+      joinedAt: "July 4, 2026",
+      passwordHash,
+    };
+
+    this.users.set(user.id, user);
+    this.audit("USER_CREATED", user.id, user.id);
+    const session = this.createSessionForUser(user.id);
+
+    return {
+      user: cloneUser(user),
+      sessionToken: session.token,
+    };
   }
 
   async loginWithPassword(email: string, password: string) {
@@ -1082,155 +977,60 @@ export class TambikeBackend {
     return cloneUser(updated);
   }
 
-  async applyAsOrganizer(sessionToken: string, input: OrganizerApplicationInput) {
-    const user = this.requireRole(sessionToken, "rider");
+  async createEventDraft(sessionToken: string, input: CreateEventInput) {
+    const user = this.requireUser(sessionToken);
     if (
-      user.organizerProfileId ||
-      Array.from(this.organizerVerifications.values()).some(
-        (organizerVerification) => organizerVerification.ownerUserId === user.id,
-      )
+      user.role !== "organizer" ||
+      user.verificationStatus !== "APPROVED" ||
+      !user.organizerProfileId
+    ) {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
+
+    const title = input.title.trim();
+    const date = input.date.trim();
+    const time = input.time.trim();
+    const perkPreview = input.perkPreview.trim();
+    const expectedRiders = Number(input.expectedRiders);
+    const location = normalizeEventLocation(input);
+    if (
+      !title ||
+      !date ||
+      !time ||
+      !perkPreview ||
+      !Number.isInteger(expectedRiders) ||
+      expectedRiders <= 0 ||
+      !location
     ) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
 
-    const application = validateOrganizerApplicationInput(input);
-    const record: OrganizerVerificationRecord = {
-      id: `organizer-${user.id}`,
-      ownerUserId: user.id,
-      ownerEmail: user.email,
-      ownerName: user.displayName,
-      ownerRole: "organizer",
-      status: "PENDING",
-      ...application,
-      pastEvents: 0,
-      activeEvents: 0,
-    };
-    this.organizerVerifications.set(record.id, record);
-    this.users.set(user.id, {
-      ...user,
-      role: "organizer",
-      verificationStatus: "PENDING",
-      organizerProfileId: record.id,
-    });
-    this.audit("ORGANIZER_APPLICATION_SUBMITTED", user.id, record.id);
-    return cloneOrganizerVerification(record);
-  }
-
-  async reviewOrganizerApplication(
-    sessionToken: string,
-    organizerId: string,
-    status: "APPROVED" | "REJECTED",
-    adminNotes?: string,
-  ) {
-    if (status !== "APPROVED" && status !== "REJECTED") {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-
-    const admin = this.requireRole(sessionToken, "admin");
-    const record = this.requireOrganizerVerification(organizerId);
-    const owner = this.requireUserById(record.ownerUserId);
-    const next = { ...record, status, adminNotes: adminNotes?.trim() || undefined };
-    this.organizerVerifications.set(record.id, next);
-    this.users.set(owner.id, {
-      ...owner,
-      role: "organizer",
-      verificationStatus: status,
-      organizerProfileId: record.id,
-    });
-    this.audit("ORGANIZER_APPLICATION_REVIEWED", admin.id, record.id);
-    return cloneOrganizerVerification(next);
-  }
-
-  async createOrganizerForAdmin(
-    sessionToken: string,
-    input: AdminCreateOrganizerInput,
-  ) {
-    const admin = this.requireRole(sessionToken, "admin");
-    const email = requiredTrimmedOrganizerField(input.email).toLowerCase();
-    this.reserveNewUserEmail(email);
-
-    try {
-      validateSignupPassword(input.password);
-      const application = validateOrganizerApplicationInput(input);
-      const area = requiredTrimmedOrganizerField(input.area);
-      const userId = `user-${randomUUID()}`;
-      const organizerId = `organizer-${randomUUID()}`;
-      const user: BackendUser = {
-        id: userId,
-        displayName: application.displayName,
-        email,
-        role: "organizer",
-        verificationStatus: "APPROVED",
-        area,
-        joinedAt: "July 11, 2026",
-        organizerProfileId: organizerId,
-        passwordHash: await bcrypt.hash(input.password, 10),
-      };
-      const record: OrganizerVerificationRecord = {
-        id: organizerId,
-        ownerUserId: user.id,
-        ownerEmail: user.email,
-        ownerName: user.displayName,
-        ownerRole: "organizer",
-        status: "APPROVED",
-        ...application,
-        pastEvents: 0,
-        activeEvents: 0,
-      };
-      this.users.set(user.id, user);
-      this.organizerVerifications.set(record.id, record);
-      this.audit("ORGANIZER_CREATED_BY_ADMIN", admin.id, record.id);
-      return cloneOrganizerVerification(record);
-    } finally {
-      this.reservedUserEmails.delete(email);
-    }
-  }
-
-  async listOrganizerVerifications(sessionToken: string) {
-    this.requireRole(sessionToken, "admin");
-    return Array.from(this.organizerVerifications.values()).map(cloneOrganizerVerification);
-  }
-
-  async createEventDraft(sessionToken: string, input: CreateEventInput) {
-    const user = this.requireUser(sessionToken);
-    if (user.role !== "organizer" || user.verificationStatus !== "APPROVED") {
-      throw new BackendError("FORBIDDEN", "FORBIDDEN");
-    }
-
-    const venue = venues.find((candidate) => candidate.id === input.venueId);
-    if (!venue || venue.status !== "APPROVED") {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-
-    const baseId = slugify(input.title);
+    const baseId = slugify(title);
     const eventId = this.events.has(baseId) ? `${baseId}-${this.events.size + 1}` : baseId;
-    const expectedRiders = Math.max(1, Number(input.expectedRiders) || 1);
     const event: Event = {
       id: eventId,
-      title: input.title.trim(),
+      title,
       type: input.type,
-      status: "PENDING_VENUE_APPROVAL",
-      organizerId: user.organizerProfileId ?? "arai-hjc-riders",
-      venueId: venue.id,
+      status: "PENDING_ADMIN_REVIEW",
+      organizerId: user.organizerProfileId,
+      ...location,
       poster: "/demo/poster-tambike-cafe-classico.jpg",
-      date: input.date.trim(),
-      time: input.time.trim(),
-      area: input.area.trim(),
-      shortDescription: `${input.title.trim()} is awaiting venue approval.`,
-      whatHappens:
-        "Organizer-created draft that will move through venue approval and admin publish.",
+      date,
+      time,
+      shortDescription: `${title} is awaiting admin review.`,
+      whatHappens: "Organizer-created event submitted directly for admin review and publication.",
       going: 0,
       interested: 0,
       expectedRiders,
-      perkPreview: input.perkPreview.trim(),
-      tags: [input.type, "Venue approval"],
+      perkPreview,
+      tags: [input.type, "Admin review"],
       riskFlags: this.riskFlagsFor(input.type, expectedRiders),
       rules: defaultRulesForEvent(input.type),
       perks: [
         {
           id: `perk-${eventId}`,
           type: "Check-in perk",
-          description: input.perkPreview.trim(),
+          description: perkPreview,
         },
       ],
     };
@@ -4339,21 +4139,12 @@ export class TambikeBackend {
     return { ...pass };
   }
 
-  async approveVenueWithConditions(sessionToken: string, eventId: string, conditions: string) {
-    const user = this.requireUser(sessionToken);
-    if (!["venue", "admin"].includes(user.role)) {
-      throw new BackendError("FORBIDDEN", "FORBIDDEN");
-    }
-
-    const event = this.requireEvent(eventId);
-    event.status = "PENDING_ADMIN_REVIEW";
-    this.audit("VENUE_APPROVED", user.id, event.id);
-    return { event: cloneEvent(event), conditions: conditions.trim() };
-  }
-
   async approvePublish(sessionToken: string, eventId: string) {
     const user = this.requireRole(sessionToken, "admin");
     const event = this.requireEvent(eventId);
+    if (event.status !== "PENDING_ADMIN_REVIEW") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
     event.status = "PUBLISHED";
     this.audit("ADMIN_PUBLISHED", user.id, event.id);
     return cloneEvent(event);
@@ -7467,25 +7258,8 @@ export class TambikeBackend {
     return user;
   }
 
-  private requireOrganizerVerification(organizerId: string) {
-    const organizerVerification = this.organizerVerifications.get(organizerId);
-    if (!organizerVerification) {
-      throw new BackendError("NOT_FOUND", "NOT_FOUND");
-    }
-
-    return organizerVerification;
-  }
-
   private findUserByEmail(email: string) {
     return Array.from(this.users.values()).find((user) => user.email === email) ?? null;
-  }
-
-  private reserveNewUserEmail(email: string) {
-    if (!email || this.findUserByEmail(email) || this.reservedUserEmails.has(email)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-
-    this.reservedUserEmails.add(email);
   }
 
   private audit(action: AuditAction, actorUserId?: string, targetId?: string) {
@@ -7507,7 +7281,7 @@ export class TambikeBackend {
       flags.push("Expected riders need review");
     }
 
-    return flags.length > 0 ? flags : ["Standard venue approval"];
+    return flags.length > 0 ? flags : ["Standard admin review"];
   }
 }
 
@@ -7541,7 +7315,7 @@ export function getTambikeBackend() {
   return runtimeBackendState.backend;
 }
 
-export async function resetTambikeBackendForTests() {
-  runtimeBackendState.backend = TambikeBackend.create();
+export async function resetTambikeBackendForTests(options: TambikeTestSeedOptions = {}) {
+  runtimeBackendState.backend = TambikeBackend.create(options);
   return runtimeBackendState.backend;
 }

@@ -74,13 +74,6 @@ export async function registerForEventAction(
   };
 }
 
-export async function approveVenueWithConditionsAction(eventId: string, conditions: string) {
-  const backend = await getTambikeBackend();
-  const token = await readRequiredSessionToken();
-  await backend.approveVenueWithConditions(token, eventId, conditions);
-  return snapshot();
-}
-
 export async function approvePublishAction(eventId: string) {
   const backend = await getTambikeBackend();
   const token = await readRequiredSessionToken();

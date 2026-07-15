@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   approvePublishAction,
-  approveVenueWithConditionsAction,
   configureCheckInAction,
   createEventDraftAction,
   issueSelfCheckInQrAction,
@@ -71,10 +70,6 @@ interface DemoContextValue {
   ) => Promise<EventCheckInSettings>;
   issueSelfCheckInQr: (eventId: string) => Promise<SelfCheckInQr>;
   checkedInCount: number;
-  venueConditions: string;
-  setVenueConditions: (conditions: string) => void;
-  venueDecision: "pending" | "approved_with_conditions";
-  approveVenueWithConditions: () => Promise<void>;
   adminDecision: "pending" | "published";
   approvePublish: (eventId: string) => Promise<void>;
 }
@@ -99,12 +94,6 @@ export function DemoProvider({
   const [attendanceType, setAttendanceType] = useState<AttendanceType>("direct");
   const [passCreated, setPassCreated] = useState(initialState.passCreated);
   const [scannerOutcome, setScannerOutcomeState] = useState<ScannerOutcome>("idle");
-  const [venueConditions, setVenueConditions] = useState(
-    "Max 120 riders. Parking marshals required. Quiet exit after 10 PM.",
-  );
-  const [venueDecision, setVenueDecision] = useState<"pending" | "approved_with_conditions">(
-    "pending",
-  );
   const [adminDecision, setAdminDecision] = useState<"pending" | "published">("pending");
 
   const role: Role = currentUser?.role ?? "guest";
@@ -223,15 +212,6 @@ export function DemoProvider({
     [applyState],
   );
 
-  const approveVenueWithConditions = useCallback(async () => {
-    const nextState = await approveVenueWithConditionsAction(
-      "arai-hjc-charity-ride",
-      venueConditions,
-    );
-    applyState(nextState);
-    setVenueDecision("approved_with_conditions");
-  }, [applyState, venueConditions]);
-
   const approvePublish = useCallback(async (eventId: string) => {
     const nextState = await approvePublishAction(eventId);
     applyState(nextState);
@@ -278,10 +258,6 @@ export function DemoProvider({
       configureCheckIn,
       issueSelfCheckInQr,
       checkedInCount,
-      venueConditions,
-      setVenueConditions,
-      venueDecision,
-      approveVenueWithConditions,
       adminDecision,
       approvePublish,
     }),
@@ -289,7 +265,6 @@ export function DemoProvider({
       adminDecision,
       applyState,
       approvePublish,
-      approveVenueWithConditions,
       attendanceType,
       authNotice,
       checkedInCount,
@@ -312,8 +287,6 @@ export function DemoProvider({
       signUpRider,
       updateProfile,
       users,
-      venueConditions,
-      venueDecision,
     ],
   );
 
