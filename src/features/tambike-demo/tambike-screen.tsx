@@ -1434,7 +1434,6 @@ function PassCard({ event, pass }: { event: Event; pass: Pass }) {
 
 function LoginScreen({ nextHref }: { nextHref?: string }) {
   const { loginWithPassword } = useDemo();
-  const router = useRouter();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -1484,7 +1483,7 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
                 String(formData.get("password") ?? ""),
               );
               if (user) {
-                router.push(nextHref ?? destinationFor(user.role));
+                window.location.replace(nextHref ?? destinationFor(user.role));
               }
             } catch (actionError) {
               setError(actionErrorMessage(actionError));
