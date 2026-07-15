@@ -14,7 +14,6 @@ import {
   FileWarningIcon,
   Maximize2Icon,
   ShieldAlertIcon,
-  UploadCloudIcon,
   UsersIcon,
   XIcon,
 } from "lucide-react";

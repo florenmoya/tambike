@@ -93,7 +93,7 @@ export function getEventCtaState(event: Pick<Event, "date" | "status">, now = ne
       canShowInterest: false,
       label: "Under review",
       title: "Registration not open",
-      body: "This event is still moving through organizer, venue, or admin review.",
+      body: "This event is still moving through organizer and admin review.",
       isPast,
     };
   }
@@ -118,6 +118,8 @@ export function filterEventsByQuery<T extends Event>(events: T[], query?: EventQ
     const searchable = [
       event.title,
       event.type,
+      event.locationName,
+      event.locationAddress,
       event.area,
       event.shortDescription,
       event.whatHappens,

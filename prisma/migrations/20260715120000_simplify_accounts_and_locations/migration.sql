@@ -108,6 +108,31 @@ BEGIN
 
   IF EXISTS (
     SELECT 1
+    FROM "_AccountCleanupOrganizerAllowlist" allowed
+    LEFT JOIN "User" allowed_user
+      ON allowed_user."id" = allowed."userId"
+    LEFT JOIN "OrganizerProfile" allowed_profile
+      ON allowed_profile."id" = allowed."profileId"
+    LEFT JOIN "User" email_owner
+      ON lower(email_owner."email") = lower(allowed."email")
+    WHERE (
+      allowed_user."id" IS NOT NULL
+      OR allowed_profile."id" IS NOT NULL
+      OR email_owner."id" IS NOT NULL
+    ) AND (
+      allowed_user."id" IS DISTINCT FROM allowed."userId"
+      OR allowed_user."email" IS DISTINCT FROM allowed."email"
+      OR allowed_user."role"::text IS DISTINCT FROM 'organizer'
+      OR allowed_profile."id" IS DISTINCT FROM allowed."profileId"
+      OR allowed_profile."userId" IS DISTINCT FROM allowed."userId"
+      OR email_owner."id" IS DISTINCT FROM allowed."userId"
+    )
+  ) THEN
+    RAISE EXCEPTION 'ACCOUNT_CLEANUP_ALLOWLIST_IDENTITY_MISMATCH';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
     FROM "User" organizer_user
     LEFT JOIN "OrganizerProfile" organizer_profile
       ON organizer_profile."userId" = organizer_user."id"
@@ -197,7 +222,7 @@ BEGIN
         NULLIF(btrim(venue."mapLink"), '') IS NOT NULL
         AND (
           char_length(btrim(venue."mapLink")) > 500
-          OR btrim(venue."mapLink") !~* '^https?://'
+          OR btrim(venue."mapLink") !~* '^https?://([^@/?#[:space:]]+@)?([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?([/?#]|$)'
         )
       )
   ) THEN
@@ -266,7 +291,8 @@ UPDATE "User"
 SET
   "email" = 'organizer@bayanko.ph',
   "displayName" = 'Tambike Organizer',
-  "clubName" = 'Tambike Organizer'
+  "clubName" = 'Tambike Organizer',
+  "verificationStatus" = 'APPROVED'
 WHERE "id" = 'user-marco-organizer';
 
 UPDATE "OrganizerProfile"
@@ -274,7 +300,8 @@ SET
   "organizerType" = 'Tambike Organizer',
   "displayName" = 'Tambike Organizer',
   "realName" = 'Tambike Organizer',
-  "clubPageName" = 'Tambike Organizer'
+  "clubPageName" = 'Tambike Organizer',
+  "verificationStatus" = 'APPROVED'
 WHERE "id" = 'user-marco-organizer-profile';
 
 UPDATE "Event"
@@ -315,7 +342,7 @@ ALTER TABLE "Event"
       OR (
         "locationMapLink" = btrim("locationMapLink")
         AND char_length("locationMapLink") BETWEEN 1 AND 500
-        AND "locationMapLink" ~* '^https?://'
+        AND "locationMapLink" ~* '^https?://([^@/?#[:space:]]+@)?([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?([/?#]|$)'
       )
     );
 
@@ -362,16 +389,18 @@ BEGIN
       OR NOT EXISTS (
         SELECT 1 FROM "User"
         WHERE "id" = 'user-marco-organizer'
-          AND "email" = 'organizer@bayanko.ph'
-          AND "displayName" = 'Tambike Organizer'
-          AND "role"::text = 'organizer'
+           AND "email" = 'organizer@bayanko.ph'
+           AND "displayName" = 'Tambike Organizer'
+           AND "role"::text = 'organizer'
+           AND "verificationStatus"::text = 'APPROVED'
       )
       OR (SELECT count(*) FROM "OrganizerProfile") <> 1
       OR NOT EXISTS (
         SELECT 1 FROM "OrganizerProfile"
         WHERE "id" = 'user-marco-organizer-profile'
-          AND "userId" = 'user-marco-organizer'
-          AND "displayName" = 'Tambike Organizer'
+           AND "userId" = 'user-marco-organizer'
+           AND "displayName" = 'Tambike Organizer'
+           AND "verificationStatus"::text = 'APPROVED'
       )
     THEN
       RAISE EXCEPTION 'ACCOUNT_CLEANUP_POSTCONDITION_FAILED';
@@ -423,7 +452,7 @@ BEGIN
         "locationMapLink" IS NOT NULL
         AND (
           "locationMapLink" <> btrim("locationMapLink")
-          OR "locationMapLink" !~* '^https?://'
+          OR "locationMapLink" !~* '^https?://([^@/?#[:space:]]+@)?([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?([/?#]|$)'
         )
       )
   ) THEN

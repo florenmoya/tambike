@@ -2,12 +2,7 @@
 
 import clsx from "clsx";
 import {
-  AlertTriangle,
   Building2,
-  CalendarPlus,
-  CheckCircle2,
-  ClipboardCheck,
-  FileCheck2,
   Gauge,
   LockKeyhole,
   LogIn,
@@ -16,7 +11,6 @@ import {
   Motorbike,
   QrCode,
   Route,
-  ScanLine,
   Search,
   Share2,
   ShieldCheck,
@@ -24,7 +18,6 @@ import {
   Ticket,
   User,
   UserPlus,
-  XCircle,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -42,10 +35,8 @@ import {
 } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  adminApproval,
   getEvent,
   getOrganizer,
-  reportMetrics,
 } from "./data";
 import { useDemo } from "./demo-provider";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
@@ -61,9 +52,7 @@ import type {
   Event,
   EventType,
   Pass,
-  ReportMetric,
   Role,
-  ScannerOutcome,
 } from "./types";
 
 export type TambikeView =
@@ -112,8 +101,6 @@ type FeaturedWheelDirection = "previous" | "next";
 
 const findEvent = (events: Event[], eventId?: string) =>
   events.find((event) => event.id === eventId) ?? getEvent(eventId);
-const reportableEventStatuses = new Set<Event["status"]>(["PUBLISHED", "ONGOING", "COMPLETED"]);
-const isReportableEvent = (event: Event) => reportableEventStatuses.has(event.status);
 
 function actionErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -252,53 +239,6 @@ const eventVisuals: Record<
   Race: { accent: "#ffbe45", poster: "#09090a" },
 };
 
-const scannerCopy: Record<ScannerOutcome, { title: string; body: string; tone: string }> = {
-  idle: {
-    title: "Ready to scan",
-    body: "Use the camera frame or manual lookup when a rider has camera or screen issues.",
-    tone: "neutral",
-  },
-  valid: {
-    title: "Checked in successfully",
-    body: "Tambike Pass matched this event and the rider can claim available perks.",
-    tone: "success",
-  },
-  already: {
-    title: "Already checked in at 7:18 PM",
-    body: "Duplicate scans are blocked. Staff can still view the original check-in timestamp.",
-    tone: "warning",
-  },
-  "wrong-event": {
-    title: "Pass belongs to a different event",
-    body: "Ask the rider to open the correct Tambike Pass for this event.",
-    tone: "danger",
-  },
-  cancelled: {
-    title: "This pass was cancelled",
-    body: "Cancelled passes cannot be checked in or used for perk redemption.",
-    tone: "danger",
-  },
-  inactive: {
-    title: "Check-in window is not active",
-    body: "The scanner only accepts passes inside the configured event-day window.",
-    tone: "warning",
-  },
-};
-
-const protectedViews: Partial<
-  Record<
-    TambikeView,
-    {
-      allowed: Role[];
-      loginTitle: string;
-      loginBody: string;
-      roleTitle: string;
-      roleBody: string;
-    }
-  >
-> = {
-};
-
 export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenProps) {
   if (view === "discovery") {
     return (
@@ -328,10 +268,7 @@ export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenP
       {view === "profile" && <ProfileScreen />}
     </>
   );
-  const guard = protectedViews[view];
-  const guardedContent = guard ? <RoleGuard {...guard}>{content}</RoleGuard> : content;
-
-  return <AppShell>{guardedContent}</AppShell>;
+  return <AppShell>{content}</AppShell>;
 }
 
 function SpeedometerNavGauge() {
@@ -431,7 +368,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { role, currentUser, logout } = useDemo();
   const [navOpen, setNavOpen] = useState(false);
   const panelLink = panelLinkByRole[role];
-  const showHostCta = role === "guest" || role === "rider";
   const PanelIcon = panelLink?.icon;
 
   return (
@@ -454,12 +390,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="header-actions">
-          {showHostCta && (
-            <Link className="host-event-link" href="/organizer/dashboard" aria-label="Host an Event">
-              <CalendarPlus aria-hidden="true" />
-              <span>Host an Event</span>
-            </Link>
-          )}
           {currentUser ? (
             <>
               <GiveawayNotificationBell recipientId={currentUser.id} />
@@ -1502,553 +1432,6 @@ function PassCard({ event, pass }: { event: Event; pass: Pass }) {
   );
 }
 
-function ScannerScreen({ eventId }: { eventId?: string }) {
-  const { events, scannerOutcome, setScannerOutcome, checkedInCount } = useDemo();
-  const event = findEvent(events, eventId);
-  const outcome = scannerCopy[scannerOutcome];
-  const options: Array<{ label: string; value: ScannerOutcome }> = [
-    { label: "Valid pass", value: "valid" },
-    { label: "Already checked in", value: "already" },
-    { label: "Wrong event", value: "wrong-event" },
-    { label: "Cancelled pass", value: "cancelled" },
-    { label: "Inactive window", value: "inactive" },
-  ];
-
-  return (
-    <LightView>
-      <section className="scanner-layout">
-        <div className="scanner-frame">
-          <ScanLine aria-hidden="true" />
-          <h1>QR Scanner</h1>
-          <p>{event.title}</p>
-          <div className="scan-window">
-            <span />
-            <QRCodeSVG value={`scan-preview:${event.id}`} size={156} />
-          </div>
-          <div className="scanner-buttons">
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className="buy-secondary"
-                onClick={() => setScannerOutcome(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <aside className={clsx("order-summary scanner-result", outcome.tone)}>
-          <div className="buy-section-title">
-            <span>Organizer scan</span>
-            <h2>{outcome.title}</h2>
-          </div>
-          <p>{outcome.body}</p>
-          <MetricStrip
-            metrics={[
-              { label: "Checked in", value: String(checkedInCount), detail: "Actual arrivals" },
-              { label: "Going", value: String(event.going), detail: "QR passes generated" },
-            ]}
-          />
-          <label className="checkout-field checkout-field-wide">
-            <span>Manual lookup</span>
-            <input placeholder="Search attendee by name or phone" />
-          </label>
-          <Link className="checkout-button as-link" href={`/organizer/events/${event.id}/report`}>
-            View report
-          </Link>
-        </aside>
-      </section>
-    </LightView>
-  );
-}
-
-function AdminEventReview({ reviewId }: { reviewId?: string }) {
-  const event = getEvent(adminApproval.eventId);
-  const { adminDecision, approvePublish } = useDemo();
-  const [error, setError] = useState("");
-  const markAdminReviewReady = (node: HTMLButtonElement | null) => {
-    if (node) {
-      node.dataset.ready = "true";
-    }
-  };
-
-  return (
-    <LightView>
-      <section className="request-layout">
-        <HeroPanel
-          eyebrow="Admin review"
-          title="Event review"
-          body="Risky events are reviewed before publishing to protect riders, locations, and organizers."
-        />
-        <aside className="order-summary">
-          <div className="buy-section-title">
-            <span>Review {reviewId ?? adminApproval.id}</span>
-            <h2>{adminDecision === "published" ? "Event live" : "Pending admin decision"}</h2>
-          </div>
-          <p>{adminApproval.notes}</p>
-          <button
-            ref={markAdminReviewReady}
-            className="checkout-button"
-            type="button"
-            onClick={async () => {
-              setError("");
-              try {
-                await approvePublish(event.id);
-              } catch (actionError) {
-                setError(actionErrorMessage(actionError));
-              }
-            }}
-          >
-            Approve publish
-          </button>
-          {error && <p className="inline-error" aria-live="polite">{error}</p>}
-          {adminDecision === "published" && (
-            <PassStrip title="Published" body="Event is live for riders." />
-          )}
-        </aside>
-        <InfoPanel eyebrow="Risk flags" title="Review signals">
-          <div className="risk-list">
-            {event.riskFlags.map((flag) => (
-              <span key={flag}>
-                <AlertTriangle aria-hidden="true" />
-                {flag}
-              </span>
-            ))}
-          </div>
-        </InfoPanel>
-      </section>
-    </LightView>
-  );
-}
-
-function ReportScreen({ eventId, owner }: { eventId?: string; owner: "organizer" | "admin" }) {
-  const { events } = useDemo();
-  const event = findEvent(events, eventId);
-  const eyebrow = owner === "admin" ? "Admin report" : "Organizer report";
-
-  if (!isReportableEvent(event)) {
-    return (
-      <LightView>
-        <HeroPanel
-          eyebrow={eyebrow}
-          title="Report not ready"
-          body={`${event.title} is still in ${event.status.replaceAll("_", " ").toLowerCase()}. Reports appear after the event is live or completed.`}
-        />
-      </LightView>
-    );
-  }
-
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow={eyebrow}
-        title="Event Report"
-        body={`${event.title} performance summary for RSVP, attendance, perks, and host-again decisions.`}
-      />
-      <MetricStrip metrics={reportMetrics} large />
-      <div className="buy-main">
-        <InfoPanel eyebrow="Notes" title="Post-event notes">
-          <p>
-            Parking flow was smooth after marshals were added. Sticker redemption ended at 8:04 PM.
-            Location notes marked host-again as yes with quiet-exit reminder.
-          </p>
-        </InfoPanel>
-      </div>
-    </LightView>
-  );
-}
-
-function ReportsIndexScreen({ owner }: { owner: "organizer" | "admin" }) {
-  const { currentUser, events } = useDemo();
-  const isAdmin = currentUser?.role === "admin";
-  const reports = events.filter((event) => {
-    if (!isReportableEvent(event)) {
-      return false;
-    }
-
-    if (owner === "admin" || isAdmin) {
-      return true;
-    }
-
-    return event.organizerId === currentUser?.organizerProfileId;
-  });
-  const reportHrefFor = (event: Event) => {
-    if (owner === "admin") return `/admin/reports/${event.id}`;
-    return `/organizer/events/${event.id}/report`;
-  };
-  const copy = {
-    organizer: {
-      title: "Organizer reports",
-      eyebrow: "Organizer reports",
-      body: "Post-event summaries for events owned by the logged-in organizer, with attendance and perk performance drill-downs.",
-      detail: "Host-owned summaries",
-    },
-    admin: {
-      title: "Admin reports",
-      eyebrow: "Admin reports",
-      body: "Operations view of event reports across organizers and locations for manual exports, moderation follow-up, and partner reporting.",
-      detail: "Platform summaries",
-    },
-  }[owner];
-  const summaryMetrics: ReportMetric[] = [
-    { label: "Reports", value: String(reports.length), detail: copy.detail },
-    {
-      label: "Expected riders",
-      value: String(reports.reduce((total, event) => total + event.expectedRiders, 0)),
-      detail: "Across listed events",
-    },
-    {
-      label: "QR passes",
-      value: String(reports.reduce((total, event) => total + event.going, 0)),
-      detail: "Generated from RSVP flow",
-    },
-  ];
-
-  return (
-    <LightView>
-      <HeroPanel eyebrow={copy.eyebrow} title={copy.title} body={copy.body} />
-      <MetricStrip metrics={summaryMetrics} />
-      {reports.length ? (
-        <div className="queue-list">
-          {reports.map((event) => (
-            <Link key={event.id} href={reportHrefFor(event)}>
-              <FileCheck2 aria-hidden="true" />
-              <span>{event.title}</span>
-              <strong>{event.status.replaceAll("_", " ")}</strong>
-            </Link>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <h2>No reports yet</h2>
-          <p>Completed or active event reports will appear here after check-ins start.</p>
-        </div>
-      )}
-    </LightView>
-  );
-}
-
-function OrganizerEventStatus({ eventId }: { eventId?: string }) {
-  const { events } = useDemo();
-  const event = findEvent(events, eventId);
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Event status"
-        title={event.title}
-        body="Track the path from draft to admin review, publish, check-in, and report."
-      />
-      <Timeline
-        steps={[
-          "Draft created",
-          "Submitted for admin review",
-          "Admin review pending",
-          "Published",
-        ]}
-      />
-    </LightView>
-  );
-}
-
-function OrganizerDashboard() {
-  return (
-    <Dashboard
-      title="Organizer Dashboard"
-      eyebrow="Command center"
-      icon={ClipboardCheck}
-      action={
-        <Link className="checkout-button as-link" href="/organizer/events/create">
-          Create Event
-        </Link>
-      }
-    />
-  );
-}
-
-function AdminDashboard() {
-  return <Dashboard title="Admin Dashboard" eyebrow="Platform operations" icon={ShieldCheck} />;
-}
-
-function OrganizerEventsScreen() {
-  const { currentUser, events } = useDemo();
-  const ownedEvents = events.filter((event) =>
-    currentUser?.role === "admin" ? true : event.organizerId === currentUser?.organizerProfileId,
-  );
-
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Organizer events"
-        title="Organizer-owned events"
-        body="Drafts, review status, attendee tools, scanner links, and report entry points for the logged-in organizer."
-      />
-      <Link className="checkout-button as-link" href="/organizer/events/create">
-        Create Event
-      </Link>
-      {ownedEvents.length ? (
-        <div className="queue-list">
-          {ownedEvents.map((event) => (
-            <Link key={event.id} href={`/organizer/events/${event.id}`}>
-              <CalendarPlus aria-hidden="true" />
-              <span>{event.title}</span>
-              <strong>{event.status.replaceAll("_", " ")}</strong>
-            </Link>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <h2>No organizer events yet</h2>
-          <p>Create a draft to start the admin review path.</p>
-        </div>
-      )}
-    </LightView>
-  );
-}
-
-function AdminLeadsScreen() {
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Lead export"
-        title="Test-ride leads"
-        body="Captured test-ride interest, current motorcycle details, preferred time, consent, and export status."
-      />
-      <Link className="checkout-button as-link" href="/api/admin/exports/leads">
-        Export leads CSV
-      </Link>
-      <div className="queue-list">
-        <Link href="/admin/leads">
-          <FileCheck2 aria-hidden="true" />
-          <span>Seeded Tambike Lead</span>
-          <strong>Captured</strong>
-        </Link>
-      </div>
-    </LightView>
-  );
-}
-
-function AdminModerationScreen() {
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Moderation"
-        title="Moderation reports"
-        body="Open rider safety reports, event flags, and admin decisions stay separate from public rider pages."
-      />
-      <div className="queue-list">
-        {["Open rider safety reports", "Escalated event flag", "Resolved location note"].map((item) => (
-          <Link key={item} href="/admin/moderation">
-            <AlertTriangle aria-hidden="true" />
-            <span>{item}</span>
-            <strong>Review</strong>
-          </Link>
-        ))}
-      </div>
-    </LightView>
-  );
-}
-
-function AdminUsersScreen() {
-  const { users } = useDemo();
-
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow="Users"
-        title="User management"
-        body="Review role, verification status, and suspension controls for rider, organizer, and admin accounts."
-      />
-      <div className="queue-list user-management-list">
-        {users.map((user) => (
-          <div className="queue-item" key={user.id}>
-            <User aria-hidden="true" />
-            <span>{user.displayName}</span>
-            <strong>
-              {roleLabels[user.role]} · {user.verificationStatus}
-            </strong>
-            <button className="buy-secondary" type="button">
-              Suspend user
-            </button>
-          </div>
-        ))}
-      </div>
-    </LightView>
-  );
-}
-
-function Dashboard({
-  title,
-  eyebrow,
-  icon: Icon,
-  action,
-}: {
-  title: string;
-  eyebrow: string;
-  icon: ComponentType<{ "aria-hidden"?: boolean }>;
-  action?: React.ReactNode;
-}) {
-  return (
-    <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="Keep event work moving from request to check-in." />
-      {action}
-      <div className="dashboard-grid">
-        {[
-          ["Pending approvals", "3", "Organizer and event queues"],
-          ["Published events", "12", "Public ganaps visible in Explore"],
-          ["Today check-ins", "68", "Event-day QR scans"],
-          ["Reports ready", "4", "Post-event summaries"],
-        ].map(([label, value, detail]) => (
-          <div className="metric-card" key={label}>
-            <Icon aria-hidden />
-            <span>{label}</span>
-            <strong>{value}</strong>
-            <p>{detail}</p>
-          </div>
-        ))}
-      </div>
-    </LightView>
-  );
-}
-
-function CreateEventScreen() {
-  const { createEventDraft, currentUser } = useDemo();
-  const [createdEvent, setCreatedEvent] = useState<Event | null>(null);
-  const [error, setError] = useState("");
-  const steps = ["Event Type", "Basic Details", "Location", "Ride / Meetup", "Perks", "Rules", "Review"];
-
-  if (!currentUser) {
-    return <AuthRequired title="Log in to create events" body="Only approved organizer accounts can create event drafts in the MVP flow." />;
-  }
-
-  if (currentUser.role !== "organizer" || currentUser.verificationStatus !== "APPROVED") {
-    return (
-      <LightView>
-        <HeroPanel
-          eyebrow="Organizer required"
-          title="Apply before creating events"
-          body="MVP rules allow riders to browse and register, but only approved organizers can create publishable event drafts."
-        />
-        <Link className="checkout-button as-link" href="/organizer/dashboard">
-          Open organizer console
-        </Link>
-      </LightView>
-    );
-  }
-
-  return (
-    <LightView>
-      {createdEvent ? (
-        <>
-          <HeroPanel
-            eyebrow="Create Event Wizard"
-            title="Draft created"
-            body="Needs admin review before it can move to public publishing."
-          />
-          <InfoPanel eyebrow="Event draft" title={createdEvent.title}>
-            <div className="detail-grid">
-              <Detail label="Status" value="Pending admin review" />
-              <Detail label="Type" value={createdEvent.type} />
-              <Detail label="Date" value={`${createdEvent.date} · ${createdEvent.time}`} />
-              <Detail label="Expected riders" value={String(createdEvent.expectedRiders)} />
-            </div>
-          </InfoPanel>
-          <Link className="checkout-button as-link" href={`/organizer/events/${createdEvent.id}`}>
-            View draft event
-          </Link>
-        </>
-      ) : (
-        <>
-          <HeroPanel
-            eyebrow="Create Event Wizard"
-            title="Create a location-based ganap"
-            body="Create an event draft with the current MVP review path: organizer draft, then admin review when required."
-          />
-          <Timeline steps={steps} />
-          <form
-            className="prototype-form"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              setError("");
-              const formData = new FormData(event.currentTarget);
-              try {
-                const draft = await createEventDraft({
-                  title: String(formData.get("title") ?? ""),
-                  type: String(formData.get("type") ?? "Tambike") as EventType,
-                  locationName: String(formData.get("locationName") ?? ""),
-                  locationAddress: String(formData.get("locationAddress") ?? ""),
-                  locationMapLink: String(formData.get("locationMapLink") ?? ""),
-                  date: String(formData.get("date") ?? ""),
-                  time: String(formData.get("time") ?? ""),
-                  area: String(formData.get("area") ?? ""),
-                  expectedRiders: Number(formData.get("expectedRiders") ?? 1),
-                  perkPreview: String(formData.get("perkPreview") ?? ""),
-                });
-
-                setCreatedEvent(draft);
-              } catch (actionError) {
-                setError(actionErrorMessage(actionError));
-              }
-            }}
-          >
-            <label className="checkout-field">
-              <span>Event title</span>
-              <input name="title" required placeholder="Tambike Night at Katipunan" />
-            </label>
-            <label className="checkout-field">
-              <span>Event type</span>
-              <select name="type" defaultValue="Bike Night">
-                {Object.keys(eventVisuals).map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkout-field">
-              <span>Location name</span>
-              <input name="locationName" required placeholder="Katipunan Bike Night Lot" />
-            </label>
-            <label className="checkout-field">
-              <span>Location address</span>
-              <input name="locationAddress" required placeholder="Katipunan, Quezon City" />
-            </label>
-            <label className="checkout-field">
-              <span>Map link</span>
-              <input name="locationMapLink" type="url" placeholder="https://maps.example.test/place" />
-            </label>
-            <label className="checkout-field">
-              <span>Date label</span>
-              <input name="date" required placeholder="Sat · July 18" />
-            </label>
-            <label className="checkout-field">
-              <span>Time label</span>
-              <input name="time" required placeholder="7:00 PM - 10:00 PM" />
-            </label>
-            <label className="checkout-field">
-              <span>Area</span>
-              <input name="area" required placeholder="Katipunan, Quezon City" />
-            </label>
-            <label className="checkout-field">
-              <span>Expected riders</span>
-              <input name="expectedRiders" required type="number" min="1" defaultValue="40" />
-            </label>
-            <label className="checkout-field">
-              <span>Perk preview</span>
-              <input name="perkPreview" required placeholder="Free sticker for checked-in riders" />
-            </label>
-            <button className="checkout-button" type="submit">
-              <CalendarPlus aria-hidden="true" />
-              Create draft
-            </button>
-            {error && <p className="inline-error" aria-live="polite">{error}</p>}
-          </form>
-        </>
-      )}
-    </LightView>
-  );
-}
-
 function LoginScreen({ nextHref }: { nextHref?: string }) {
   const { loginWithPassword } = useDemo();
   const router = useRouter();
@@ -2208,7 +1591,7 @@ function SignupScreen() {
               Rider signup
             </span>
             <h1 id="signup-title">Create rider account</h1>
-            <p>Start with RSVPs and passes. Apply to host events later.</p>
+            <p>Start with RSVPs and passes, then keep your ride details up to date.</p>
           </div>
 
           <div className="signup-role-note" aria-label="Account type">
@@ -2260,27 +1643,6 @@ function SignupScreen() {
         </section>
       </form>
     </LightView>
-  );
-}
-
-function AttendeesScreen({ eventId }: { eventId?: string }) {
-  const { events } = useDemo();
-  const event = findEvent(events, eventId);
-  return (
-    <LightView>
-      <HeroPanel eyebrow="Attendees" title={event.title} body="Search and manage Interested, Going, Registered, Checked In, and No-show rider groups." />
-      <MetricStrip metrics={reportMetrics.slice(0, 4)} large />
-    </LightView>
-  );
-}
-
-function OrganizerApplyScreen() {
-  return (
-    <FormPrototype
-      eyebrow="Organizer verification"
-      title="Apply to host events"
-      fields={["Organizer type", "Display name", "Real name", "Contact number", "FB / page link", "Past event links"]}
-    />
   );
 }
 
@@ -2354,115 +1716,6 @@ function AuthRequired({ title, body }: { title: string; body: string }) {
   );
 }
 
-function RoleRequired({ title, body }: { title: string; body: string }) {
-  return (
-    <LightView>
-      <HeroPanel eyebrow="Role required" title={title} body={body} />
-      <div className="auth-actions">
-        <Link className="checkout-button as-link" href="/login">
-          Switch account
-        </Link>
-        <Link className="buy-secondary as-link" href="/events">
-          Explore events
-        </Link>
-      </div>
-    </LightView>
-  );
-}
-
-function RoleGuard({
-  allowed,
-  loginTitle,
-  loginBody,
-  roleTitle,
-  roleBody,
-  children,
-}: {
-  allowed: Role[];
-  loginTitle: string;
-  loginBody: string;
-  roleTitle: string;
-  roleBody: string;
-  children: React.ReactNode;
-}) {
-  const { currentUser } = useDemo();
-
-  if (!currentUser) {
-    return <AuthRequired title={loginTitle} body={loginBody} />;
-  }
-
-  if (!allowed.includes(currentUser.role)) {
-    return <RoleRequired title={roleTitle} body={roleBody} />;
-  }
-
-  return <>{children}</>;
-}
-
-function AdminQueue({ title }: { title: string }) {
-  return (
-    <LightView>
-      <HeroPanel eyebrow="Admin queue" title={title} body="Manual review screens keep private notes, decisions, status, and audit trail separate from public rider pages." />
-      <QueueList />
-    </LightView>
-  );
-}
-
-function AdminEventReviews() {
-  return (
-    <LightView>
-      <HeroPanel eyebrow="Event reviews" title="Risky event queue" body="Events appear here when ride-out, test ride, raffle, night timing, high attendance, or new organizer signals require review." />
-      <QueueList />
-      <Link className="checkout-button as-link" href={`/admin/events/review/${adminApproval.id}`}>
-        Open {getEvent(adminApproval.eventId).title} review
-      </Link>
-    </LightView>
-  );
-}
-
-function QueueList() {
-  const event = getEvent(adminApproval.eventId);
-  const organizer = getOrganizer(event.organizerId);
-
-  return (
-    <div className="queue-list">
-      {[event.title, `${event.locationName} location review`, `${organizer.displayName} organizer`].map((item) => (
-        <Link key={item} href={`/admin/events/review/${adminApproval.id}`}>
-          <FileCheck2 aria-hidden="true" />
-          <span>{item}</span>
-          <strong>Review</strong>
-        </Link>
-      ))}
-    </div>
-  );
-}
-
-function FormPrototype({
-  eyebrow,
-  title,
-  fields,
-}: {
-  eyebrow: string;
-  title: string;
-  fields: string[];
-}) {
-  return (
-    <LightView>
-      <HeroPanel eyebrow={eyebrow} title={title} body="Send the basic details and the Tambike team will review the request." />
-      <form className="prototype-form">
-        {fields.map((field) => (
-          <label key={field} className="checkout-field">
-            <span>{field}</span>
-            <input placeholder={field} />
-          </label>
-        ))}
-        <button className="checkout-button" type="button">
-          Save draft
-        </button>
-      </form>
-    </LightView>
-  );
-}
-
 function LightView({ children }: { children: React.ReactNode }) {
   return (
     <section className="buy-view">
@@ -2519,32 +1772,5 @@ function PassStrip({ title, body }: { title: string; body: string }) {
         <span>{body}</span>
       </div>
     </div>
-  );
-}
-
-function MetricStrip({ metrics, large = false }: { metrics: ReportMetric[]; large?: boolean }) {
-  return (
-    <div className={clsx("metric-strip", large && "metric-strip-large")}>
-      {metrics.map((metric) => (
-        <div key={metric.label}>
-          <span>{metric.label}</span>
-          <strong>{metric.value}</strong>
-          <p>{metric.detail}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Timeline({ steps }: { steps: string[] }) {
-  return (
-    <ol className="timeline">
-      {steps.map((step, index) => (
-        <li key={step} className={index < 2 ? "complete" : ""}>
-          {index < 2 ? <CheckCircle2 aria-hidden="true" /> : <XCircle aria-hidden="true" />}
-          <span>{step}</span>
-        </li>
-      ))}
-    </ol>
   );
 }

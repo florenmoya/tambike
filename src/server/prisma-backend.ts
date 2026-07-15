@@ -3727,10 +3727,7 @@ export class PrismaTambikeBackend {
       .map((award) => this.toOperatorGiveawayClaimView(giveaway, award));
   }
 
-  /**
-   * Event-scoped operator queue. Venue owners may see their venue's campaigns;
-   * explicitly assigned operators see only their assignments.
-   */
+  /** Event-scoped operator queue for the owner, admins, and assigned operators. */
   async listEventGiveawayOperatorClaims(
     sessionToken: string,
     eventId: string,
@@ -4310,21 +4307,33 @@ export class PrismaTambikeBackend {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
 
+    const title = input.title.trim();
+    const date = input.date.trim();
+    const time = input.time.trim();
+    const perkPreview = input.perkPreview.trim();
+    const expectedRiders = Number(input.expectedRiders);
     const location = normalizeEventLocation(input);
-    if (!location) {
+    if (
+      !title ||
+      !date ||
+      !time ||
+      !perkPreview ||
+      !Number.isInteger(expectedRiders) ||
+      expectedRiders <= 0 ||
+      !location
+    ) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
 
-    const baseSlug = slugify(input.title);
+    const baseSlug = slugify(title);
     const existing = await this.prisma.event.findUnique({ where: { slug: baseSlug } });
     const slug = existing ? `${baseSlug}-${Date.now()}` : baseSlug;
-    const expectedRiders = Math.max(1, Number(input.expectedRiders) || 1);
     const type = input.type;
     const event = await this.prisma.event.create({
       data: {
         id: slug,
         slug,
-        title: input.title.trim(),
+        title,
         type: eventTypeToDb[type] as never,
         status: "PENDING_ADMIN_REVIEW",
         organizerId,
@@ -4332,14 +4341,14 @@ export class PrismaTambikeBackend {
         locationAddress: location.locationAddress,
         locationMapLink: location.locationMapLink ?? null,
         poster: "/demo/poster-tambike-cafe-classico.jpg",
-        dateLabel: input.date.trim(),
-        timeLabel: input.time.trim(),
+        dateLabel: date,
+        timeLabel: time,
         area: location.area,
         expectedRiders,
-        description: `${input.title.trim()} is awaiting admin review.`,
+        description: `${title} is awaiting admin review.`,
         whatHappens:
           "Organizer-created draft that will move through admin publish.",
-        perkPreview: input.perkPreview.trim(),
+        perkPreview,
         tags: [type, "Admin review"],
         riskFlags: this.riskFlagsFor(type, expectedRiders),
         safetyRules: defaultRulesForEvent(type),
@@ -4354,7 +4363,7 @@ export class PrismaTambikeBackend {
           create: {
             id: `perk-${slug}`,
             type: "Check-in perk",
-            description: input.perkPreview.trim(),
+            description: perkPreview,
           },
         },
       },
@@ -4730,25 +4739,35 @@ export class PrismaTambikeBackend {
   async approvePublish(sessionToken: string, eventId: string) {
     const user = await this.requireRole(sessionToken, "admin");
     await this.requireEvent(eventId);
-    const event = await this.prisma.event.update({
-      where: { id: eventId },
-      data: { status: "PUBLISHED" },
-      include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
-    });
-    await this.prisma.eventApproval.upsert({
-      where: { id: `admin-review-${eventId}` },
-      create: {
-        id: `admin-review-${eventId}`,
-        eventId,
-        reviewerId: user.id,
-        decision: "published",
-        decidedAt: new Date(),
-      },
-      update: {
-        reviewerId: user.id,
-        decision: "published",
-        decidedAt: new Date(),
-      },
+    const event = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.event.updateMany({
+        where: { id: eventId, status: "PENDING_ADMIN_REVIEW" },
+        data: { status: "PUBLISHED" },
+      });
+      if (updated.count !== 1) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+
+      await tx.eventApproval.upsert({
+        where: { id: `admin-review-${eventId}` },
+        create: {
+          id: `admin-review-${eventId}`,
+          eventId,
+          reviewerId: user.id,
+          decision: "published",
+          decidedAt: new Date(),
+        },
+        update: {
+          reviewerId: user.id,
+          decision: "published",
+          decidedAt: new Date(),
+        },
+      });
+
+      return tx.event.findUniqueOrThrow({
+        where: { id: eventId },
+        include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
+      });
     });
     await this.audit("ADMIN_PUBLISHED", user.id, "Event", event.id);
     return this.toEvent(event);

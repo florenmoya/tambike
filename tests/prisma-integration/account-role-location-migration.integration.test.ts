@@ -241,6 +241,22 @@ async function insertRepresentativeLegacyData(
   );
 }
 
+async function insertHistoricalSmokeEvent(client: Client) {
+  await client.query(
+    `INSERT INTO "Event" (
+      "id", "slug", "title", "type", "status", "organizerId", "venueId", "dateLabel", "timeLabel",
+      "area", "expectedRiders", "description", "whatHappens", "poster", "perkPreview", "tags",
+      "riskFlags", "safetyRules", "createdAt", "updatedAt"
+    ) VALUES (
+      'event-historical-smoke', 'event-historical-smoke', 'Historical smoke event', 'Tambike',
+      'PUBLISHED', 'cafe-classico', 'venue-legacy', 'July 26, 2026', '6:00 AM - 9:00 AM',
+      '  Quezon City  ', 25, 'Historical smoke event description', 'Historical smoke event flow',
+      '/historical-smoke.webp', 'Historical sticker', ARRAY['historical'], ARRAY[]::text[],
+      ARRAY['Ride safely'], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )`,
+  );
+}
+
 async function rollbackFailedMigration(
   database: IsolatedLegacyDatabase,
   expectedMessage: string,
@@ -312,6 +328,7 @@ describe("account and event-location migration", () => {
       const database = await createIsolatedLegacyDatabase();
       try {
         await insertRepresentativeLegacyData(database.client);
+        await insertHistoricalSmokeEvent(database.client);
         await database.client.query(database.targetMigrationSql);
 
         const event = await database.client.query<{
@@ -333,6 +350,23 @@ describe("account and event-location migration", () => {
           organizerId: "user-marco-organizer-profile",
           status: "PENDING_ADMIN_REVIEW",
         });
+
+        const preservedHistoricalEvent = await database.client.query<{
+          count: number;
+          organizerId: string;
+          locationName: string;
+        }>(
+          `SELECT count(*)::int AS count, min("organizerId") AS "organizerId", min("locationName") AS "locationName"
+           FROM "Event" WHERE "id" = 'event-historical-smoke'`,
+        );
+        expect(preservedHistoricalEvent.rows[0]).toEqual({
+          count: 1,
+          organizerId: "user-marco-organizer-profile",
+          locationName: "Legacy Event Grounds",
+        });
+        expect(
+          (await database.client.query(`SELECT count(*)::int AS count FROM "Event"`)).rows[0]?.count,
+        ).toBe(2);
 
         const retainedOrganizer = await database.client.query(
           `SELECT "email", "displayName", "clubName" FROM "User" WHERE "id" = 'user-marco-organizer'`,
@@ -392,6 +426,38 @@ describe("account and event-location migration", () => {
   );
 
   test(
+    "promotes the retained canonical organizer and profile to approved",
+    async () => {
+      const database = await createIsolatedLegacyDatabase();
+      try {
+        await insertRepresentativeLegacyData(database.client);
+        await database.client.query(
+          `UPDATE "User" SET "verificationStatus" = 'PENDING' WHERE "id" = 'user-marco-organizer'`,
+        );
+        await database.client.query(
+          `UPDATE "OrganizerProfile" SET "verificationStatus" = 'PENDING' WHERE "id" = 'user-marco-organizer-profile'`,
+        );
+
+        await database.client.query(database.targetMigrationSql);
+
+        const statuses = await database.client.query<{
+          userStatus: string;
+          profileStatus: string;
+        }>(
+          `SELECT user_row."verificationStatus"::text AS "userStatus", profile."verificationStatus"::text AS "profileStatus"
+           FROM "User" user_row
+           JOIN "OrganizerProfile" profile ON profile."userId" = user_row."id"
+           WHERE user_row."id" = 'user-marco-organizer'`,
+        );
+        expect(statuses.rows[0]).toEqual({ userStatus: "APPROVED", profileStatus: "APPROVED" });
+      } finally {
+        await disposeIsolatedLegacyDatabase(database);
+      }
+    },
+    migrationTestTimeout,
+  );
+
+  test(
     "aborts atomically for an unexpected organizer",
     async () => {
       const database = await createIsolatedLegacyDatabase();
@@ -411,6 +477,59 @@ describe("account and event-location migration", () => {
 
         await rollbackFailedMigration(database, "ACCOUNT_CLEANUP_UNEXPECTED_ORGANIZER_USER");
         await expectLegacyStateAfterRollback(database.client, "user-unexpected-organizer");
+      } finally {
+        await disposeIsolatedLegacyDatabase(database);
+      }
+    },
+    migrationTestTimeout,
+  );
+
+  test(
+    "aborts atomically when an allowlisted organizer identity has drifted",
+    async () => {
+      const database = await createIsolatedLegacyDatabase();
+      try {
+        await insertRepresentativeLegacyData(database.client);
+        await insertLegacyUser(database.client, {
+          id: "user-arai-hjc-riders",
+          displayName: "Drifted allowlist account",
+          email: "arai-hjc-riders@seed.tambike.local",
+          role: "rider",
+        });
+
+        await rollbackFailedMigration(
+          database,
+          "ACCOUNT_CLEANUP_ALLOWLIST_IDENTITY_MISMATCH",
+        );
+        await expectLegacyStateAfterRollback(database.client, "user-arai-hjc-riders");
+      } finally {
+        await disposeIsolatedLegacyDatabase(database);
+      }
+    },
+    migrationTestTimeout,
+  );
+
+  test(
+    "aborts atomically when an allowlisted organizer email belongs to another account",
+    async () => {
+      const database = await createIsolatedLegacyDatabase();
+      try {
+        await insertRepresentativeLegacyData(database.client);
+        await insertLegacyUser(database.client, {
+          id: "user-unrelated-allowlist-email",
+          displayName: "Unexpected allowlist email holder",
+          email: "arai-hjc-riders@seed.tambike.local",
+          role: "rider",
+        });
+
+        await rollbackFailedMigration(
+          database,
+          "ACCOUNT_CLEANUP_ALLOWLIST_IDENTITY_MISMATCH",
+        );
+        await expectLegacyStateAfterRollback(
+          database.client,
+          "user-unrelated-allowlist-email",
+        );
       } finally {
         await disposeIsolatedLegacyDatabase(database);
       }
@@ -446,6 +565,9 @@ describe("account and event-location migration", () => {
       for (const fixture of [
         { venueName: "   ", venueMapLink: "https://maps.example.test/legacy" },
         { venueName: "Legacy Event Grounds", venueMapLink: "ftp://maps.example.test/legacy" },
+        { venueName: "Legacy Event Grounds", venueMapLink: "https://" },
+        { venueName: "Legacy Event Grounds", venueMapLink: "https://@/" },
+        { venueName: "Legacy Event Grounds", venueMapLink: "https://user@/" },
       ]) {
         const database = await createIsolatedLegacyDatabase();
         try {

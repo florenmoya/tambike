@@ -10,7 +10,6 @@ import {
   TAMBIKE_ORGANIZER_USER_ID,
 } from "../src/features/tambike-demo/data";
 import type { EventType } from "../src/features/tambike-demo/types";
-import { requireMigrationDatabaseUrl } from "../src/server/database-url";
 
 loadEnvConfig(process.cwd());
 
@@ -41,6 +40,7 @@ export function assertDisposableSeedClient(databaseUrl: string) {
   const parsed = new URL(databaseUrl);
   const databaseName = parseDatabaseName(databaseUrl);
   if (
+    !["postgresql:", "postgres:"].includes(parsed.protocol) ||
     !["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname) ||
     !/^tambike_test_[a-z0-9_]+$/.test(databaseName)
   ) {
@@ -48,7 +48,20 @@ export function assertDisposableSeedClient(databaseUrl: string) {
   }
 }
 
-export async function seedPrisma(prisma: PrismaClient) {
+export function requireDisposableSeedDatabaseUrl(
+  environment: Record<string, string | undefined> = process.env,
+) {
+  const databaseUrl = environment.TAMBIKE_TEST_DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("Set TAMBIKE_TEST_DATABASE_URL to a loopback tambike_test_* database URL before seeding.");
+  }
+
+  assertDisposableSeedClient(databaseUrl);
+  return databaseUrl;
+}
+
+export async function seedPrisma(prisma: PrismaClient, databaseUrl: string) {
+  assertDisposableSeedClient(databaseUrl);
   const [giveawayCount, giveawayAuditCount] = await Promise.all([
     prisma.eventGiveaway.count(),
     prisma.giveawayAuditEvent.count(),
@@ -176,11 +189,11 @@ export async function seedPrisma(prisma: PrismaClient) {
 }
 
 async function main() {
-  const databaseUrl = requireMigrationDatabaseUrl();
+  const databaseUrl = requireDisposableSeedDatabaseUrl();
   const adapter = new PrismaPg(databaseUrl);
   const prisma = new RuntimePrismaClient({ adapter });
   try {
-    await seedPrisma(prisma);
+    await seedPrisma(prisma, databaseUrl);
   } finally {
     await prisma.$disconnect();
   }

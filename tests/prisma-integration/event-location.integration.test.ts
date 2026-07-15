@@ -85,4 +85,80 @@ describe("Prisma event-owned locations", () => {
       await closePrismaIntegrationClientPair(rawClients);
     }
   });
+
+  test("matches in-memory draft validation for required fields and rider counts", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl);
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+    const suffix = randomUUID();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix,
+        riderCount: 1,
+      });
+      const validDraft = {
+        title: `Prisma validation ${suffix}`,
+        type: "Bike Night" as const,
+        date: "July 31, 2030",
+        time: "6:00 PM - 9:00 PM",
+        expectedRiders: 12,
+        perkPreview: "Location-only perk",
+        locationName: "Shell Pugon",
+        locationAddress: "Antipolo, Rizal",
+        locationMapLink: "https://maps.example.test/shell-pugon",
+        area: "Antipolo",
+      };
+
+      for (const override of [
+        { title: " " },
+        { date: " " },
+        { time: " " },
+        { perkPreview: " " },
+        { expectedRiders: 0 },
+        { expectedRiders: -1 },
+        { expectedRiders: 1.5 },
+      ]) {
+        await expect(
+          backendClients.primary.backend.createEventDraft(fixture.organizerSession, {
+            ...validDraft,
+            ...override,
+          }),
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      }
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
+  test("allows publication only from direct admin review", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl);
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+    const suffix = randomUUID();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, { suffix, riderCount: 1 });
+
+      await expect(
+        backendClients.primary.backend.approvePublish(fixture.adminSession, fixture.eventId),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+      await rawClients.primary.event.update({
+        where: { id: fixture.eventId },
+        data: { status: "PENDING_ADMIN_REVIEW" },
+      });
+      await expect(
+        backendClients.primary.backend.approvePublish(fixture.adminSession, fixture.eventId),
+      ).resolves.toMatchObject({ status: "PUBLISHED" });
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
 });

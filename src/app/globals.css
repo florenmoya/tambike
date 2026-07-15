@@ -931,13 +931,6 @@ svg {
   grid-row: 1 / span 3;
 }
 
-.order-venue {
-  margin: 0;
-  color: #625963;
-  font-size: 13px;
-  font-weight: 750;
-}
-
 .social-proof {
   margin: 0;
   color: var(--ink);
@@ -3379,7 +3372,7 @@ svg {
 
 .event-detail-facts div,
 .event-detail-pass-stats div,
-.event-detail-venue-card,
+.event-detail-location-card,
 .event-detail-main .buy-panel {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
@@ -3507,14 +3500,14 @@ svg {
 }
 
 .event-detail-pass-heading,
-.event-detail-venue-card {
+.event-detail-location-card {
   display: flex;
   align-items: flex-start;
   gap: 12px;
 }
 
 .event-detail-pass-heading svg,
-.event-detail-venue-card svg {
+.event-detail-location-card svg {
   width: 22px;
   height: 22px;
   color: var(--event-accent);
@@ -3529,7 +3522,7 @@ svg {
 }
 
 .event-detail-pass-panel p,
-.event-detail-venue-card p {
+.event-detail-location-card p {
   margin: 0;
   color: rgba(255, 255, 255, 0.68);
   font-size: 13px;
@@ -3549,17 +3542,17 @@ svg {
   padding: 12px;
 }
 
-.event-detail-venue-card {
+.event-detail-location-card {
   padding: 12px;
 }
 
-.event-detail-venue-card div {
+.event-detail-location-card div {
   min-width: 0;
   display: grid;
   gap: 5px;
 }
 
-.event-detail-venue-card strong {
+.event-detail-location-card strong {
   color: #fff;
   font-size: 15px;
   line-height: 1.12;
@@ -3877,7 +3870,6 @@ svg {
 .buy-view .metric-card p,
 .buy-view .metric-strip p,
 .buy-view .pass-card p,
-.buy-view .order-venue,
 .buy-view .social-proof {
   color: rgba(255, 255, 255, 0.68);
 }
@@ -4403,7 +4395,6 @@ svg {
 .buy-view .metric-card p,
 .buy-view .metric-strip p,
 .buy-view .pass-card p,
-.buy-view .order-venue,
 .buy-view .social-proof {
   color: rgba(255, 255, 255, 0.78);
   font-size: 15px;
