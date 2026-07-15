@@ -9,7 +9,6 @@ datasource db {
 enum Role {
   rider
   organizer
-  venue
   admin
 }
 
@@ -23,7 +22,6 @@ enum VerificationStatus {
 
 enum EventStatus {
   DRAFT
-  PENDING_VENUE_APPROVAL
   PENDING_ADMIN_REVIEW
   PUBLISHED
   ONGOING
@@ -95,11 +93,6 @@ enum SelfCheckInState {
 enum OrganizerQrMode {
   rotating
   fixed
-}
-
-enum ApprovalType {
-  venue
-  admin
 }
 
 enum ApprovalDecision {
@@ -279,7 +272,6 @@ model User {
 
   sessions                    Session[]
   organizerProfile            OrganizerProfile?
-  ownedVenues                 Venue[]                     @relation("VenueOwner")
   rsvps                       RSVP[]
   passes                      Pass[]
   checkIns                    CheckIn[]                   @relation("CheckedInUser")
@@ -342,24 +334,6 @@ model OrganizerProfile {
   events Event[]
 }
 
-model Venue {
-  id            String             @id @default(cuid())
-  name          String
-  area          String
-  address       String
-  mapLink       String
-  ownerUserId   String?
-  status        VerificationStatus @default(PENDING)
-  capacityNotes String
-  houseRules    String[]
-  contact       String?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-
-  owner  User?   @relation("VenueOwner", fields: [ownerUserId], references: [id])
-  events Event[]
-}
-
 model Event {
   id                 String      @id @default(cuid())
   slug               String      @unique
@@ -367,10 +341,12 @@ model Event {
   type               EventType
   status             EventStatus @default(DRAFT)
   organizerId        String
-  venueId            String?
+  locationName       String      @db.VarChar(120)
+  locationAddress    String      @db.VarChar(240)
+  locationMapLink    String?     @db.VarChar(500)
   dateLabel          String
   timeLabel          String
-  area               String
+  area               String      @db.VarChar(120)
   capacity           Int?
   expectedRiders     Int
   description        String
@@ -390,7 +366,6 @@ model Event {
   updatedAt          DateTime    @updatedAt
 
   organizer             OrganizerProfile            @relation(fields: [organizerId], references: [id])
-  venue                 Venue?                      @relation(fields: [venueId], references: [id])
   approvals             EventApproval[]
   rsvps                 RSVP[]
   passes                Pass[]
@@ -404,15 +379,14 @@ model Event {
 }
 
 model EventApproval {
-  id           String           @id @default(cuid())
-  eventId      String
-  approvalType ApprovalType
-  reviewerId   String?
-  decision     ApprovalDecision @default(pending)
-  conditions   String?
-  notes        String?
-  decidedAt    DateTime?
-  createdAt    DateTime         @default(now())
+  id         String           @id @default(cuid())
+  eventId    String
+  reviewerId String?
+  decision   ApprovalDecision @default(pending)
+  conditions String?
+  notes      String?
+  decidedAt  DateTime?
+  createdAt  DateTime         @default(now())
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 }
@@ -468,7 +442,7 @@ model CheckIn {
   event              Event                      @relation(fields: [eventId], references: [id], onDelete: Cascade)
   pass               Pass                       @relation(fields: [passId], references: [id], onDelete: Cascade)
   user               User                       @relation("CheckedInUser", fields: [userId], references: [id], onDelete: Cascade)
-  scanner            User?                      @relation("ScannerUser", fields: [scannedBy], references: [id], onDelete: Cascade)
+  scanner            User?                      @relation("ScannerUser", fields: [scannedBy], references: [id], onDelete: SetNull)
   selfCheckInSession EventSelfCheckInQrSession? @relation(fields: [selfCheckInSessionId], references: [id], onDelete: SetNull)
 
   @@unique([eventId, passId])
