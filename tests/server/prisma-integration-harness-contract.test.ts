@@ -22,6 +22,7 @@ describe("Prisma integration harness contract", () => {
     expect(integrationVitestConfig).toContain("tests/prisma-integration/**/*.integration.test.ts");
     expect(integrationVitestConfig).toContain("tests/prisma-integration/setup.ts");
     expect(integrationVitestConfig).toContain("fileParallelism: false");
+    expect(integrationVitestConfig).toContain("testTimeout: 15_000");
     expect(defaultVitestConfig).toContain("tests/prisma-integration/**");
   });
 

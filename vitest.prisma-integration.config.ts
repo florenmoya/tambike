@@ -12,5 +12,6 @@ export default defineConfig({
     setupFiles: ["./tests/prisma-integration/setup.ts"],
     fileParallelism: false,
     maxConcurrency: 1,
+    testTimeout: 15_000,
   },
 });
