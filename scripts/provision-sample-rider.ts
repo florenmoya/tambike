@@ -21,16 +21,17 @@ export interface SampleRiderCliOptions {
   createProvisioner?: (databaseUrl: string) => Promise<PrismaSampleRiderProvisioner>;
 }
 
-function parseArguments(argv: string[], environment: CliEnvironment) {
-  const confirmedProduction =
-    argv.includes("--confirm-production") ||
-    environment.npm_config_confirm_production?.trim().toLowerCase() === "true";
+function parseArguments(argv: string[]) {
+  const confirmedProduction = argv.includes("--confirm-production");
+  if (!confirmedProduction) {
+    throw new SampleRiderProvisioningError("PRODUCTION_CONFIRMATION_REQUIRED");
+  }
   const manifestIndex = argv.indexOf("--manifest");
   const inlineManifest = argv.find((argument) => argument.startsWith("--manifest="))?.slice(11);
   const manifestPath = (
     manifestIndex >= 0
       ? argv[manifestIndex + 1]
-      : inlineManifest ?? environment.npm_config_manifest
+      : inlineManifest
   )?.trim();
   if (!manifestPath) throw new SampleRiderProvisioningError("ASSET_UNAVAILABLE");
   return { confirmedProduction, manifestPath };
@@ -40,10 +41,7 @@ export async function runSampleRiderCli(options: SampleRiderCliOptions = {}) {
   const argv = options.argv ?? process.argv.slice(2);
   const environment = options.environment ?? process.env;
   const write = options.write ?? console.log;
-  const { confirmedProduction, manifestPath } = parseArguments(argv, environment);
-  if (!confirmedProduction) {
-    throw new SampleRiderProvisioningError("PRODUCTION_CONFIRMATION_REQUIRED");
-  }
+  const { confirmedProduction, manifestPath } = parseArguments(argv);
   if (!environment.TAMBIKE_SAMPLE_RIDER_PASSWORD?.trim()) {
     throw new SampleRiderProvisioningError("PASSWORD_REQUIRED");
   }

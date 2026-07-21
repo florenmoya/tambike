@@ -11,6 +11,7 @@ import {
   type SampleRiderAsset,
   type SampleRiderDependencies,
   type SampleRiderManifest,
+  type SampleRiderProvisioningVerification,
   type SampleRiderProvisioningResult,
 } from "@/server/member-profiles/sample-rider";
 import { runSampleRiderCli } from "../../scripts/provision-sample-rider";
@@ -41,8 +42,16 @@ function createStatefulDependencies() {
       slug: string | null;
       visibility: string;
       defaultRosterIdentity: string;
+      bio?: string;
     },
-    motorcycle: null as null | { make: string; model: string },
+    motorcycle: null as null | {
+      make: string;
+      model: string;
+      year?: number;
+      displacementCc?: number;
+      nickname?: string;
+      description?: string;
+    },
     avatar: null as null | string,
     photos: new Map<number, string>(),
     rsvp: null as null | { eventId: string; status: string; rosterIdentity: string },
@@ -50,6 +59,7 @@ function createStatefulDependencies() {
   };
 
   const dependencies: SampleRiderDependencies = {
+    acquireProvisioningLock: vi.fn(async () => ({ release: vi.fn(async () => undefined) })),
     assertTargetEvent: vi.fn(async (eventId) => {
       if (eventId !== "tambike-cafe-classico") throw new Error("EVENT_NOT_FOUND");
     }),
@@ -61,10 +71,27 @@ function createStatefulDependencies() {
         mimeType: "image/jpeg",
       };
     }),
+    preflightAsset: vi.fn(async (asset, purpose) => ({
+      ...asset,
+      purpose,
+      normalizedBytes: asset.bytes,
+      width: purpose === "avatar" ? 512 : 1200,
+      height: purpose === "avatar" ? 512 : 800,
+      fingerprint: `fingerprint:${asset.path}`,
+    })),
+    captureSnapshot: vi.fn(async () => structuredClone(state)),
+    restoreSnapshot: vi.fn(async (snapshot) => {
+      const restored = snapshot as typeof state;
+      Object.assign(state, structuredClone(restored));
+    }),
     upsertAccount: vi.fn(async (input) => {
+      const passwordHash =
+        state.user && await bcrypt.compare(input.password, state.user.passwordHash)
+          ? state.user.passwordHash
+          : input.passwordHash;
       state.user ??= {
         id: "sample-user-existing-id",
-        passwordHash: input.passwordHash,
+        passwordHash,
         role: "rider",
         displayName: input.displayName,
         area: input.area,
@@ -72,7 +99,7 @@ function createStatefulDependencies() {
         visibility: "PRIVATE",
         defaultRosterIdentity: "ANONYMOUS",
       };
-      state.user.passwordHash = input.passwordHash;
+      state.user.passwordHash = passwordHash;
       state.user.role = input.role;
       state.user.displayName = input.displayName;
       state.user.area = input.area;
@@ -84,22 +111,26 @@ function createStatefulDependencies() {
       state.user.area = input.area;
       state.user.visibility = input.visibility;
       state.user.defaultRosterIdentity = input.defaultRosterIdentity;
+      state.user.bio = input.bio;
       state.user.slug ??= "mika-santos-sample-rider";
     }),
     upsertMotorcycle: vi.fn(async (_context, input) => {
-      state.motorcycle = { make: input.make, model: input.model };
+      state.motorcycle = { ...input };
     }),
     ensureAvatar: vi.fn(async (_context, asset) => {
-      state.avatar = Buffer.from(asset.bytes).toString("utf8");
+      state.avatar = asset.fingerprint;
     }),
     ensureMotorcyclePhoto: vi.fn(async (_context, position, asset) => {
-      state.photos.set(position, Buffer.from(asset.bytes).toString("utf8"));
+      state.photos.set(position, asset.fingerprint);
     }),
     registerForEvent: vi.fn(async (_context, eventId, input) => {
       state.rsvp = { eventId, status: input.status, rosterIdentity: input.rosterIdentity };
       state.pass = { eventId, status: "active" };
     }),
-    inspectResult: vi.fn(async (): Promise<SampleRiderProvisioningResult> => ({
+    ensureActivePass: vi.fn(async () => {
+      if (state.pass) state.pass.status = "active";
+    }),
+    inspectResult: vi.fn(async (): Promise<SampleRiderProvisioningVerification> => ({
       slug: state.user?.slug ?? "",
       eventId: state.rsvp?.eventId ?? "",
       riders: state.user ? 1 : 0,
@@ -108,6 +139,22 @@ function createStatefulDependencies() {
       motorcyclePhotos: state.photos.size,
       rsvps: state.rsvp ? 1 : 0,
       passes: state.pass ? 1 : 0,
+      account: {
+        displayName: state.user?.displayName ?? "",
+        area: state.user?.area ?? "",
+        role: state.user?.role ?? "",
+        passwordMatches: true,
+      },
+      profile: {
+        bio: state.user?.bio,
+        visibility: state.user?.visibility ?? "",
+        defaultRosterIdentity: state.user?.defaultRosterIdentity ?? "",
+      },
+      motorcycle: state.motorcycle,
+      avatarFingerprint: state.avatar ?? "",
+      motorcyclePhotoFingerprints: [...state.photos.entries()].map(([position, fingerprint]) => ({ position, fingerprint })),
+      rsvp: state.rsvp ? { status: state.rsvp.status, rosterIdentity: state.rsvp.rosterIdentity } : null,
+      pass: state.pass ? { status: state.pass.status } : null,
     })),
     finish: vi.fn(async () => undefined),
   };
@@ -217,11 +264,13 @@ describe("sample rider provisioner domain flow", () => {
     const first = await provisionSampleRider(input, dependencies);
     const firstId = state.user?.id;
     const firstSlug = state.user?.slug;
+    const firstPasswordHash = state.user?.passwordHash;
     const second = await provisionSampleRider(input, dependencies);
 
     expect(state.user?.id).toBe(firstId);
     expect(state.user?.slug).toBe(firstSlug);
-    expect(state.motorcycle).toEqual({ make: "Honda", model: "CB400 Super Four" });
+    expect(state.user?.passwordHash).toBe(firstPasswordHash);
+    expect(state.motorcycle).toMatchObject({ make: "Honda", model: "CB400 Super Four" });
     expect([...state.photos.keys()]).toEqual([0, 1, 2, 3, 4]);
     expect(state.rsvp).toEqual({ eventId: "tambike-cafe-classico", status: "going", rosterIdentity: "VISIBLE" });
     expect(state.pass).toEqual({ eventId: "tambike-cafe-classico", status: "active" });
@@ -250,6 +299,27 @@ describe("sample rider provisioner domain flow", () => {
       motorcyclePhotos: 4,
       rsvps: 1,
       passes: 1,
+      account: { displayName: "Mika Santos — Sample Rider", area: "Davao City", role: "rider", passwordMatches: true },
+      profile: {
+        bio: "Weekend city rider, coffee-stop regular, and caretaker of a classic inline-four.",
+        visibility: "PUBLIC",
+        defaultRosterIdentity: "VISIBLE",
+      },
+      motorcycle: {
+        make: "Honda",
+        model: "CB400 Super Four",
+        year: 1998,
+        displacementCc: 399,
+        nickname: "Sora",
+        description: "A carefully maintained everyday classic built for relaxed city rides and tambike nights.",
+      },
+      avatarFingerprint: "fingerprint:avatar.jpg",
+      motorcyclePhotoFingerprints: [0, 1, 2, 3, 4].map((position) => ({
+        position,
+        fingerprint: `fingerprint:bike-${position}.jpg`,
+      })),
+      rsvp: { status: "going", rosterIdentity: "VISIBLE" },
+      pass: { status: "active" },
     }));
 
     await expect(
@@ -259,14 +329,14 @@ describe("sample rider provisioner domain flow", () => {
 });
 
 describe("sample rider CLI contract", () => {
-  test("honors npm's scoped config variables for the documented Windows command", async () => {
+  test("never inherits production confirmation from npm config", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tambike-sample-rider-npm-args-"));
     tempDirectories.push(directory);
     const manifestPath = join(directory, "manifest.json");
     await writeFile(manifestPath, JSON.stringify(manifest()), "utf8");
-    const output: string[] = [];
+    const createProvisioner = vi.fn();
 
-    await runSampleRiderCli({
+    await expect(runSampleRiderCli({
       argv: [manifestPath],
       environment: {
         TAMBIKE_SAMPLE_RIDER_PASSWORD: "runtime-only-password",
@@ -274,17 +344,10 @@ describe("sample rider CLI contract", () => {
         npm_config_confirm_production: "true",
         npm_config_manifest: manifestPath,
       },
-      write: (line) => output.push(line),
-      createProvisioner: async () => ({
-        dependencies: createStatefulDependencies().dependencies,
-        close: async () => undefined,
-      }),
-    });
+      createProvisioner,
+    })).rejects.toMatchObject({ code: "PRODUCTION_CONFIRMATION_REQUIRED" });
 
-    expect(JSON.parse(output.join("\n"))).toMatchObject({
-      slug: "mika-santos-sample-rider",
-      eventId: "tambike-cafe-classico",
-    });
+    expect(createProvisioner).not.toHaveBeenCalled();
   });
 
   test("prints only stable summary fields and never secrets or infrastructure details", async () => {
@@ -325,10 +388,11 @@ describe("sample rider CLI contract", () => {
   });
 
   test("keeps the sample email literal and all seed coupling out of the CLI and general seed", async () => {
-    const [script, module, packageJson] = await Promise.all([
+    const [script, module, packageJson, guide] = await Promise.all([
       readFile(join(process.cwd(), "scripts", "provision-sample-rider.ts"), "utf8"),
       readFile(join(process.cwd(), "src", "server", "member-profiles", "sample-rider.ts"), "utf8"),
       readFile(join(process.cwd(), "package.json"), "utf8"),
+      readFile(join(process.cwd(), "docs", "deployment", "sample-rider-provisioning.md"), "utf8"),
     ]);
 
     expect(script).not.toMatch(/prisma\/seed|seedPrisma|db:seed/);
@@ -336,6 +400,9 @@ describe("sample rider CLI contract", () => {
     expect((script.match(/mika\.sample@/g) ?? [])).toHaveLength(0);
     expect((module.match(/mika\.sample@/g) ?? [])).toHaveLength(1);
     expect(packageJson).toContain('"provision:sample-rider"');
+    expect(guide).toContain("npm run provision:sample-rider -- -- --confirm-production -- --manifest");
+    expect(guide).toContain("npx tsx --conditions=react-server scripts/provision-sample-rider.ts --confirm-production --manifest");
+    expect(guide).toContain("fails closed");
   });
 });
 

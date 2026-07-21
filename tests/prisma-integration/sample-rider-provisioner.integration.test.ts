@@ -130,6 +130,7 @@ describe("guarded Prisma sample rider provisioner", () => {
         where: { profileSlug: first.slug },
         select: {
           id: true,
+          passwordHash: true,
           profileSlug: true,
           role: true,
           profileVisibility: true,
@@ -170,6 +171,7 @@ describe("guarded Prisma sample rider provisioner", () => {
         where: { id: firstUser.id },
         select: {
           displayName: true,
+          passwordHash: true,
           role: true,
           profileSlug: true,
           profileVisibility: true,
@@ -190,6 +192,7 @@ describe("guarded Prisma sample rider provisioner", () => {
         rsvps: [{ status: "going", rosterIdentity: "VISIBLE", pass: { status: "active" } }],
       });
       expect(secondUser.profileSlug).toBe(firstUser.profileSlug);
+      expect(secondUser.passwordHash).toBe(firstUser.passwordHash);
       expect([
         secondUser.profilePhotoMediaId,
         ...(secondUser.motorcycle?.photos.map((photo) => photo.mediaId) ?? []),

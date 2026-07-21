@@ -4,9 +4,10 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
+import { Client as PgClient } from "pg";
 
 import type { UpdateMemberProfileInput, UpsertMotorcycleInput } from "@/features/member-profiles/types";
 import { PrismaTambikeBackend } from "@/server/prisma-backend";
@@ -20,6 +21,7 @@ const SAMPLE_RIDER_EMAIL = "mika.sample@tambike.ph";
 const SAMPLE_RIDER_EVENT_ID = "tambike-cafe-classico";
 const SAMPLE_RIDER_NAME = "Mika Santos — Sample Rider";
 const SAMPLE_RIDER_AREA = "Davao City";
+const SAMPLE_RIDER_LOCK_KEY = "tambike:production-sample-rider";
 
 const sampleProfile: UpdateMemberProfileInput = {
   displayName: SAMPLE_RIDER_NAME,
@@ -70,6 +72,14 @@ export interface SampleRiderAsset {
   mimeType: MemberImageMimeType;
 }
 
+export interface SampleRiderPreparedAsset extends SampleRiderAsset {
+  purpose: "avatar" | "motorcycle-photo";
+  normalizedBytes: Uint8Array;
+  width: number;
+  height: number;
+  fingerprint: string;
+}
+
 export interface SampleRiderContext {
   userId: string;
   sessionToken: string;
@@ -87,11 +97,49 @@ export interface SampleRiderProvisioningResult {
   passes: number;
 }
 
+export interface SampleRiderProvisioningVerification extends SampleRiderProvisioningResult {
+  account: {
+    displayName: string;
+    area: string;
+    role: string;
+    passwordMatches: boolean;
+  };
+  profile: {
+    bio?: string;
+    visibility: string;
+    defaultRosterIdentity: string;
+  };
+  motorcycle: null | {
+    make: string;
+    model: string;
+    year?: number;
+    displacementCc?: number;
+    nickname?: string;
+    description?: string;
+  };
+  avatarFingerprint: string;
+  motorcyclePhotoFingerprints: Array<{ position: number; fingerprint: string }>;
+  rsvp: null | { status: string; rosterIdentity: string };
+  pass: null | { status: string };
+}
+
+export interface SampleRiderProvisioningLock {
+  release(): Promise<void>;
+}
+
 export interface SampleRiderDependencies {
+  acquireProvisioningLock(): Promise<SampleRiderProvisioningLock>;
   assertTargetEvent(eventId: string): Promise<void>;
   loadAsset(path: string): Promise<SampleRiderAsset>;
+  preflightAsset(
+    asset: SampleRiderAsset,
+    purpose: "avatar" | "motorcycle-photo",
+  ): Promise<SampleRiderPreparedAsset>;
+  captureSnapshot(): Promise<unknown>;
+  restoreSnapshot(snapshot: unknown): Promise<void>;
   upsertAccount(input: {
     email: string;
+    password: string;
     passwordHash: string;
     displayName: string;
     area: string;
@@ -99,18 +147,23 @@ export interface SampleRiderDependencies {
   }): Promise<SampleRiderContext>;
   updateProfile(context: SampleRiderContext, input: UpdateMemberProfileInput): Promise<void>;
   upsertMotorcycle(context: SampleRiderContext, input: UpsertMotorcycleInput): Promise<void>;
-  ensureAvatar(context: SampleRiderContext, asset: SampleRiderAsset): Promise<void>;
+  ensureAvatar(context: SampleRiderContext, asset: SampleRiderPreparedAsset): Promise<void>;
   ensureMotorcyclePhoto(
     context: SampleRiderContext,
     position: number,
-    asset: SampleRiderAsset,
+    asset: SampleRiderPreparedAsset,
   ): Promise<void>;
   registerForEvent(
     context: SampleRiderContext,
     eventId: string,
     input: { status: "going"; attendanceType: "direct"; rosterIdentity: "VISIBLE" },
   ): Promise<void>;
-  inspectResult(context: SampleRiderContext, eventId: string): Promise<SampleRiderProvisioningResult>;
+  ensureActivePass(context: SampleRiderContext, eventId: string): Promise<void>;
+  inspectResult(
+    context: SampleRiderContext,
+    eventId: string,
+    password: string,
+  ): Promise<SampleRiderProvisioningVerification>;
   finish(context: SampleRiderContext): Promise<void>;
 }
 
@@ -143,7 +196,11 @@ function assertValidRequest(input: ProvisionSampleRiderInput) {
   }
 }
 
-function assertExactResult(result: SampleRiderProvisioningResult) {
+function assertExactResult(
+  result: SampleRiderProvisioningVerification,
+  avatar: SampleRiderPreparedAsset,
+  motorcyclePhotos: SampleRiderPreparedAsset[],
+) {
   if (
     !result.slug ||
     result.eventId !== SAMPLE_RIDER_EVENT_ID ||
@@ -152,7 +209,30 @@ function assertExactResult(result: SampleRiderProvisioningResult) {
     result.avatars !== 1 ||
     result.motorcyclePhotos !== 5 ||
     result.rsvps !== 1 ||
-    result.passes !== 1
+    result.passes !== 1 ||
+    result.account.displayName !== SAMPLE_RIDER_NAME ||
+    result.account.area !== SAMPLE_RIDER_AREA ||
+    result.account.role !== "rider" ||
+    !result.account.passwordMatches ||
+    result.profile.bio !== sampleProfile.bio ||
+    result.profile.visibility !== sampleProfile.visibility ||
+    result.profile.defaultRosterIdentity !== sampleProfile.defaultRosterIdentity ||
+    !result.motorcycle ||
+    result.motorcycle.make !== sampleMotorcycle.make ||
+    result.motorcycle.model !== sampleMotorcycle.model ||
+    result.motorcycle.year !== sampleMotorcycle.year ||
+    result.motorcycle.displacementCc !== sampleMotorcycle.displacementCc ||
+    result.motorcycle.nickname !== sampleMotorcycle.nickname ||
+    result.motorcycle.description !== sampleMotorcycle.description ||
+    result.avatarFingerprint !== avatar.fingerprint ||
+    result.motorcyclePhotoFingerprints.length !== 5 ||
+    result.motorcyclePhotoFingerprints.some(
+      (photo, position) =>
+        photo.position !== position || photo.fingerprint !== motorcyclePhotos[position]?.fingerprint,
+    ) ||
+    result.rsvp?.status !== "going" ||
+    result.rsvp.rosterIdentity !== "VISIBLE" ||
+    result.pass?.status !== "active"
   ) {
     throw new SampleRiderProvisioningError("INVARIANT_FAILED");
   }
@@ -163,45 +243,76 @@ export async function provisionSampleRider(
   dependencies: SampleRiderDependencies,
 ) {
   assertValidRequest(input);
-  await dependencies.assertTargetEvent(input.manifest.eventId);
-
-  let assets: SampleRiderAsset[];
+  const lock = await dependencies.acquireProvisioningLock();
   try {
-    assets = await Promise.all(
-      [input.manifest.avatar, ...input.manifest.motorcyclePhotos].map((path) =>
-        dependencies.loadAsset(path),
-      ),
-    );
-  } catch {
-    throw new SampleRiderProvisioningError("ASSET_UNAVAILABLE");
-  }
-
-  const passwordHash = await bcrypt.hash(input.password!, 10);
-  const context = await dependencies.upsertAccount({
-    email: SAMPLE_RIDER_EMAIL,
-    passwordHash,
-    displayName: SAMPLE_RIDER_NAME,
-    area: SAMPLE_RIDER_AREA,
-    role: "rider",
-  });
-
-  try {
-    await dependencies.updateProfile(context, sampleProfile);
-    await dependencies.upsertMotorcycle(context, sampleMotorcycle);
-    await dependencies.ensureAvatar(context, assets[0]);
-    for (let position = 0; position < 5; position += 1) {
-      await dependencies.ensureMotorcyclePhoto(context, position, assets[position + 1]);
+    await dependencies.assertTargetEvent(input.manifest.eventId);
+    let preparedAssets: SampleRiderPreparedAsset[];
+    try {
+      const assets = await Promise.all(
+        [input.manifest.avatar, ...input.manifest.motorcyclePhotos].map((path) =>
+          dependencies.loadAsset(path),
+        ),
+      );
+      preparedAssets = await Promise.all(
+        assets.map((asset, index) =>
+          dependencies.preflightAsset(asset, index === 0 ? "avatar" : "motorcycle-photo"),
+        ),
+      );
+    } catch {
+      throw new SampleRiderProvisioningError("ASSET_UNAVAILABLE");
     }
-    await dependencies.registerForEvent(context, SAMPLE_RIDER_EVENT_ID, {
-      status: "going",
-      attendanceType: "direct",
-      rosterIdentity: "VISIBLE",
-    });
-    const result = await dependencies.inspectResult(context, SAMPLE_RIDER_EVENT_ID);
-    assertExactResult(result);
-    return result;
+    const avatar = preparedAssets[0];
+    const motorcyclePhotos = preparedAssets.slice(1);
+    if (!avatar || motorcyclePhotos.length !== 5) {
+      throw new SampleRiderProvisioningError("INVALID_ASSET_COUNT");
+    }
+
+    const snapshot = await dependencies.captureSnapshot();
+    try {
+      const passwordHash = await bcrypt.hash(input.password!, 10);
+      const context = await dependencies.upsertAccount({
+        email: SAMPLE_RIDER_EMAIL,
+        password: input.password!,
+        passwordHash,
+        displayName: SAMPLE_RIDER_NAME,
+        area: SAMPLE_RIDER_AREA,
+        role: "rider",
+      });
+      await dependencies.updateProfile(context, sampleProfile);
+      await dependencies.upsertMotorcycle(context, sampleMotorcycle);
+      await dependencies.ensureAvatar(context, avatar);
+      for (const [position, photo] of motorcyclePhotos.entries()) {
+        await dependencies.ensureMotorcyclePhoto(context, position, photo);
+      }
+      await dependencies.registerForEvent(context, SAMPLE_RIDER_EVENT_ID, {
+        status: "going",
+        attendanceType: "direct",
+        rosterIdentity: "VISIBLE",
+      });
+      await dependencies.ensureActivePass(context, SAMPLE_RIDER_EVENT_ID);
+      const verification = await dependencies.inspectResult(
+        context,
+        SAMPLE_RIDER_EVENT_ID,
+        input.password!,
+      );
+      assertExactResult(verification, avatar, motorcyclePhotos);
+      await dependencies.finish(context);
+      return {
+        slug: verification.slug,
+        eventId: verification.eventId,
+        riders: verification.riders,
+        motorcycles: verification.motorcycles,
+        avatars: verification.avatars,
+        motorcyclePhotos: verification.motorcyclePhotos,
+        rsvps: verification.rsvps,
+        passes: verification.passes,
+      };
+    } catch (error) {
+      await dependencies.restoreSnapshot(snapshot);
+      throw error;
+    }
   } finally {
-    await dependencies.finish(context);
+    await lock.release();
   }
 }
 
@@ -232,6 +343,29 @@ async function bodyToBuffer(body: MemberMediaBody) {
   const chunks: Buffer[] = [];
   for await (const chunk of body) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
+}
+
+function fingerprintBytes(bytes: Uint8Array) {
+  return createHash("sha256").update(bytes).digest("base64url");
+}
+
+export async function prepareSampleRiderAsset(
+  asset: SampleRiderAsset,
+  purpose: "avatar" | "motorcycle-photo",
+): Promise<SampleRiderPreparedAsset> {
+  const normalized = await normalizeMemberImage({
+    body: asset.bytes,
+    claimedMimeType: asset.mimeType,
+    purpose,
+  });
+  return {
+    ...asset,
+    purpose,
+    normalizedBytes: normalized.bytes,
+    width: normalized.width,
+    height: normalized.height,
+    fingerprint: fingerprintBytes(normalized.bytes),
+  };
 }
 
 function isMissingObject(error: unknown) {
@@ -279,19 +413,14 @@ export function createPrismaSampleRiderProvisioner(
   const ensureMedia = async (
     context: SampleRiderContext,
     purpose: "avatar" | "motorcycle-photo",
-    asset: SampleRiderAsset,
+    asset: SampleRiderPreparedAsset,
     position?: number,
   ) => {
-    const normalized = await normalizeMemberImage({
-      body: asset.bytes,
-      claimedMimeType: asset.mimeType,
-      purpose,
-    });
     const existing = await currentMedia(context.userId, purpose, position);
-    if (existing?.storageKey && existing.width === normalized.width && existing.height === normalized.height) {
+    if (existing?.storageKey && existing.width === asset.width && existing.height === asset.height) {
       try {
         const stored = await store.getObject(existing.storageKey);
-        if ((await bodyToBuffer(stored.body)).equals(Buffer.from(normalized.bytes))) return;
+        if (fingerprintBytes(await bodyToBuffer(stored.body)) === asset.fingerprint) return;
       } catch (error) {
         if (!isMissingObject(error)) throw error;
       }
@@ -316,31 +445,304 @@ export function createPrismaSampleRiderProvisioner(
     }
   };
 
+  const captureSnapshot = async () => {
+    const user = await prisma.user.findUnique({
+      where: { email: SAMPLE_RIDER_EMAIL },
+      include: {
+        motorcycle: { include: { photos: { orderBy: { position: "asc" } } } },
+        rsvps: {
+          where: { eventId: SAMPLE_RIDER_EVENT_ID },
+          include: { pass: true },
+        },
+      },
+    });
+    const mediaKeys = user
+      ? [
+          user.profilePhotoStorageKey,
+          ...(user.motorcycle?.photos.map((photo) => photo.storageKey) ?? []),
+        ].filter((key): key is string => Boolean(key))
+      : [];
+    const mediaObjects = await Promise.all(mediaKeys.map(async (key) => {
+      try {
+        const object = await store.getObject(key);
+        return { key, bytes: await bodyToBuffer(object.body) };
+      } catch (error) {
+        if (isMissingObject(error)) return { key, bytes: null };
+        throw error;
+      }
+    }));
+    const auditIds = user
+      ? (await prisma.auditLog.findMany({
+          where: { actorUserId: user.id },
+          select: { id: true },
+        })).map((audit) => audit.id)
+      : [];
+    return { user, mediaObjects, auditIds };
+  };
+
+  type PrismaSampleRiderSnapshot = Awaited<ReturnType<typeof captureSnapshot>>;
+
+  const restoreSnapshot = async (snapshot: PrismaSampleRiderSnapshot) => {
+    const current = await prisma.user.findUnique({
+      where: { email: SAMPLE_RIDER_EMAIL },
+      include: { motorcycle: { include: { photos: true } } },
+    });
+    const currentKeys = [
+      current?.profilePhotoStorageKey,
+      ...(current?.motorcycle?.photos.map((photo) => photo.storageKey) ?? []),
+    ].filter((key): key is string => Boolean(key));
+    const originalKeys = new Set(snapshot.mediaObjects.map((object) => object.key));
+
+    for (const object of snapshot.mediaObjects) {
+      if (object.bytes) {
+        await store.putObject({ key: object.key, body: object.bytes, mimeType: "image/webp" });
+      } else {
+        try {
+          await store.deleteObject(object.key);
+        } catch (error) {
+          if (!isMissingObject(error)) throw error;
+        }
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (current) {
+        await tx.auditLog.deleteMany({
+          where: {
+            actorUserId: current.id,
+            ...(snapshot.auditIds.length > 0 ? { id: { notIn: snapshot.auditIds } } : {}),
+          },
+        });
+      }
+      if (!snapshot.user) {
+        if (current) await tx.user.delete({ where: { id: current.id } });
+        return;
+      }
+
+      const original = snapshot.user;
+      await tx.user.update({
+        where: { id: original.id },
+        data: {
+          displayName: original.displayName,
+          passwordHash: original.passwordHash,
+          role: original.role,
+          verificationStatus: original.verificationStatus,
+          area: original.area,
+          bikeModel: original.bikeModel,
+          clubName: original.clubName,
+          profileSlug: original.profileSlug,
+          profileBio: original.profileBio,
+          profileVisibility: original.profileVisibility,
+          defaultRosterIdentity: original.defaultRosterIdentity,
+          profilePhotoMediaId: original.profilePhotoMediaId,
+          profilePhotoStorageKey: original.profilePhotoStorageKey,
+          profilePhotoMimeType: original.profilePhotoMimeType,
+          profilePhotoWidth: original.profilePhotoWidth,
+          profilePhotoHeight: original.profilePhotoHeight,
+          profilePhotoFinalizedAt: original.profilePhotoFinalizedAt,
+          createdAt: original.createdAt,
+          updatedAt: original.updatedAt,
+        },
+      });
+
+      const currentMotorcycle = await tx.motorcycle.findUnique({ where: { userId: original.id } });
+      if (!original.motorcycle) {
+        if (currentMotorcycle) await tx.motorcycle.delete({ where: { id: currentMotorcycle.id } });
+      } else {
+        const motorcycle = original.motorcycle;
+        if (currentMotorcycle && currentMotorcycle.id !== motorcycle.id) {
+          await tx.motorcycle.delete({ where: { id: currentMotorcycle.id } });
+        }
+        await tx.motorcycle.upsert({
+          where: { userId: original.id },
+          create: {
+            id: motorcycle.id,
+            userId: original.id,
+            make: motorcycle.make,
+            model: motorcycle.model,
+            year: motorcycle.year,
+            displacementCc: motorcycle.displacementCc,
+            nickname: motorcycle.nickname,
+            description: motorcycle.description,
+            createdAt: motorcycle.createdAt,
+            updatedAt: motorcycle.updatedAt,
+          },
+          update: {
+            make: motorcycle.make,
+            model: motorcycle.model,
+            year: motorcycle.year,
+            displacementCc: motorcycle.displacementCc,
+            nickname: motorcycle.nickname,
+            description: motorcycle.description,
+            createdAt: motorcycle.createdAt,
+            updatedAt: motorcycle.updatedAt,
+          },
+        });
+        await tx.motorcyclePhoto.deleteMany({ where: { motorcycleId: motorcycle.id } });
+        if (motorcycle.photos.length > 0) {
+          await tx.motorcyclePhoto.createMany({
+            data: motorcycle.photos.map((photo) => ({
+              id: photo.id,
+              motorcycleId: motorcycle.id,
+              position: photo.position,
+              mediaId: photo.mediaId,
+              storageKey: photo.storageKey,
+              mimeType: photo.mimeType,
+              width: photo.width,
+              height: photo.height,
+              finalizedAt: photo.finalizedAt,
+              createdAt: photo.createdAt,
+            })),
+          });
+        }
+      }
+
+      const originalRsvp = original.rsvps[0];
+      const currentRsvp = await tx.rSVP.findUnique({
+        where: { eventId_userId: { eventId: SAMPLE_RIDER_EVENT_ID, userId: original.id } },
+        include: { pass: true },
+      });
+      if (!originalRsvp) {
+        if (currentRsvp) await tx.rSVP.delete({ where: { id: currentRsvp.id } });
+      } else {
+        if (currentRsvp && currentRsvp.id !== originalRsvp.id) {
+          await tx.rSVP.delete({ where: { id: currentRsvp.id } });
+        }
+        await tx.rSVP.upsert({
+          where: { eventId_userId: { eventId: originalRsvp.eventId, userId: original.id } },
+          create: {
+            id: originalRsvp.id,
+            eventId: originalRsvp.eventId,
+            userId: original.id,
+            status: originalRsvp.status,
+            goingAt: originalRsvp.goingAt,
+            attendanceType: originalRsvp.attendanceType,
+            companions: originalRsvp.companions,
+            clubName: originalRsvp.clubName,
+            rosterIdentity: originalRsvp.rosterIdentity,
+            createdAt: originalRsvp.createdAt,
+            updatedAt: originalRsvp.updatedAt,
+          },
+          update: {
+            status: originalRsvp.status,
+            goingAt: originalRsvp.goingAt,
+            attendanceType: originalRsvp.attendanceType,
+            companions: originalRsvp.companions,
+            clubName: originalRsvp.clubName,
+            rosterIdentity: originalRsvp.rosterIdentity,
+            createdAt: originalRsvp.createdAt,
+            updatedAt: originalRsvp.updatedAt,
+          },
+        });
+        const originalPass = originalRsvp.pass;
+        const restoredRsvp = await tx.rSVP.findUniqueOrThrow({ where: { id: originalRsvp.id } });
+        const currentPass = await tx.pass.findUnique({ where: { rsvpId: restoredRsvp.id } });
+        if (!originalPass) {
+          if (currentPass) await tx.pass.delete({ where: { id: currentPass.id } });
+        } else if (currentPass?.id === originalPass.id) {
+          await tx.pass.update({
+            where: { id: originalPass.id },
+            data: {
+              qrTokenHash: originalPass.qrTokenHash,
+              status: originalPass.status,
+              generatedAt: originalPass.generatedAt,
+              checkedInAt: originalPass.checkedInAt,
+            },
+          });
+        } else {
+          if (currentPass) await tx.pass.delete({ where: { id: currentPass.id } });
+          await tx.pass.create({
+            data: {
+              id: originalPass.id,
+              eventId: originalPass.eventId,
+              userId: original.id,
+              rsvpId: originalRsvp.id,
+              qrTokenHash: originalPass.qrTokenHash,
+              status: originalPass.status,
+              generatedAt: originalPass.generatedAt,
+              checkedInAt: originalPass.checkedInAt,
+            },
+          });
+        }
+      }
+      await tx.session.deleteMany({
+        where: { userId: original.id, id: { startsWith: "sample-rider-session-" } },
+      });
+    });
+
+    for (const key of currentKeys) {
+      if (!originalKeys.has(key)) {
+        try {
+          await store.deleteObject(key);
+        } catch (error) {
+          if (!isMissingObject(error)) throw error;
+        }
+      }
+    }
+  };
+
   const dependencies: SampleRiderDependencies = {
+    async acquireProvisioningLock() {
+      const client = new PgClient({ connectionString: databaseUrl });
+      await client.connect();
+      try {
+        await client.query(
+          "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+          [SAMPLE_RIDER_LOCK_KEY],
+        );
+      } catch (error) {
+        await client.end();
+        throw error;
+      }
+      let released = false;
+      return {
+        async release() {
+          if (released) return;
+          released = true;
+          try {
+            await client.query(
+              "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+              [SAMPLE_RIDER_LOCK_KEY],
+            );
+          } finally {
+            await client.end();
+          }
+        },
+      };
+    },
     async assertTargetEvent(eventId) {
       const event = await prisma.event.findUnique({ where: { id: eventId }, select: { id: true } });
       if (!event) throw new SampleRiderProvisioningError("EVENT_NOT_FOUND");
     },
     loadAsset: loadLocalAsset,
+    preflightAsset: prepareSampleRiderAsset,
+    captureSnapshot,
+    restoreSnapshot: (snapshot) => restoreSnapshot(snapshot as PrismaSampleRiderSnapshot),
     async upsertAccount(input) {
       const sessionToken = randomBytes(32).toString("base64url");
       const sessionId = `sample-rider-session-${randomUUID()}`;
       const user = await prisma.$transaction(async (tx) => {
-        const lockName = `sample-rider-account:${input.email}`;
-        await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`);
+        const existing = await tx.user.findUnique({
+          where: { email: input.email },
+          select: { passwordHash: true },
+        });
+        const passwordHash =
+          existing && await bcrypt.compare(input.password, existing.passwordHash)
+            ? existing.passwordHash
+            : input.passwordHash;
         const account = await tx.user.upsert({
           where: { email: input.email },
           create: {
             id: `sample-rider-${randomUUID()}`,
             email: input.email,
-            passwordHash: input.passwordHash,
+            passwordHash,
             displayName: input.displayName,
             area: input.area,
             role: input.role,
             verificationStatus: "UNVERIFIED",
           },
           update: {
-            passwordHash: input.passwordHash,
+            passwordHash,
             displayName: input.displayName,
             area: input.area,
             role: input.role,
@@ -372,17 +774,22 @@ export function createPrismaSampleRiderProvisioner(
     async registerForEvent(context, eventId, input) {
       const registration = await backend.registerForEvent(context.sessionToken, eventId, input);
       if (!registration.pass) throw new SampleRiderProvisioningError("INVARIANT_FAILED");
+    },
+    async ensureActivePass(context, eventId) {
       await prisma.pass.updateMany({
-        where: { id: registration.pass.id, userId: context.userId, eventId },
+        where: { userId: context.userId, eventId },
         data: { status: "active" },
       });
     },
-    async inspectResult(context, eventId) {
-      const [riders, user, motorcycles, motorcyclePhotos, rsvps, passes] = await Promise.all([
+    async inspectResult(context, eventId, password) {
+      const [riders, user, motorcycles, motorcyclePhotoCount, rsvps, passes] = await Promise.all([
         prisma.user.count({ where: { email: SAMPLE_RIDER_EMAIL, role: "rider" } }),
         prisma.user.findUnique({
           where: { id: context.userId },
-          select: { profileSlug: true, profilePhotoMediaId: true },
+          include: {
+            motorcycle: { include: { photos: { orderBy: { position: "asc" } } } },
+            rsvps: { where: { eventId }, include: { pass: true } },
+          },
         }),
         prisma.motorcycle.count({ where: { userId: context.userId } }),
         prisma.motorcyclePhoto.count({ where: { motorcycle: { userId: context.userId } } }),
@@ -391,15 +798,47 @@ export function createPrismaSampleRiderProvisioner(
           where: { userId: context.userId, eventId, status: "active" },
         }),
       ]);
+      if (!user?.profilePhotoStorageKey) throw new SampleRiderProvisioningError("INVARIANT_FAILED");
+      const avatarObject = await store.getObject(user.profilePhotoStorageKey);
+      const photoFingerprints = await Promise.all(
+        (user.motorcycle?.photos ?? []).map(async (photo) => ({
+          position: photo.position,
+          fingerprint: fingerprintBytes(await bodyToBuffer((await store.getObject(photo.storageKey)).body)),
+        })),
+      );
+      const rsvp = user.rsvps[0];
       return {
-        slug: user?.profileSlug ?? "",
+        slug: user.profileSlug ?? "",
         eventId,
         riders,
         motorcycles,
-        avatars: user?.profilePhotoMediaId ? 1 : 0,
-        motorcyclePhotos,
+        avatars: user.profilePhotoMediaId ? 1 : 0,
+        motorcyclePhotos: motorcyclePhotoCount,
         rsvps,
         passes,
+        account: {
+          displayName: user.displayName,
+          area: user.area,
+          role: user.role,
+          passwordMatches: await bcrypt.compare(password, user.passwordHash),
+        },
+        profile: {
+          bio: user.profileBio ?? undefined,
+          visibility: user.profileVisibility,
+          defaultRosterIdentity: user.defaultRosterIdentity,
+        },
+        motorcycle: user.motorcycle ? {
+          make: user.motorcycle.make,
+          model: user.motorcycle.model,
+          year: user.motorcycle.year ?? undefined,
+          displacementCc: user.motorcycle.displacementCc ?? undefined,
+          nickname: user.motorcycle.nickname ?? undefined,
+          description: user.motorcycle.description ?? undefined,
+        } : null,
+        avatarFingerprint: fingerprintBytes(await bodyToBuffer(avatarObject.body)),
+        motorcyclePhotoFingerprints: photoFingerprints,
+        rsvp: rsvp ? { status: rsvp.status, rosterIdentity: rsvp.rosterIdentity } : null,
+        pass: rsvp?.pass ? { status: rsvp.pass.status } : null,
       };
     },
     async finish(context) {
