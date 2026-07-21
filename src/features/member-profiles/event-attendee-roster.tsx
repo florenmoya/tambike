@@ -75,11 +75,39 @@ function RiderExcerpt({ attendee }: { attendee: Attendee }) {
   );
 }
 
-function rosterResetKey(page: EventAttendeeRosterPage) {
+function canonicalAttendeeValue(attendee: Attendee) {
+  const motorcycle = attendee.motorcycle;
+  return [
+    attendee.slug,
+    attendee.displayName,
+    attendee.area,
+    attendee.profilePhotoUrl ?? null,
+    motorcycle
+      ? [
+          motorcycle.make,
+          motorcycle.model,
+          motorcycle.year ?? null,
+          motorcycle.displacementCc ?? null,
+          motorcycle.nickname ?? null,
+          motorcycle.description ?? null,
+          motorcycle.photos
+            .toSorted((left, right) => left.position - right.position)
+            .map((photo) => [photo.url, photo.position, photo.width, photo.height]),
+        ]
+      : null,
+  ];
+}
+
+function rosterResetKey(page: EventAttendeeRosterPage, signedIn: boolean) {
   return JSON.stringify([
     page.summary.eventId,
+    page.summary.eventTitle,
     page.summary.rosterEnabled,
-    page.attendees.map((attendee) => attendee.slug),
+    page.summary.goingCount,
+    page.summary.visibleCount,
+    page.summary.anonymousCount,
+    signedIn,
+    page.attendees.map(canonicalAttendeeValue),
     page.nextCursor ?? null,
     page.pageSize,
   ]);
@@ -90,7 +118,12 @@ export function EventAttendeeRoster(props: {
   signedIn: boolean;
   loadPage?: typeof listEventAttendeesAction;
 }) {
-  return <StatefulEventAttendeeRoster key={rosterResetKey(props.initialPage)} {...props} />;
+  return (
+    <StatefulEventAttendeeRoster
+      key={rosterResetKey(props.initialPage, props.signedIn)}
+      {...props}
+    />
+  );
 }
 
 function StatefulEventAttendeeRoster({
