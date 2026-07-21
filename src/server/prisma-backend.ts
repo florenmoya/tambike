@@ -9233,6 +9233,9 @@ export class PrismaTambikeBackend {
       );
       if (position === undefined) throw new BackendError("PHOTO_LIMIT", "PHOTO_LIMIT");
       const existing = motorcycle.photos.find((photo) => photo.position === position);
+      if (!existing && position !== motorcycle.photos.length) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
       if (existing) {
         await tx.motorcyclePhoto.update({
           where: { id: existing.id },
@@ -9378,12 +9381,11 @@ export class PrismaTambikeBackend {
     const sessionUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
     const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
     const ownsProfile = validSessionUser?.id === owner.id;
-    const isAdmin = validSessionUser?.role === "admin";
     const viewer = validSessionUser
       ? { role: validSessionUser.role as AccountRole, ownsProfile }
       : null;
     if (
-      (!owner.profileSlug && !ownsProfile && !isAdmin) ||
+      (!owner.profileSlug && !ownsProfile) ||
       !canViewMemberProfile(viewer, owner.profileVisibility)
     ) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");

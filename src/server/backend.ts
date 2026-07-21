@@ -318,6 +318,7 @@ type SessionRecord = {
   token: string;
   userId: string;
   createdAt: Date;
+  expiresAt: Date;
 };
 
 type CheckInRecord = {
@@ -7519,6 +7520,7 @@ export class TambikeBackend {
       token: makeSessionToken(),
       userId,
       createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
     };
     this.sessions.set(session.token, session);
     this.audit("SESSION_CREATED", userId, userId);
@@ -7527,7 +7529,9 @@ export class TambikeBackend {
 
   private getUserForSessionToken(sessionToken: string) {
     const session = this.sessions.get(sessionToken);
-    return session ? this.users.get(session.userId) ?? null : null;
+    return session && session.expiresAt >= new Date()
+      ? this.users.get(session.userId) ?? null
+      : null;
   }
 
   private requireUser(sessionToken: string) {
@@ -7725,6 +7729,9 @@ export class TambikeBackend {
     );
     if (position === undefined) throw new BackendError("PHOTO_LIMIT", "PHOTO_LIMIT");
     const existing = motorcycle.photos.find((photo) => photo.position === position);
+    if (!existing && position !== motorcycle.photos.length) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
     const nextPhoto: BackendMotorcycle["photos"][number] = {
       id: existing?.id ?? `motorcycle-photo-${randomUUID()}`,
       mediaId: record.mediaId,
@@ -7814,11 +7821,10 @@ export class TambikeBackend {
     const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
     const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
     const ownsProfile = validSessionUser?.id === owner.id;
-    const isAdmin = validSessionUser?.role === "admin";
     const viewer = validSessionUser
       ? { role: validSessionUser.role, ownsProfile }
       : null;
-    if ((!owner.profileSlug && !ownsProfile && !isAdmin) ||
+    if ((!owner.profileSlug && !ownsProfile) ||
         !canViewMemberProfile(viewer, owner.profileVisibility ?? "PRIVATE")) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }

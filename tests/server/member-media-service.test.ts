@@ -125,6 +125,21 @@ describe("member media lifecycle service", () => {
     ).rejects.toMatchObject({ code: "UPLOAD_EXPIRED" });
   });
 
+  test("does not collapse a generic storage 404 or NoSuchBucket into NoSuchKey", async () => {
+    for (const storageError of [
+      Object.assign(new Error("bucket missing"), { name: "NoSuchBucket" }),
+      Object.assign(new Error("generic storage 404"), { $metadata: { httpStatusCode: 404 } }),
+    ]) {
+      const media = fakeStore({ getError: storageError });
+      const service = new MemberMediaLifecycleService(media.store);
+      await expect(service.finalize("user-1", {
+        purpose: "avatar",
+        tempKey: "tmp/users/user-1/nonce-1",
+        claimedMimeType: "image/jpeg",
+      }, persistence())).rejects.toBe(storageError);
+    }
+  });
+
   test("puts normalized final object before persistence and then cleans temp and replacement", async () => {
     const { store, putObject, deleteObject } = fakeStore({
       object: { body: Buffer.from("jpeg"), contentType: "image/jpeg", lastModified: new Date() },
@@ -327,6 +342,38 @@ describe("in-memory member media persistence and authorization", () => {
     expect(editor.motorcycle?.photos.map((photo) => photo.url)).not.toContain(`/media/${photos[4].mediaId}`);
   });
 
+  test("allows explicit motorcycle positions only for an occupied replacement or compact append", async () => {
+    const { backend, actors, media, stage } = await setupBackend();
+    await backend.upsertMotorcycle(actors.rider.sessionToken, { make: "Honda", model: "CB650R" });
+
+    await expect(backend.finalizeMemberMedia(actors.rider.sessionToken, {
+      purpose: "motorcycle-photo",
+      tempKey: await stage(actors.rider.user.id, "gap-first"),
+      claimedMimeType: "image/jpeg",
+      motorcyclePhotoPosition: 4,
+    })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(Array.from(media.objects.keys()).some((key) => key.includes("generated-1.webp"))).toBe(false);
+
+    const first = await backend.finalizeMemberMedia(actors.rider.sessionToken, {
+      purpose: "motorcycle-photo",
+      tempKey: await stage(actors.rider.user.id, "compact-first"),
+      claimedMimeType: "image/jpeg",
+      motorcyclePhotoPosition: 0,
+    });
+    await expect(backend.finalizeMemberMedia(actors.rider.sessionToken, {
+      purpose: "motorcycle-photo",
+      tempKey: await stage(actors.rider.user.id, "gap-after-first"),
+      claimedMimeType: "image/jpeg",
+      motorcyclePhotoPosition: 3,
+    })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    const editor = await backend.getMemberProfileEditor(actors.rider.sessionToken);
+    expect(editor.motorcycle?.photos).toEqual([
+      expect.objectContaining({ url: `/media/${first.mediaId}`, position: 0 }),
+    ]);
+    expect(Array.from(media.objects.keys()).some((key) => key.includes("generated-3.webp"))).toBe(false);
+  });
+
   test("replaces avatar storage and applies owner/admin/public/member/private delivery rules", async () => {
     const { backend, actors, media, stage } = await setupBackend();
     const first = await backend.finalizeMemberMedia(actors.rider.sessionToken, {
@@ -347,7 +394,7 @@ describe("in-memory member media persistence and authorization", () => {
     await expect(backend.getMemberMedia(actors.rider.sessionToken, current.mediaId))
       .resolves.toMatchObject({ mimeType: "image/webp" });
     await expect(backend.getMemberMedia(actors.admin.sessionToken, current.mediaId))
-      .resolves.toMatchObject({ mimeType: "image/webp" });
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
 
     await backend.updateMemberProfile(actors.rider.sessionToken, {
       displayName: actors.rider.user.displayName,
@@ -356,6 +403,8 @@ describe("in-memory member media persistence and authorization", () => {
       defaultRosterIdentity: "ANONYMOUS",
     });
     await expect(backend.getMemberMedia(undefined, current.mediaId))
+      .resolves.toMatchObject({ mimeType: "image/webp" });
+    await expect(backend.getMemberMedia(actors.admin.sessionToken, current.mediaId))
       .resolves.toMatchObject({ mimeType: "image/webp" });
 
     await backend.updateMemberProfile(actors.rider.sessionToken, {
@@ -377,7 +426,48 @@ describe("in-memory member media persistence and authorization", () => {
     });
     await expect(backend.getMemberMedia(actors.outsider.sessionToken, current.mediaId))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(backend.getMemberMedia(actors.admin.sessionToken, current.mediaId))
+      .resolves.toMatchObject({ mimeType: "image/webp" });
     await expect(backend.getMemberMedia(actors.rider.sessionToken, "missing"))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  test("rejects expired rider, owner, and admin sessions on every media auth path", async () => {
+    const { backend, actors, stage } = await setupBackend();
+    const sessions = (backend as unknown as {
+      sessions: Map<string, { expiresAt: Date }>;
+    }).sessions;
+    const expire = (token: string) => {
+      const session = sessions.get(token);
+      if (!session) throw new Error("TEST_SESSION_MISSING");
+      session.expiresAt = new Date(Date.now() - 1);
+    };
+
+    expire(actors.outsider.sessionToken);
+    await expect(backend.createMemberMediaUpload(actors.outsider.sessionToken, "image/jpeg"))
+      .rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    await expect(backend.finalizeMemberMedia(actors.outsider.sessionToken, {
+      purpose: "avatar",
+      tempKey: await stage(actors.outsider.user.id, "expired-finalize"),
+      claimedMimeType: "image/jpeg",
+    })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+
+    const avatar = await backend.finalizeMemberMedia(actors.rider.sessionToken, {
+      purpose: "avatar",
+      tempKey: await stage(actors.rider.user.id, "active-avatar"),
+      claimedMimeType: "image/jpeg",
+    });
+    await backend.updateMemberProfile(actors.rider.sessionToken, {
+      displayName: actors.rider.user.displayName,
+      area: actors.rider.user.area,
+      visibility: "PRIVATE",
+      defaultRosterIdentity: "ANONYMOUS",
+    });
+    expire(actors.rider.sessionToken);
+    expire(actors.admin.sessionToken);
+    await expect(backend.getMemberMedia(actors.rider.sessionToken, avatar.mediaId))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(backend.getMemberMedia(actors.admin.sessionToken, avatar.mediaId))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

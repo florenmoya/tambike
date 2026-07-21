@@ -98,12 +98,11 @@ export function createMemberMediaLifecycleService(
 
 function isNoSuchKey(error: unknown) {
   if (!error || typeof error !== "object") return false;
-  const candidate = error as { name?: string; Code?: string; code?: string; $metadata?: { httpStatusCode?: number } };
+  const candidate = error as { name?: string; Code?: string; code?: string };
   return (
     candidate.name === "NoSuchKey" ||
     candidate.Code === "NoSuchKey" ||
-    candidate.code === "NoSuchKey" ||
-    candidate.$metadata?.httpStatusCode === 404
+    candidate.code === "NoSuchKey"
   );
 }
 
