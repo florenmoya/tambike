@@ -604,7 +604,7 @@ export class PrismaTambikeBackend {
       const profileSlug = await resolveStableProfileSlug(parsed.displayName, {
         acquireOwnerLock: () => {
           const resource = profileOwnerLockResource(sessionUser.id);
-          return tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+          return tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
         },
         readCurrentSlug: async () =>
           (
@@ -615,7 +615,7 @@ export class PrismaTambikeBackend {
           ).profileSlug,
         acquireSlugAllocationLock: () => {
           const resource = profileSlugAllocationLockResource();
-          return tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+          return tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
         },
         allocateSlug: (base) => this.allocatePrismaProfileSlug(tx, base),
       });
@@ -9206,7 +9206,7 @@ export class PrismaTambikeBackend {
 
   private async lockMemberMediaOwner(tx: Prisma.TransactionClient, userId: string) {
     const resource = profileOwnerLockResource(userId);
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
   }
 
   private saveFinalizedMemberMedia(userId: string, record: FinalizedMemberMediaRecord) {
@@ -9322,15 +9322,8 @@ export class PrismaTambikeBackend {
       const remaining = await tx.motorcyclePhoto.findMany({
         where: { motorcycleId: photo.motorcycle.id },
         orderBy: { position: "asc" },
-        select: { id: true },
       });
-      await tx.motorcyclePhoto.updateMany({
-        where: { motorcycleId: photo.motorcycle.id },
-        data: { position: { increment: 10 } },
-      });
-      for (const [position, item] of remaining.entries()) {
-        await tx.motorcyclePhoto.update({ where: { id: item.id }, data: { position } });
-      }
+      await this.replaceMotorcyclePhotoOrder(tx, photo.motorcycle.id, remaining);
       return { storageKey: photo.storageKey };
     });
   }
@@ -9350,13 +9343,34 @@ export class PrismaTambikeBackend {
       ) {
         throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
       }
-      await tx.motorcyclePhoto.updateMany({
-        where: { motorcycleId: motorcycle.id },
-        data: { position: { increment: 10 } },
-      });
-      for (const [position, mediaId] of mediaIds.entries()) {
-        await tx.motorcyclePhoto.update({ where: { mediaId }, data: { position } });
-      }
+      const photosByMediaId = new Map(
+        motorcycle.photos.map((photo) => [photo.mediaId, photo]),
+      );
+      const orderedPhotos = mediaIds.map((mediaId) => photosByMediaId.get(mediaId)!);
+      await this.replaceMotorcyclePhotoOrder(tx, motorcycle.id, orderedPhotos);
+    });
+  }
+
+  private async replaceMotorcyclePhotoOrder(
+    tx: Prisma.TransactionClient,
+    motorcycleId: string,
+    photos: Prisma.MotorcyclePhotoGetPayload<Record<string, never>>[],
+  ) {
+    await tx.motorcyclePhoto.deleteMany({ where: { motorcycleId } });
+    if (photos.length === 0) return;
+    await tx.motorcyclePhoto.createMany({
+      data: photos.map((photo, position) => ({
+        id: photo.id,
+        motorcycleId: photo.motorcycleId,
+        position,
+        mediaId: photo.mediaId,
+        storageKey: photo.storageKey,
+        mimeType: photo.mimeType,
+        width: photo.width,
+        height: photo.height,
+        finalizedAt: photo.finalizedAt,
+        createdAt: photo.createdAt,
+      })),
     });
   }
 

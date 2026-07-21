@@ -27,6 +27,11 @@ describe("Prisma member profile visibility", () => {
       return { backend, $disconnect: () => backend.disconnect() };
     });
     const suffix = randomUUID();
+    const scopedProfileInput = {
+      ...profileInput,
+      displayName: `Integration Profile Rider ${suffix}`,
+    };
+    const expectedSlug = profileSlugBase(scopedProfileInput.displayName);
 
     try {
       const fixture = await createPrismaEventFixture(rawClients.primary, { suffix, riderCount: 2 });
@@ -39,26 +44,26 @@ describe("Prisma member profile visibility", () => {
         visibility: "PRIVATE",
         defaultRosterIdentity: "ANONYMOUS",
       });
-      await expect(backendClients.primary.backend.getMemberProfile(undefined, "integration-profile-rider")).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(backendClients.primary.backend.getMemberProfile(undefined, expectedSlug)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-      const saved = await backendClients.primary.backend.updateMemberProfile(owner.sessionToken, profileInput);
-      expect(saved.slug).toBe("integration-profile-rider");
+      const saved = await backendClients.primary.backend.updateMemberProfile(owner.sessionToken, scopedProfileInput);
+      expect(saved.slug).toBe(expectedSlug);
       const publicView = await backendClients.primary.backend.getMemberProfile(undefined, saved.slug!);
-      expect(publicView).toMatchObject({ displayName: profileInput.displayName, visibility: "PUBLIC" });
+      expect(publicView).toMatchObject({ displayName: scopedProfileInput.displayName, visibility: "PUBLIC" });
       for (const forbidden of ["email", "verificationStatus", "userId", "objectKey", "storageKey", "passwordHash"]) {
         expect(JSON.stringify(publicView)).not.toContain(forbidden);
       }
       expect(JSON.stringify(publicView)).not.toMatch(/"id"\s*:/);
 
       await backendClients.primary.backend.updateMemberProfile(owner.sessionToken, {
-        ...profileInput,
+        ...scopedProfileInput,
         visibility: "MEMBERS_ONLY",
       });
       await expect(backendClients.primary.backend.getMemberProfile(undefined, saved.slug!)).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(backendClients.primary.backend.getMemberProfile(outsider.sessionToken, saved.slug!)).resolves.toMatchObject({ visibility: "MEMBERS_ONLY" });
 
       await backendClients.primary.backend.updateMemberProfile(owner.sessionToken, {
-        ...profileInput,
+        ...scopedProfileInput,
         visibility: "PRIVATE",
       });
       await expect(backendClients.primary.backend.getMemberProfile(owner.sessionToken, saved.slug!)).resolves.toMatchObject({ visibility: "PRIVATE" });
@@ -66,7 +71,7 @@ describe("Prisma member profile visibility", () => {
       await expect(backendClients.primary.backend.getMemberProfile(outsider.sessionToken, saved.slug!)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
       await expect(backendClients.primary.backend.updateMemberProfile(owner.sessionToken, {
-        ...profileInput,
+        ...scopedProfileInput,
         displayName: "Renamed Integration Rider",
       })).resolves.toMatchObject({ slug: saved.slug, displayName: "Renamed Integration Rider" });
 
@@ -85,7 +90,7 @@ describe("Prisma member profile visibility", () => {
       expect((await backendClients.primary.backend.getSnapshot(owner.sessionToken)).currentUser?.email).toContain("integration-rider");
       expect((await backendClients.primary.backend.getSnapshot(fixture.adminSession)).users.some((user) => user.id === owner.userId)).toBe(true);
 
-      await expect(backendClients.primary.backend.updateMemberProfile(owner.sessionToken, { ...profileInput, bio: "x".repeat(501) })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(backendClients.primary.backend.updateMemberProfile(owner.sessionToken, { ...scopedProfileInput, bio: "x".repeat(501) })).rejects.toMatchObject({ code: "INVALID_INPUT" });
       await expect(backendClients.primary.backend.upsertMotorcycle(owner.sessionToken, { make: "Honda", model: "CB650R", year: 1884 })).rejects.toMatchObject({ code: "INVALID_INPUT" });
     } finally {
       await closePrismaIntegrationClientPair(backendClients);

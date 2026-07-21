@@ -20,10 +20,11 @@ describe("Prisma member media persistence", () => {
       putObject: vi.fn(async (input) => { objects.set(input.key, { body: input.body, contentType: input.mimeType }); }),
       deleteObject: vi.fn(async (key) => { objects.delete(key); }),
     };
+    const suffix = randomUUID();
     let generated = 0;
     const memberMedia = {
       store,
-      createUuid: () => `integration-media-${++generated}`,
+      createUuid: () => `integration-media-${suffix}-${++generated}`,
       normalize: vi.fn(async () => ({
         bytes: Buffer.from("normalized-webp"),
         mimeType: "image/webp" as const,
@@ -36,7 +37,6 @@ describe("Prisma member media persistence", () => {
       const backend = PrismaTambikeBackend.create(databaseUrl, { memberMedia });
       return { backend, $disconnect: () => backend.disconnect() };
     });
-    const suffix = randomUUID();
 
     try {
       const fixture = await createPrismaEventFixture(rawClients.primary, { suffix, riderCount: 2 });
@@ -97,6 +97,10 @@ describe("Prisma member media persistence", () => {
         claimedMimeType: "image/jpeg",
         motorcyclePhotoPosition: 0,
       });
+      const rowsBeforeReindex = await rawClients.secondary.motorcyclePhoto.findMany({
+        where: { motorcycle: { userId: owner.userId } },
+        orderBy: { position: "asc" },
+      });
       await backendClients.primary.backend.reorderMotorcyclePhotos(owner.sessionToken, [
         photos[4].mediaId,
         photos[3].mediaId,
@@ -105,16 +109,34 @@ describe("Prisma member media persistence", () => {
         replacement.mediaId,
       ]);
       await backendClients.primary.backend.deleteMemberMedia(owner.sessionToken, photos[4].mediaId);
-      await expect(rawClients.secondary.motorcyclePhoto.findMany({
+      const rowsAfterReindex = await rawClients.secondary.motorcyclePhoto.findMany({
         where: { motorcycle: { userId: owner.userId } },
         orderBy: { position: "asc" },
-        select: { mediaId: true, position: true },
-      })).resolves.toEqual([
+      });
+      expect(rowsAfterReindex.map(({ mediaId, position }) => ({ mediaId, position }))).toEqual([
         { mediaId: photos[3].mediaId, position: 0 },
         { mediaId: photos[2].mediaId, position: 1 },
         { mediaId: photos[1].mediaId, position: 2 },
         { mediaId: replacement.mediaId, position: 3 },
       ]);
+      const preservedFields = [
+        "id",
+        "motorcycleId",
+        "mediaId",
+        "storageKey",
+        "mimeType",
+        "width",
+        "height",
+        "finalizedAt",
+        "createdAt",
+      ] as const;
+      for (const row of rowsAfterReindex) {
+        const original = rowsBeforeReindex.find(({ mediaId }) => mediaId === row.mediaId);
+        expect(original).toBeDefined();
+        expect(Object.fromEntries(preservedFields.map((field) => [field, row[field]]))).toEqual(
+          Object.fromEntries(preservedFields.map((field) => [field, original?.[field]])),
+        );
+      }
 
       const avatar = await backendClients.primary.backend.finalizeMemberMedia(owner.sessionToken, {
         purpose: "avatar",
@@ -166,10 +188,11 @@ describe("Prisma member media persistence", () => {
       putObject: vi.fn(async (input) => { objects.set(input.key, { body: input.body, contentType: input.mimeType }); }),
       deleteObject: vi.fn(async (key) => { objects.delete(key); }),
     };
+    const suffix = randomUUID();
     let generated = 0;
     const memberMedia = {
       store,
-      createUuid: () => `concurrent-media-${++generated}`,
+      createUuid: () => `concurrent-media-${suffix}-${++generated}`,
       normalize: vi.fn(async () => ({
         bytes: Buffer.from("normalized-webp"),
         mimeType: "image/webp" as const,
@@ -182,7 +205,6 @@ describe("Prisma member media persistence", () => {
       const backend = PrismaTambikeBackend.create(databaseUrl, { memberMedia });
       return { backend, $disconnect: () => backend.disconnect() };
     });
-    const suffix = randomUUID();
 
     try {
       const fixture = await createPrismaEventFixture(rawClients.primary, { suffix });
