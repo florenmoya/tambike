@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -24,6 +24,14 @@ describe("Prisma integration harness contract", () => {
     expect(integrationVitestConfig).toContain("fileParallelism: false");
     expect(integrationVitestConfig).toContain("testTimeout: 15_000");
     expect(defaultVitestConfig).toContain("tests/prisma-integration/**");
+    expect(
+      existsSync(
+        resolve(
+          process.cwd(),
+          "tests/prisma-integration/member-profile-roster-migration.integration.test.ts",
+        ),
+      ),
+    ).toBe(true);
   });
 
   test("pins Prisma migrations to the explicit test URL without loading application env files", () => {

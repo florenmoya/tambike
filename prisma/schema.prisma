@@ -12,6 +12,17 @@ enum Role {
   admin
 }
 
+enum ProfileVisibility {
+  PUBLIC
+  MEMBERS_ONLY
+  PRIVATE
+}
+
+enum RosterIdentity {
+  VISIBLE
+  ANONYMOUS
+}
+
 enum VerificationStatus {
   UNVERIFIED
   PENDING
@@ -258,20 +269,31 @@ enum GiveawayFulfillmentStatus {
 }
 
 model User {
-  id                 String             @id @default(cuid())
-  displayName        String
-  email              String             @unique
-  passwordHash       String
-  role               Role               @default(rider)
-  verificationStatus VerificationStatus @default(UNVERIFIED)
-  area               String
-  bikeModel          String?
-  clubName           String?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  id                   String             @id @default(cuid())
+  displayName          String
+  email                String             @unique
+  passwordHash         String
+  role                 Role               @default(rider)
+  verificationStatus   VerificationStatus @default(UNVERIFIED)
+  area                 String
+  bikeModel            String?
+  clubName             String?
+  profileSlug          String?            @unique
+  profileBio           String?
+  profileVisibility    ProfileVisibility  @default(PRIVATE)
+  defaultRosterIdentity RosterIdentity    @default(ANONYMOUS)
+  profilePhotoMediaId  String?            @unique
+  profilePhotoStorageKey String?
+  profilePhotoMimeType String?
+  profilePhotoWidth    Int?
+  profilePhotoHeight   Int?
+  profilePhotoFinalizedAt DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   sessions                    Session[]
   organizerProfile            OrganizerProfile?
+  motorcycle                  Motorcycle?
   rsvps                       RSVP[]
   passes                      Pass[]
   checkIns                    CheckIn[]                   @relation("CheckedInUser")
@@ -371,6 +393,7 @@ model Event {
   passes                Pass[]
   checkIns              CheckIn[]
   checkInSettings       EventCheckInSettings?
+  rosterSettings        EventRosterSettings?
   selfCheckInQrSessions EventSelfCheckInQrSession[]
   perks                 Perk[]
   giveaways             EventGiveaway[]
@@ -400,6 +423,7 @@ model RSVP {
   attendanceType AttendanceType
   companions     Int            @default(0)
   clubName       String?
+  rosterIdentity RosterIdentity @default(ANONYMOUS)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -408,6 +432,49 @@ model RSVP {
   pass  Pass?
 
   @@unique([eventId, userId])
+  @@index([eventId, status, goingAt, id])
+}
+
+model Motorcycle {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  make           String
+  model          String
+  year           Int?
+  displacementCc Int?
+  nickname       String?
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photos MotorcyclePhoto[]
+}
+
+model MotorcyclePhoto {
+  id           String   @id @default(cuid())
+  motorcycleId String
+  position     Int
+  mediaId      String   @unique
+  storageKey   String
+  mimeType     String
+  width        Int
+  height       Int
+  finalizedAt  DateTime
+  createdAt    DateTime @default(now())
+
+  motorcycle Motorcycle @relation(fields: [motorcycleId], references: [id], onDelete: Cascade)
+
+  @@unique([motorcycleId, position])
+}
+
+model EventRosterSettings {
+  eventId   String   @id
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 }
 
 model Pass {
