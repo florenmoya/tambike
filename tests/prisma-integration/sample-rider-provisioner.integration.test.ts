@@ -41,7 +41,7 @@ describe("guarded Prisma sample rider provisioner", () => {
         objects.delete(key);
       }),
     };
-    const provisioner = createPrismaSampleRiderProvisioner(databaseUrl, { store });
+    const provisioner = createPrismaSampleRiderProvisioner(databaseUrl, databaseUrl, { store });
     const directory = await mkdtemp(join(tmpdir(), "tambike-sample-rider-integration-"));
     const avatar = join(directory, "avatar.png");
     const motorcyclePhotos = Array.from({ length: 5 }, (_, index) =>

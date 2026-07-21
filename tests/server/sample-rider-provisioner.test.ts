@@ -372,6 +372,7 @@ describe("sample rider CLI contract", () => {
       environment: {
         TAMBIKE_SAMPLE_RIDER_PASSWORD: "do-not-print-me",
         DATABASE_URL: "postgresql://secret:secret@db.example/private",
+        DIRECT_URL: "postgresql://secret:secret@db.example:5432/private",
       },
       write: (line) => output.push(line),
       createProvisioner: async () => ({

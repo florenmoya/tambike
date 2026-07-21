@@ -47,7 +47,8 @@ export type SampleRiderProvisioningErrorCode =
   | "INVALID_ASSET_COUNT"
   | "ASSET_UNAVAILABLE"
   | "EVENT_NOT_FOUND"
-  | "INVARIANT_FAILED";
+  | "INVARIANT_FAILED"
+  | "DIRECT_LOCK_URL_REQUIRED";
 
 export class SampleRiderProvisioningError extends Error {
   constructor(public readonly code: SampleRiderProvisioningErrorCode) {
@@ -58,6 +59,82 @@ export class SampleRiderProvisioningError extends Error {
   toJSON() {
     return { code: this.code };
   }
+}
+
+export class SampleRiderRecoveryError extends AggregateError {
+  readonly code = "PROVISION_COMPENSATION_FAILED" as const;
+
+  constructor(primary: unknown | null, recoveryFailures: unknown[]) {
+    super(
+      primary === null ? recoveryFailures : [primary, ...recoveryFailures],
+      "PROVISION_COMPENSATION_FAILED",
+    );
+    this.name = "SampleRiderRecoveryError";
+  }
+}
+
+export function toSampleRiderCliErrorCode(error: unknown) {
+  if (error instanceof SampleRiderRecoveryError || error instanceof AggregateError) {
+    return "PROVISION_COMPENSATION_FAILED";
+  }
+  if (error instanceof SampleRiderProvisioningError) return error.code;
+  return "SAMPLE_RIDER_PROVISIONING_FAILED";
+}
+
+const RECOVERY_ATTEMPTS = 3;
+
+export async function runSampleRiderRecoverySteps(
+  steps: Array<() => Promise<void>>,
+) {
+  const terminalFailures: unknown[] = [];
+  for (const step of steps) {
+    const attemptFailures: unknown[] = [];
+    for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
+      try {
+        await step();
+        attemptFailures.length = 0;
+        break;
+      } catch (error) {
+        attemptFailures.push(error);
+      }
+    }
+    if (attemptFailures.length > 0) {
+      terminalFailures.push(new AggregateError(attemptFailures, "RECOVERY_STEP_FAILED"));
+    }
+  }
+  if (terminalFailures.length > 0) {
+    throw new AggregateError(terminalFailures, "PROVISION_COMPENSATION_FAILED");
+  }
+}
+
+export function collectSampleRiderCleanupKeys(
+  currentKeys: Iterable<string>,
+  generatedKeys: Iterable<string>,
+  temporaryKeys: Iterable<string>,
+  originalKeys: ReadonlySet<string>,
+) {
+  return [...new Set([...currentKeys, ...generatedKeys, ...temporaryKeys])]
+    .filter((key) => !originalKeys.has(key));
+}
+
+export function validateDirectSampleRiderLockUrl(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) throw new SampleRiderProvisioningError("DIRECT_LOCK_URL_REQUIRED");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new SampleRiderProvisioningError("DIRECT_LOCK_URL_REQUIRED");
+  }
+  const pooled =
+    !["postgresql:", "postgres:"].includes(parsed.protocol) ||
+    parsed.hostname.toLowerCase().includes("pooler") ||
+    parsed.hostname.toLowerCase().includes("pgbouncer") ||
+    parsed.port === "6543" ||
+    parsed.searchParams.get("pgbouncer")?.toLowerCase() === "true" ||
+    parsed.searchParams.get("pool_mode")?.toLowerCase() === "transaction";
+  if (pooled) throw new SampleRiderProvisioningError("DIRECT_LOCK_URL_REQUIRED");
+  return trimmed;
 }
 
 export interface SampleRiderManifest {
@@ -244,6 +321,11 @@ export async function provisionSampleRider(
 ) {
   assertValidRequest(input);
   const lock = await dependencies.acquireProvisioningLock();
+  let snapshot: unknown;
+  let snapshotCaptured = false;
+  let result: SampleRiderProvisioningResult | undefined;
+  let primaryFailure: unknown | null = null;
+  const recoveryFailures: unknown[] = [];
   try {
     await dependencies.assertTargetEvent(input.manifest.eventId);
     let preparedAssets: SampleRiderPreparedAsset[];
@@ -267,53 +349,67 @@ export async function provisionSampleRider(
       throw new SampleRiderProvisioningError("INVALID_ASSET_COUNT");
     }
 
-    const snapshot = await dependencies.captureSnapshot();
-    try {
-      const passwordHash = await bcrypt.hash(input.password!, 10);
-      const context = await dependencies.upsertAccount({
-        email: SAMPLE_RIDER_EMAIL,
-        password: input.password!,
-        passwordHash,
-        displayName: SAMPLE_RIDER_NAME,
-        area: SAMPLE_RIDER_AREA,
-        role: "rider",
-      });
-      await dependencies.updateProfile(context, sampleProfile);
-      await dependencies.upsertMotorcycle(context, sampleMotorcycle);
-      await dependencies.ensureAvatar(context, avatar);
-      for (const [position, photo] of motorcyclePhotos.entries()) {
-        await dependencies.ensureMotorcyclePhoto(context, position, photo);
-      }
-      await dependencies.registerForEvent(context, SAMPLE_RIDER_EVENT_ID, {
-        status: "going",
-        attendanceType: "direct",
-        rosterIdentity: "VISIBLE",
-      });
-      await dependencies.ensureActivePass(context, SAMPLE_RIDER_EVENT_ID);
-      const verification = await dependencies.inspectResult(
-        context,
-        SAMPLE_RIDER_EVENT_ID,
-        input.password!,
-      );
-      assertExactResult(verification, avatar, motorcyclePhotos);
-      await dependencies.finish(context);
-      return {
-        slug: verification.slug,
-        eventId: verification.eventId,
-        riders: verification.riders,
-        motorcycles: verification.motorcycles,
-        avatars: verification.avatars,
-        motorcyclePhotos: verification.motorcyclePhotos,
-        rsvps: verification.rsvps,
-        passes: verification.passes,
-      };
-    } catch (error) {
-      await dependencies.restoreSnapshot(snapshot);
-      throw error;
+    snapshot = await dependencies.captureSnapshot();
+    snapshotCaptured = true;
+    const passwordHash = await bcrypt.hash(input.password!, 10);
+    const context = await dependencies.upsertAccount({
+      email: SAMPLE_RIDER_EMAIL,
+      password: input.password!,
+      passwordHash,
+      displayName: SAMPLE_RIDER_NAME,
+      area: SAMPLE_RIDER_AREA,
+      role: "rider",
+    });
+    await dependencies.updateProfile(context, sampleProfile);
+    await dependencies.upsertMotorcycle(context, sampleMotorcycle);
+    await dependencies.ensureAvatar(context, avatar);
+    for (const [position, photo] of motorcyclePhotos.entries()) {
+      await dependencies.ensureMotorcyclePhoto(context, position, photo);
     }
-  } finally {
-    await lock.release();
+    await dependencies.registerForEvent(context, SAMPLE_RIDER_EVENT_ID, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
+    });
+    await dependencies.ensureActivePass(context, SAMPLE_RIDER_EVENT_ID);
+    const verification = await dependencies.inspectResult(
+      context,
+      SAMPLE_RIDER_EVENT_ID,
+      input.password!,
+    );
+    assertExactResult(verification, avatar, motorcyclePhotos);
+    await dependencies.finish(context);
+    result = {
+      slug: verification.slug,
+      eventId: verification.eventId,
+      riders: verification.riders,
+      motorcycles: verification.motorcycles,
+      avatars: verification.avatars,
+      motorcyclePhotos: verification.motorcyclePhotos,
+      rsvps: verification.rsvps,
+      passes: verification.passes,
+    };
+  } catch (error) {
+    primaryFailure = error;
+    if (snapshotCaptured) {
+      try {
+        await dependencies.restoreSnapshot(snapshot);
+      } catch (restoreError) {
+        recoveryFailures.push(restoreError);
+      }
+    }
   }
+  try {
+    await lock.release();
+  } catch (releaseError) {
+    recoveryFailures.push(releaseError);
+  }
+  if (recoveryFailures.length > 0) {
+    throw new SampleRiderRecoveryError(primaryFailure, recoveryFailures);
+  }
+  if (primaryFailure !== null) throw primaryFailure;
+  if (!result) throw new SampleRiderProvisioningError("INVARIANT_FAILED");
+  return result;
 }
 
 function mimeTypeForPath(path: string): MemberImageMimeType {
@@ -379,13 +475,48 @@ export interface PrismaSampleRiderProvisioner {
   close(): Promise<void>;
 }
 
+export interface SampleRiderLockClient {
+  connect(): Promise<unknown>;
+  query(sql: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
+  end(): Promise<void>;
+}
+
 export function createPrismaSampleRiderProvisioner(
-  databaseUrl: string,
-  options: { store?: MemberMediaStore } = {},
+  runtimeDatabaseUrl: string,
+  directLockDatabaseUrl: string,
+  options: {
+    store?: MemberMediaStore;
+    createLockClient?: (connectionString: string) => SampleRiderLockClient;
+  } = {},
 ): PrismaSampleRiderProvisioner {
-  const prisma = new PrismaClient({ adapter: new PrismaPg(databaseUrl) });
+  const directUrl = validateDirectSampleRiderLockUrl(directLockDatabaseUrl);
+  const prisma = new PrismaClient({ adapter: new PrismaPg(runtimeDatabaseUrl) });
   const store = options.store ?? createS3MemberMediaStore(loadMemberMediaConfig());
-  const backend = PrismaTambikeBackend.create(databaseUrl, { memberMedia: { store } });
+  const operationGeneratedKeys = new Set<string>();
+  const operationTempKeys = new Set<string>();
+  let pendingFinalization: {
+    userId: string;
+    purpose: "avatar" | "motorcycle-photo";
+  } | null = null;
+  const backend = PrismaTambikeBackend.create(runtimeDatabaseUrl, {
+    memberMedia: {
+      store,
+      createUuid: () => {
+        const mediaId = randomUUID();
+        if (pendingFinalization) {
+          const folder = pendingFinalization.purpose === "avatar" ? "avatar" : "motorcycles";
+          operationGeneratedKeys.add(
+            `media/users/${pendingFinalization.userId}/${folder}/${mediaId}.webp`,
+          );
+        }
+        return mediaId;
+      },
+    },
+  });
+  const createLockClient =
+    options.createLockClient ??
+    ((connectionString: string): SampleRiderLockClient =>
+      new PgClient({ connectionString }) as SampleRiderLockClient);
 
   const currentMedia = async (userId: string, purpose: "avatar" | "motorcycle-photo", position?: number) => {
     if (purpose === "avatar") {
@@ -427,19 +558,35 @@ export function createPrismaSampleRiderProvisioner(
     }
 
     const tempKey = `tmp/users/${context.userId}/${randomUUID()}`;
+    operationTempKeys.add(tempKey);
     await store.putObject({ key: tempKey, body: asset.bytes, mimeType: asset.mimeType });
     try {
-      await backend.finalizeMemberMedia(context.sessionToken, {
-        purpose,
-        tempKey,
-        claimedMimeType: asset.mimeType,
-        motorcyclePhotoPosition: position,
-      });
+      pendingFinalization = { userId: context.userId, purpose };
+      try {
+        await backend.finalizeMemberMedia(context.sessionToken, {
+          purpose,
+          tempKey,
+          claimedMimeType: asset.mimeType,
+          motorcyclePhotoPosition: position,
+        });
+      } finally {
+        pendingFinalization = null;
+      }
+      operationTempKeys.delete(tempKey);
     } catch (error) {
       try {
-        await store.deleteObject(tempKey);
+        await runSampleRiderRecoverySteps([
+          async () => {
+            try {
+              await store.deleteObject(tempKey);
+            } catch (cleanupError) {
+              if (!isMissingObject(cleanupError)) throw cleanupError;
+            }
+          },
+        ]);
+        operationTempKeys.delete(tempKey);
       } catch (cleanupError) {
-        if (!isMissingObject(cleanupError)) throw cleanupError;
+        throw new SampleRiderRecoveryError(error, [cleanupError]);
       }
       throw error;
     }
@@ -483,29 +630,33 @@ export function createPrismaSampleRiderProvisioner(
   type PrismaSampleRiderSnapshot = Awaited<ReturnType<typeof captureSnapshot>>;
 
   const restoreSnapshot = async (snapshot: PrismaSampleRiderSnapshot) => {
-    const current = await prisma.user.findUnique({
-      where: { email: SAMPLE_RIDER_EMAIL },
-      include: { motorcycle: { include: { photos: true } } },
-    });
-    const currentKeys = [
-      current?.profilePhotoStorageKey,
-      ...(current?.motorcycle?.photos.map((photo) => photo.storageKey) ?? []),
-    ].filter((key): key is string => Boolean(key));
     const originalKeys = new Set(snapshot.mediaObjects.map((object) => object.key));
+    const cleanupKeys = collectSampleRiderCleanupKeys(
+      [],
+      operationGeneratedKeys,
+      operationTempKeys,
+      originalKeys,
+    );
 
-    for (const object of snapshot.mediaObjects) {
-      if (object.bytes) {
-        await store.putObject({ key: object.key, body: object.bytes, mimeType: "image/webp" });
-      } else {
+    const recoverySteps: Array<() => Promise<void>> = snapshot.mediaObjects.map((object) =>
+      async () => {
+        if (object.bytes) {
+          await store.putObject({ key: object.key, body: object.bytes, mimeType: "image/webp" });
+          return;
+        }
         try {
           await store.deleteObject(object.key);
         } catch (error) {
           if (!isMissingObject(error)) throw error;
         }
-      }
-    }
+      });
 
-    await prisma.$transaction(async (tx) => {
+    recoverySteps.push(async () => {
+      await prisma.$transaction(async (tx) => {
+      const current = await tx.user.findUnique({
+        where: { email: SAMPLE_RIDER_EMAIL },
+        include: { motorcycle: { include: { photos: true } } },
+      });
       if (current) {
         await tx.auditLog.deleteMany({
           where: {
@@ -668,44 +819,59 @@ export function createPrismaSampleRiderProvisioner(
       await tx.session.deleteMany({
         where: { userId: original.id, id: { startsWith: "sample-rider-session-" } },
       });
+      });
     });
 
-    for (const key of currentKeys) {
-      if (!originalKeys.has(key)) {
+    for (const key of cleanupKeys) {
+      recoverySteps.push(async () => {
         try {
           await store.deleteObject(key);
         } catch (error) {
           if (!isMissingObject(error)) throw error;
         }
-      }
+      });
     }
+    await runSampleRiderRecoverySteps(recoverySteps);
+    operationGeneratedKeys.clear();
+    operationTempKeys.clear();
   };
 
   const dependencies: SampleRiderDependencies = {
     async acquireProvisioningLock() {
-      const client = new PgClient({ connectionString: databaseUrl });
-      await client.connect();
+      const client = createLockClient(directUrl);
       try {
+        await client.connect();
         await client.query(
           "SELECT pg_advisory_lock(hashtextextended($1, 0))",
           [SAMPLE_RIDER_LOCK_KEY],
         );
       } catch (error) {
-        await client.end();
+        try {
+          await runSampleRiderRecoverySteps([() => client.end()]);
+        } catch (cleanupError) {
+          throw new SampleRiderRecoveryError(error, [cleanupError]);
+        }
         throw error;
       }
       let released = false;
       return {
         async release() {
           if (released) return;
-          released = true;
           try {
-            await client.query(
-              "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
-              [SAMPLE_RIDER_LOCK_KEY],
-            );
+            await runSampleRiderRecoverySteps([
+              async () => {
+                const result = await client.query(
+                  "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+                  [SAMPLE_RIDER_LOCK_KEY],
+                );
+                if (result.rows[0]?.unlocked !== true) {
+                  throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
+                }
+              },
+              () => client.end(),
+            ]);
           } finally {
-            await client.end();
+            released = true;
           }
         },
       };
@@ -843,6 +1009,8 @@ export function createPrismaSampleRiderProvisioner(
     },
     async finish(context) {
       if (context.sessionId) await prisma.session.deleteMany({ where: { id: context.sessionId } });
+      operationGeneratedKeys.clear();
+      operationTempKeys.clear();
     },
   };
 

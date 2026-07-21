@@ -8,6 +8,8 @@ import {
   createPrismaSampleRiderProvisioner,
   provisionSampleRider,
   SampleRiderProvisioningError,
+  toSampleRiderCliErrorCode,
+  validateDirectSampleRiderLockUrl,
   type PrismaSampleRiderProvisioner,
   type SampleRiderManifest,
 } from "../src/server/member-profiles/sample-rider";
@@ -18,7 +20,10 @@ export interface SampleRiderCliOptions {
   argv?: string[];
   environment?: CliEnvironment;
   write?: (line: string) => void;
-  createProvisioner?: (databaseUrl: string) => Promise<PrismaSampleRiderProvisioner>;
+  createProvisioner?: (
+    runtimeDatabaseUrl: string,
+    directLockDatabaseUrl: string,
+  ) => Promise<PrismaSampleRiderProvisioner>;
 }
 
 function parseArguments(argv: string[]) {
@@ -45,6 +50,7 @@ export async function runSampleRiderCli(options: SampleRiderCliOptions = {}) {
   if (!environment.TAMBIKE_SAMPLE_RIDER_PASSWORD?.trim()) {
     throw new SampleRiderProvisioningError("PASSWORD_REQUIRED");
   }
+  const directLockDatabaseUrl = validateDirectSampleRiderLockUrl(environment.DIRECT_URL);
 
   let manifest: SampleRiderManifest;
   try {
@@ -55,7 +61,10 @@ export async function runSampleRiderCli(options: SampleRiderCliOptions = {}) {
   const databaseUrl = getRuntimeDatabaseUrl(environment);
   if (!databaseUrl) throw new Error("DATABASE_URL_REQUIRED");
 
-  const provisioner = await (options.createProvisioner ?? (async (url) => createPrismaSampleRiderProvisioner(url)))(databaseUrl);
+  const provisioner = await (
+    options.createProvisioner ??
+    (async (runtimeUrl, directUrl) => createPrismaSampleRiderProvisioner(runtimeUrl, directUrl))
+  )(databaseUrl, directLockDatabaseUrl);
   try {
     const result = await provisionSampleRider({
       confirmedProduction,
@@ -74,7 +83,7 @@ async function main() {
   try {
     await runSampleRiderCli();
   } catch (error) {
-    const code = error instanceof SampleRiderProvisioningError ? error.code : "SAMPLE_RIDER_PROVISIONING_FAILED";
+    const code = toSampleRiderCliErrorCode(error);
     console.error(code);
     process.exitCode = 1;
   }

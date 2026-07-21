@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   provisionSampleRider,
+  SampleRiderRecoveryError,
   prepareSampleRiderAsset,
   type SampleRiderDependencies,
   type SampleRiderManifest,
@@ -301,5 +302,48 @@ describe("reviewed sample rider safety", () => {
 
     expect(harness.getState()).toEqual(harness.originalState);
     expect([...harness.getObjects()]).toEqual([...harness.originalObjects]);
+  });
+
+  test("retains the primary failure together with restore and release failures", async () => {
+    const harness = createSafetyHarness({ failurePoint: "account" });
+    const restoreFailure = new Error("restore-failure");
+    const releaseFailure = new Error("release-failure");
+    harness.dependencies.restoreSnapshot = vi.fn(async () => { throw restoreFailure; });
+    harness.dependencies.acquireProvisioningLock = vi.fn(async () => ({
+      release: async () => { throw releaseFailure; },
+    }));
+
+    let caught: unknown;
+    try {
+      await provisionSampleRider({
+        confirmedProduction: true,
+        password: "runtime-only-password",
+        manifest: baseManifest(),
+      }, harness.dependencies);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SampleRiderRecoveryError);
+    expect((caught as SampleRiderRecoveryError).errors[0]).toMatchObject({ message: "FAIL_account" });
+    expect((caught as SampleRiderRecoveryError).errors.slice(1)).toEqual([restoreFailure, releaseFailure]);
+  });
+
+  test("reports release failure after otherwise successful exact provisioning", async () => {
+    const harness = createSafetyHarness();
+    const releaseFailure = new Error("release-after-success");
+    harness.dependencies.acquireProvisioningLock = vi.fn(async () => ({
+      release: async () => { throw releaseFailure; },
+    }));
+
+    await expect(provisionSampleRider({
+      confirmedProduction: true,
+      password: "runtime-only-password",
+      manifest: baseManifest(),
+    }, harness.dependencies)).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(SampleRiderRecoveryError);
+      expect((error as SampleRiderRecoveryError).errors).toEqual([releaseFailure]);
+      return true;
+    });
   });
 });
