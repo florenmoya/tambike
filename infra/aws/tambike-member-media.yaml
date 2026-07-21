@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Private Tambike member media bucket and Vercel team-mode OIDC role.
+
+Parameters:
+  VercelTeamSlug:
+    Type: String
+    Description: Exact Vercel team slug used by the team-mode OIDC issuer.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,99}$"
+  VercelProjectName:
+    Type: String
+    Description: Exact Vercel project name present in the OIDC subject claim.
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+  AllowedOrigin:
+    Type: String
+    Description: Exact HTTPS Tambike browser origin allowed to submit presigned POSTs.
+    AllowedPattern: "^https://[^/[:space:]]+(?::[0-9]{1,5})?$"
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: Existing team-mode Vercel OIDC provider ARN. Leave empty to create it.
+    AllowedPattern: '^$|^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:oidc-provider/oidc\.vercel\.com/[a-z0-9][a-z0-9-]{0,99}$'
+    ConstraintDescription: Must be empty or the exact team-mode oidc.vercel.com provider ARN.
+  EnablePreviewAccess:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "false"
+      - "true"
+    Description: Explicitly allow this exact project preview environment to assume the role.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+  AllowPreviewAccess: !Equals [!Ref EnablePreviewAccess, "true"]
+
+Resources:
+  MemberMediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTemporaryUploads
+            Status: Enabled
+            Prefix: tmp/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - content-type
+            AllowedMethods:
+              - POST
+            AllowedOrigins:
+              - !Ref AllowedOrigin
+            MaxAge: 300
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: DataClassification
+          Value: private-member-media
+
+  VercelOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: !Sub https://oidc.vercel.com/${VercelTeamSlug}
+      ClientIdList:
+        - !Sub https://vercel.com/${VercelTeamSlug}
+      Tags:
+        - Key: Application
+          Value: tambike
+
+  VercelMemberMediaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Short-lived Vercel OIDC access to Tambike private member media.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${OidcProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "oidc.vercel.com/${VercelTeamSlug}:aud": "https://vercel.com/${VercelTeamSlug}",
+                      "oidc.vercel.com/${VercelTeamSlug}:sub": ${AllowedSubjects}
+                    }
+                  }
+                }
+              ]
+            }
+          - OidcProviderArn: !If
+              - CreateOidcProvider
+              - !Ref VercelOidcProvider
+              - !Ref ExistingOidcProviderArn
+            AllowedSubjects: !If
+              - AllowPreviewAccess
+              - !Sub '["owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:production","owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:preview"]'
+              - !Sub '["owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:production"]'
+      Policies:
+        - PolicyName: TambikeMemberMediaObjects
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadWriteAndCleanMemberMediaObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub ${MemberMediaBucket.Arn}/tmp/*
+                  - !Sub ${MemberMediaBucket.Arn}/media/*
+      Tags:
+        - Key: Application
+          Value: tambike
+
+Outputs:
+  BucketName:
+    Description: Set this value as S3_BUCKET_NAME in Vercel.
+    Value: !Ref MemberMediaBucket
+  VercelRoleArn:
+    Description: Set this value as AWS_ROLE_ARN in Vercel.
+    Value: !GetAtt VercelMemberMediaRole.Arn
