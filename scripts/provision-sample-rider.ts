@@ -8,6 +8,7 @@ import {
   createPrismaSampleRiderProvisioner,
   provisionSampleRider,
   SampleRiderProvisioningError,
+  SampleRiderRecoveryError,
   toSampleRiderCliErrorCode,
   validateDirectSampleRiderLockUrl,
   type PrismaSampleRiderProvisioner,
@@ -24,6 +25,7 @@ export interface SampleRiderCliOptions {
     runtimeDatabaseUrl: string,
     directLockDatabaseUrl: string,
   ) => Promise<PrismaSampleRiderProvisioner>;
+  provision?: typeof provisionSampleRider;
 }
 
 function parseArguments(argv: string[]) {
@@ -65,17 +67,30 @@ export async function runSampleRiderCli(options: SampleRiderCliOptions = {}) {
     options.createProvisioner ??
     (async (runtimeUrl, directUrl) => createPrismaSampleRiderProvisioner(runtimeUrl, directUrl))
   )(databaseUrl, directLockDatabaseUrl);
+  let result: Awaited<ReturnType<typeof provisionSampleRider>> | undefined;
+  let operationFailure: unknown | null = null;
   try {
-    const result = await provisionSampleRider({
+    result = await (options.provision ?? provisionSampleRider)({
       confirmedProduction,
       password: environment.TAMBIKE_SAMPLE_RIDER_PASSWORD,
       manifest,
     }, provisioner.dependencies);
-    write(JSON.stringify(result));
-    return result;
-  } finally {
-    await provisioner.close();
+  } catch (error) {
+    operationFailure = error;
   }
+  let closeFailure: unknown | null = null;
+  try {
+    await provisioner.close();
+  } catch (error) {
+    closeFailure = error;
+  }
+  if (closeFailure !== null) {
+    throw new SampleRiderRecoveryError(operationFailure, [closeFailure]);
+  }
+  if (operationFailure !== null) throw operationFailure;
+  if (!result) throw new SampleRiderProvisioningError("INVARIANT_FAILED");
+  write(JSON.stringify(result));
+  return result;
 }
 
 async function main() {

@@ -107,6 +107,12 @@ export async function runSampleRiderRecoverySteps(
   }
 }
 
+export async function closeSampleRiderProvisionerResources(
+  disconnectSteps: Array<() => Promise<void>>,
+) {
+  await runSampleRiderRecoverySteps(disconnectSteps);
+}
+
 export function collectSampleRiderCleanupKeys(
   currentKeys: Iterable<string>,
   generatedKeys: Iterable<string>,
@@ -1017,7 +1023,10 @@ export function createPrismaSampleRiderProvisioner(
   return {
     dependencies,
     async close() {
-      await Promise.all([backend.disconnect(), prisma.$disconnect()]);
+      await closeSampleRiderProvisionerResources([
+        () => backend.disconnect(),
+        () => prisma.$disconnect(),
+      ]);
     },
   };
 }

@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  closeSampleRiderProvisionerResources,
   collectSampleRiderCleanupKeys,
   createPrismaSampleRiderProvisioner,
   runSampleRiderRecoverySteps,
   SampleRiderRecoveryError,
   toSampleRiderCliErrorCode,
   validateDirectSampleRiderLockUrl,
+  type SampleRiderDependencies,
   type SampleRiderLockClient,
 } from "@/server/member-profiles/sample-rider";
 import type { MemberMediaStore } from "@/server/member-media/store";
@@ -118,6 +120,35 @@ describe("direct sample rider lock connection", () => {
 });
 
 describe("bounded sample rider recovery", () => {
+  test("attempts and retains both backend and Prisma disconnect failures", async () => {
+    const backendFailure = new Error("secret-backend-disconnect");
+    const prismaFailure = new Error("secret-prisma-disconnect");
+    const backendDisconnect = vi.fn(async () => { throw backendFailure; });
+    const prismaDisconnect = vi.fn(async () => { throw prismaFailure; });
+
+    await expect(closeSampleRiderProvisionerResources([
+      backendDisconnect,
+      prismaDisconnect,
+    ])).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(AggregateError);
+      const aggregate = error as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect((aggregate.errors[0] as AggregateError).errors).toEqual([
+        backendFailure,
+        backendFailure,
+        backendFailure,
+      ]);
+      expect((aggregate.errors[1] as AggregateError).errors).toEqual([
+        prismaFailure,
+        prismaFailure,
+        prismaFailure,
+      ]);
+      return true;
+    });
+    expect(backendDisconnect).toHaveBeenCalledTimes(3);
+    expect(prismaDisconnect).toHaveBeenCalledTimes(3);
+  });
+
   test("collects current, generated-final, and temporary keys exactly once without deleting originals", () => {
     expect(collectSampleRiderCleanupKeys(
       ["media/current.webp", "media/original.webp"],
@@ -231,6 +262,93 @@ describe("direct URL CLI boundary", () => {
       createProvisioner,
     })).rejects.toThrow("DIRECT_LOCK_URL_REQUIRED");
     expect(createProvisioner).not.toHaveBeenCalled();
+  });
+
+  test("retains simultaneous compensation and close failures while exposing only the stable code", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tambike-cli-aggregate-"));
+    tempDirectories.push(directory);
+    const manifestPath = join(directory, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify({
+      eventId: "tambike-cafe-classico",
+      avatar: "avatar.jpg",
+      motorcyclePhotos: ["0.jpg", "1.jpg", "2.jpg", "3.jpg", "4.jpg"],
+    }));
+    const operationFailure = new SampleRiderRecoveryError(
+      new Error("secret-operation"),
+      [new Error("secret-restore")],
+    );
+    const closeFailure = new Error("secret-close");
+
+    let caught: unknown;
+    try {
+      await runSampleRiderCli({
+        argv: ["--confirm-production", "--manifest", manifestPath],
+        environment: {
+          TAMBIKE_SAMPLE_RIDER_PASSWORD: "runtime-secret",
+          DATABASE_URL: "postgresql://runtime-secret@pooler.example/tambike",
+          DIRECT_URL: "postgresql://direct-secret@db.example.test:5432/tambike",
+        },
+        createProvisioner: async () => ({
+          dependencies: {} as SampleRiderDependencies,
+          close: async () => { throw closeFailure; },
+        }),
+        provision: async () => { throw operationFailure; },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SampleRiderRecoveryError);
+    expect((caught as SampleRiderRecoveryError).errors).toEqual([operationFailure, closeFailure]);
+    const publicCode = toSampleRiderCliErrorCode(caught);
+    expect(publicCode).toBe("PROVISION_COMPENSATION_FAILED");
+    expect(JSON.stringify({ code: publicCode })).not.toMatch(/secret|postgresql|avatar/);
+  });
+
+  test("maps a close-only failure to a stable cleanup code without exposing its message", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tambike-cli-close-"));
+    tempDirectories.push(directory);
+    const manifestPath = join(directory, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify({
+      eventId: "tambike-cafe-classico",
+      avatar: "avatar.jpg",
+      motorcyclePhotos: ["0.jpg", "1.jpg", "2.jpg", "3.jpg", "4.jpg"],
+    }));
+    const closeFailure = new Error("secret-close-only");
+
+    let caught: unknown;
+    try {
+      await runSampleRiderCli({
+        argv: ["--confirm-production", "--manifest", manifestPath],
+        environment: {
+          TAMBIKE_SAMPLE_RIDER_PASSWORD: "runtime-secret",
+          DATABASE_URL: "postgresql://runtime-secret@pooler.example/tambike",
+          DIRECT_URL: "postgresql://direct-secret@db.example.test:5432/tambike",
+        },
+        createProvisioner: async () => ({
+          dependencies: {} as SampleRiderDependencies,
+          close: async () => { throw closeFailure; },
+        }),
+        provision: async () => ({
+          slug: "sample-rider",
+          eventId: "tambike-cafe-classico",
+          riders: 1,
+          motorcycles: 1,
+          avatars: 1,
+          motorcyclePhotos: 5,
+          rsvps: 1,
+          passes: 1,
+        }),
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SampleRiderRecoveryError);
+    expect((caught as SampleRiderRecoveryError).errors).toEqual([closeFailure]);
+    const publicCode = toSampleRiderCliErrorCode(caught);
+    expect(publicCode).toBe("PROVISION_COMPENSATION_FAILED");
+    expect(JSON.stringify({ code: publicCode })).not.toContain("secret-close-only");
   });
 });
 
