@@ -56,6 +56,7 @@ import type {
   AttendanceType,
   Event,
   EventType,
+  MemberProfileEditorView,
   Pass,
   Role,
   RosterIdentity,
@@ -1237,8 +1238,7 @@ function ExistingRsvpIdentityEditor({ eventId }: { eventId: string }) {
     updateEventRosterIdentity,
   } = useDemo();
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getMemberProfileEditor>> | null>(null);
-  const [rosterIdentity, setRosterIdentity] = useState<RosterIdentity | null>(null);
-  const [pending, setPending] = useState(false);
+  const [storedIdentity, setStoredIdentity] = useState<RosterIdentity | null>(null);
   const [status, setStatus] = useState("");
 
   useEffect(() => {
@@ -1247,7 +1247,7 @@ function ExistingRsvpIdentityEditor({ eventId }: { eventId: string }) {
       .then(([nextProfile, identity]) => {
         if (!active) return;
         setProfile(nextProfile);
-        setRosterIdentity(identity);
+        setStoredIdentity(identity);
       })
       .catch(() => {
         if (active) setStatus("Your event privacy choice could not be loaded.");
@@ -1255,13 +1255,59 @@ function ExistingRsvpIdentityEditor({ eventId }: { eventId: string }) {
     return () => { active = false; };
   }, [eventId, getEventRosterIdentity, getMemberProfileEditor]);
 
+  return (
+    <section className="existing-rsvp-identity" aria-label="Existing RSVP roster privacy">
+      {profile && storedIdentity ? (
+        <ExistingRsvpIdentityForm
+          key={`${eventId}:${storedIdentity}`}
+          eventId={eventId}
+          profile={profile}
+          storedIdentity={storedIdentity}
+          saveIdentity={updateEventRosterIdentity}
+        />
+      ) : null}
+      <p className="inline-feedback" aria-live="polite">{status}</p>
+    </section>
+  );
+}
+
+type RosterProfileState = Pick<
+  MemberProfileEditorView,
+  "defaultRosterIdentity" | "visibility" | "isPublished"
+>;
+
+function normalizeExistingRosterIdentity(
+  profile: RosterProfileState,
+  identity: RosterIdentity,
+): RosterIdentity {
+  return !profile.isPublished || profile.visibility === "PRIVATE" ? "ANONYMOUS" : identity;
+}
+
+export function ExistingRsvpIdentityForm({
+  eventId,
+  profile,
+  storedIdentity,
+  saveIdentity,
+}: {
+  eventId: string;
+  profile: RosterProfileState;
+  storedIdentity: RosterIdentity;
+  saveIdentity: (eventId: string, identity: RosterIdentity) => Promise<RosterIdentity>;
+}) {
+  const [rosterIdentity, setRosterIdentity] = useState<RosterIdentity>(() =>
+    normalizeExistingRosterIdentity(profile, storedIdentity));
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState("");
+
   const save = async () => {
-    if (!rosterIdentity || pending) return;
+    if (pending) return;
+    const normalizedIdentity = normalizeExistingRosterIdentity(profile, rosterIdentity);
+    setRosterIdentity(normalizedIdentity);
     setPending(true);
     setStatus("");
     try {
-      const saved = await updateEventRosterIdentity(eventId, rosterIdentity);
-      setRosterIdentity(saved);
+      const saved = await saveIdentity(eventId, normalizedIdentity);
+      setRosterIdentity(normalizeExistingRosterIdentity(profile, saved));
       setStatus("Event roster privacy saved.");
     } catch {
       setStatus("Event roster privacy was not saved. Try again.");
@@ -1271,26 +1317,22 @@ function ExistingRsvpIdentityEditor({ eventId }: { eventId: string }) {
   };
 
   return (
-    <section className="existing-rsvp-identity" aria-label="Existing RSVP roster privacy">
-      {profile && rosterIdentity ? (
-        <>
-          <RosterIdentityField
-            idPrefix={`existing-rsvp-${eventId}`}
-            value={rosterIdentity}
-            onChange={setRosterIdentity}
-            defaultIdentity={profile.defaultRosterIdentity}
-            visibility={profile.visibility}
-            isPublished={profile.isPublished}
-            context="existing-rsvp"
-            disabled={pending}
-          />
-          <button className="buy-secondary" type="button" disabled={pending} onClick={() => void save()}>
-            {pending ? "Saving…" : "Save event privacy"}
-          </button>
-        </>
-      ) : null}
+    <>
+      <RosterIdentityField
+        idPrefix={`existing-rsvp-${eventId}`}
+        value={rosterIdentity}
+        onChange={setRosterIdentity}
+        defaultIdentity={profile.defaultRosterIdentity}
+        visibility={profile.visibility}
+        isPublished={profile.isPublished}
+        context="existing-rsvp"
+        disabled={pending}
+      />
+      <button className="buy-secondary" type="button" disabled={pending} onClick={() => void save()}>
+        {pending ? "Saving…" : "Save event privacy"}
+      </button>
       <p className="inline-feedback" aria-live="polite">{status}</p>
-    </section>
+    </>
   );
 }
 

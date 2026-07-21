@@ -75,12 +75,32 @@ function RiderExcerpt({ attendee }: { attendee: Attendee }) {
   );
 }
 
-export function EventAttendeeRoster({
+function rosterResetKey(page: EventAttendeeRosterPage) {
+  return JSON.stringify([
+    page.summary.eventId,
+    page.summary.rosterEnabled,
+    page.attendees.map((attendee) => attendee.slug),
+    page.nextCursor ?? null,
+    page.pageSize,
+  ]);
+}
+
+export function EventAttendeeRoster(props: {
+  initialPage: EventAttendeeRosterPage;
+  signedIn: boolean;
+  loadPage?: typeof listEventAttendeesAction;
+}) {
+  return <StatefulEventAttendeeRoster key={rosterResetKey(props.initialPage)} {...props} />;
+}
+
+function StatefulEventAttendeeRoster({
   initialPage,
   signedIn,
+  loadPage = listEventAttendeesAction,
 }: {
   initialPage: EventAttendeeRosterPage;
   signedIn: boolean;
+  loadPage?: typeof listEventAttendeesAction;
 }) {
   const [attendees, setAttendees] = useState(initialPage.attendees);
   const [nextCursor, setNextCursor] = useState(initialPage.nextCursor);
@@ -93,7 +113,7 @@ export function EventAttendeeRoster({
     setStatus("");
     startTransition(async () => {
       try {
-        const page = await listEventAttendeesAction(summary.eventId, {
+        const page = await loadPage(summary.eventId, {
           cursor: nextCursor,
           limit: initialPage.pageSize,
         });
@@ -174,4 +194,3 @@ export function EventAttendeeRoster({
     </section>
   );
 }
-
