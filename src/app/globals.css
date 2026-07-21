@@ -5712,6 +5712,14 @@ svg {
   gap: 16px;
 }
 
+.profile-save-fieldset {
+  display: contents;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
 .profile-settings__section {
   background: #f7f4ef;
   color: #17130f;

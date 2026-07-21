@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
+import { createElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 import { BackendError } from "../../src/server/backend";
 import { MemberProfileScreen } from "../../src/features/member-profiles/member-profile-screen";
@@ -78,6 +79,8 @@ describe("member profile App Router and UI contracts", () => {
     expect(markup).not.toContain("/_next/image");
     expect(markup).not.toContain("<main");
     expect(markup).toContain("<section");
+    expect(source("src/features/member-profiles/member-profile-screen.tsx"))
+      .toMatch(/function MemberMediaImage\(\{\s*alt,\s*\.\.\.props\s*\}/);
   });
 
   test("labels profile visibility, attendance privacy, and explicit save or publish actions", () => {
@@ -104,7 +107,7 @@ describe("member profile App Router and UI contracts", () => {
     expect(uploader).toMatch(/Avatar photo/);
     expect(uploader).toMatch(/Motorcycle photo/);
     expect(uploader).toMatch(/Maximum 5 motorcycle photos/);
-    expect(uploader).toMatch(/disabled=\{[^}]*photos\.length\s*>=\s*5/);
+    expect(uploader).toContain('disabled={pending || (purpose === "motorcycle-photo" && photoCount >= 5)}');
   });
 
   test("keeps motorcycle photo controls keyboard-operable and explicitly labeled", () => {
@@ -165,6 +168,25 @@ describe("member profile App Router and UI contracts", () => {
       draft: { visibility: "MEMBERS_ONLY", defaultRosterIdentity: "VISIBLE" },
       profileDirty: true,
     });
+  });
+
+  test("disables the complete profile field group while a save is pending", async () => {
+    const settings = await import("../../src/features/member-profiles/profile-settings");
+    const PendingFieldset = (settings as unknown as {
+      ProfileSaveFieldset?: (props: { pending: boolean; children: ReactNode }) => ReactNode;
+    }).ProfileSaveFieldset;
+    expect(PendingFieldset).toBeTypeOf("function");
+
+    const markup = renderToStaticMarkup(PendingFieldset!({
+      pending: true,
+      children: createElement("input", { name: "displayName", defaultValue: "Mika" }),
+    }));
+    expect(markup).toMatch(/<fieldset[^>]*disabled=""/);
+    expect(markup).toMatch(/<fieldset[^>]*aria-busy="true"/);
+    expect(markup).toContain('<input name="displayName" value="Mika"/>');
+
+    const styles = source("src/app/globals.css");
+    expect(styles).toMatch(/\.profile-save-fieldset\s*\{[\s\S]*?border:\s*0;/);
   });
 
   test("maps only backend not-found profile lookups to the route not-found boundary", async () => {
@@ -286,5 +308,46 @@ describe("member profile App Router and UI contracts", () => {
       "Uploading image…",
       "Finishing image…",
     ]);
+  });
+
+  test("disables the file chooser during upload and at the motorcycle photo cap", async () => {
+    const uploader = await import("../../src/features/member-profiles/member-media-uploader");
+    const FileChooser = (uploader as unknown as {
+      MemberMediaFileChooser?: (props: {
+        inputId: string;
+        purpose: "avatar" | "motorcycle-photo";
+        photoCount: number;
+        pending: boolean;
+        onFileSelected: (file: File | null) => void;
+      }) => ReactNode;
+    }).MemberMediaFileChooser;
+    expect(FileChooser).toBeTypeOf("function");
+
+    const pendingMarkup = renderToStaticMarkup(FileChooser!({
+      inputId: "pending-avatar",
+      purpose: "avatar",
+      photoCount: 0,
+      pending: true,
+      onFileSelected: () => undefined,
+    }));
+    expect(pendingMarkup).toMatch(/<input[^>]*disabled=""/);
+
+    const cappedMarkup = renderToStaticMarkup(FileChooser!({
+      inputId: "capped-bike",
+      purpose: "motorcycle-photo",
+      photoCount: 5,
+      pending: false,
+      onFileSelected: () => undefined,
+    }));
+    expect(cappedMarkup).toMatch(/<input[^>]*disabled=""/);
+
+    const readyMarkup = renderToStaticMarkup(FileChooser!({
+      inputId: "ready-avatar",
+      purpose: "avatar",
+      photoCount: 0,
+      pending: false,
+      onFileSelected: () => undefined,
+    }));
+    expect(readyMarkup).not.toContain('disabled=""');
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, type Ref } from "react";
 import { ImagePlus, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -153,6 +153,33 @@ export async function performMemberMediaUpload(
   });
 }
 
+export function MemberMediaFileChooser({
+  inputId,
+  purpose,
+  photoCount,
+  pending,
+  inputRef,
+  onFileSelected,
+}: {
+  inputId: string;
+  purpose: UploadPurpose;
+  photoCount: number;
+  pending: boolean;
+  inputRef?: Ref<HTMLInputElement>;
+  onFileSelected: (file: File | null) => void;
+}) {
+  return (
+    <Input
+      ref={inputRef}
+      id={inputId}
+      type="file"
+      accept="image/jpeg,image/png,image/webp"
+      disabled={pending || (purpose === "motorcycle-photo" && photoCount >= 5)}
+      onChange={(event) => onFileSelected(event.currentTarget.files?.[0] ?? null)}
+    />
+  );
+}
+
 function uploadMessage(error: unknown) {
   if (error instanceof MemberMediaUploadUiError) return error.message;
   const message = error instanceof Error ? error.message : String(error);
@@ -218,14 +245,13 @@ export function MemberMediaUploader({
           : "Square images work best. JPEG, PNG, or WebP · up to 8 MB."}
       </p>
       <div className="member-media-uploader__controls">
-        <Input
-          ref={inputRef}
-          id={inputId}
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          disabled={purpose === "motorcycle-photo" && photos.length >= 5}
-          onChange={(event) => {
-            const selected = event.currentTarget.files?.[0] ?? null;
+        <MemberMediaFileChooser
+          inputRef={inputRef}
+          inputId={inputId}
+          purpose={purpose}
+          photoCount={photos.length}
+          pending={pending}
+          onFileSelected={(selected) => {
             setFile(selected);
             setStatus(selected ? validateMemberMediaFile(selected) ?? "" : "");
           }}

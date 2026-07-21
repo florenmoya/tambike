@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -89,6 +89,20 @@ export function reconcileEditorRefresh(
     draft: state.profileDirty ? state.draft : profileDraftFromEditor(refreshed),
     profileDirty: state.profileDirty,
   };
+}
+
+export function ProfileSaveFieldset({
+  pending,
+  children,
+}: {
+  pending: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <fieldset className="profile-save-fieldset" disabled={pending} aria-busy={pending}>
+      {children}
+    </fieldset>
+  );
 }
 
 export function ProfileSettings() {
@@ -272,6 +286,7 @@ function LoadedProfileSettings({
       </header>
 
       <form action={handleProfileSave} className="profile-settings__grid">
+        <ProfileSaveFieldset pending={profilePending}>
         <Card className="profile-settings__section">
           <CardHeader>
             <CardTitle><UserRound aria-hidden="true" /> Identity</CardTitle>
@@ -335,6 +350,7 @@ function LoadedProfileSettings({
           </Button>
           <p aria-live="polite">{profileStatus}</p>
         </div>
+        </ProfileSaveFieldset>
       </form>
 
       <Card className="profile-settings__section profile-settings__media-section">

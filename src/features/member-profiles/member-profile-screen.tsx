@@ -18,8 +18,8 @@ function motorcycleTitle(motorcycle: MotorcycleShowcase) {
   return motorcycle.nickname || `${motorcycle.make} ${motorcycle.model}`;
 }
 
-export function MemberMediaImage(props: ImageProps) {
-  return <Image {...props} unoptimized />;
+export function MemberMediaImage({ alt, ...props }: ImageProps) {
+  return <Image {...props} alt={alt} unoptimized />;
 }
 
 export function MemberProfileScreen({ profile }: { profile: MemberProfileView }) {
