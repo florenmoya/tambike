@@ -5354,3 +5354,584 @@ svg {
     @apply border-border outline-ring/50;
   }
 }
+
+/* Rider garage cards and profile settings */
+.garage-profile-page {
+  --garage-asphalt: #050506;
+  --garage-concrete: #f7f4ef;
+  --garage-signal: #ffbe45;
+  --garage-chrome: #d7dee2;
+  --garage-fuel: #20b26b;
+  min-height: 100%;
+  background:
+    linear-gradient(135deg, rgba(255, 190, 69, 0.06), transparent 28%),
+    var(--garage-asphalt);
+  color: var(--garage-concrete);
+  padding: clamp(28px, 6vw, 76px) 20px 90px;
+}
+
+.garage-profile-shell {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.garage-profile-back {
+  display: inline-flex;
+  margin-bottom: 20px;
+  color: rgba(247, 244, 239, 0.66);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.garage-profile-back:hover,
+.garage-profile-back:focus-visible {
+  color: var(--garage-signal);
+  outline: 2px solid rgba(255, 190, 69, 0.42);
+  outline-offset: 5px;
+}
+
+.garage-card {
+  overflow: hidden;
+  border: 1px solid rgba(215, 222, 226, 0.18);
+  border-radius: 16px;
+  background: #0d0e10;
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.44);
+}
+
+.garage-identity-plate {
+  display: grid;
+  grid-template-columns: 152px minmax(0, 1fr);
+  gap: clamp(22px, 4vw, 42px);
+  align-items: center;
+  border-bottom: 1px solid rgba(215, 222, 226, 0.16);
+  background:
+    linear-gradient(100deg, rgba(255, 190, 69, 0.13), transparent 48%),
+    #111214;
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.garage-avatar {
+  aspect-ratio: 1;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--garage-signal);
+  border-radius: 50%;
+  background: #24262a;
+  color: var(--garage-signal);
+  box-shadow: 0 0 0 8px rgba(255, 190, 69, 0.08);
+  font: 900 2.5rem/1 var(--font-geist-sans), sans-serif;
+}
+
+.garage-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.garage-identity-copy {
+  min-width: 0;
+}
+
+.garage-identity-kicker,
+.garage-profile-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.garage-identity-kicker > span:first-child,
+.garage-showcase-heading > span,
+.garage-showcase-empty > span,
+.garage-profile-not-found > span {
+  color: var(--garage-signal);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.garage-identity-kicker [data-slot="badge"] {
+  gap: 5px;
+  background: rgba(215, 222, 226, 0.1);
+  color: var(--garage-chrome);
+}
+
+.garage-identity-copy h1 {
+  margin: 8px 0 12px;
+  color: var(--garage-concrete);
+  font: 920 clamp(2.3rem, 7vw, 5.4rem) / 0.92 var(--font-geist-sans), sans-serif;
+  letter-spacing: -0.055em;
+  text-wrap: balance;
+}
+
+.garage-profile-facts {
+  color: rgba(215, 222, 226, 0.76);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.garage-profile-facts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.garage-profile-facts svg {
+  width: 15px;
+  height: 15px;
+  color: var(--garage-signal);
+}
+
+.garage-identity-copy > p {
+  max-width: 68ch;
+  margin: 18px 0 0;
+  color: rgba(247, 244, 239, 0.74);
+  line-height: 1.65;
+}
+
+.garage-showcase {
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.garage-showcase-heading {
+  margin-bottom: 18px;
+}
+
+.garage-showcase-heading h2,
+.garage-showcase-empty h2,
+.garage-profile-not-found h1 {
+  margin: 6px 0 0;
+  color: var(--garage-concrete);
+  font-size: clamp(1.8rem, 4vw, 3.4rem);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.garage-motorcycle-hero {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid rgba(215, 222, 226, 0.16);
+  border-radius: 10px;
+  background: #17191c;
+}
+
+.garage-motorcycle-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 60%, rgba(5, 5, 6, 0.62));
+  pointer-events: none;
+}
+
+.garage-motorcycle-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.garage-photo-index {
+  position: absolute;
+  z-index: 1;
+  right: 18px;
+  bottom: 14px;
+  color: #fff;
+  font: 800 0.78rem/1 var(--font-geist-mono), monospace;
+}
+
+.garage-motorcycle-empty,
+.garage-showcase-empty {
+  display: grid;
+  place-content: center;
+  min-height: 310px;
+  border: 1px dashed rgba(215, 222, 226, 0.26);
+  border-radius: 10px;
+  background: repeating-linear-gradient(-45deg, #121315, #121315 10px, #151618 10px, #151618 20px);
+  padding: 30px;
+  text-align: center;
+}
+
+.garage-motorcycle-empty span,
+.garage-showcase-empty p {
+  color: rgba(215, 222, 226, 0.62);
+}
+
+.garage-motorcycle-empty strong {
+  margin-top: 8px;
+  font-size: 1.8rem;
+}
+
+.garage-showcase-empty {
+  margin: clamp(24px, 5vw, 48px);
+}
+
+.garage-showcase-empty p {
+  max-width: 48ch;
+  margin: 12px auto 0;
+}
+
+.garage-specifications {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border-right: 1px solid rgba(215, 222, 226, 0.15);
+  border-bottom: 1px solid rgba(215, 222, 226, 0.15);
+}
+
+.garage-specifications div {
+  min-width: 0;
+  border-left: 1px solid rgba(215, 222, 226, 0.15);
+  padding: 14px 16px;
+}
+
+.garage-specifications dt {
+  color: rgba(215, 222, 226, 0.52);
+  font: 700 0.67rem/1.2 var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+}
+
+.garage-specifications dd {
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: var(--garage-concrete);
+  font-weight: 840;
+  text-overflow: ellipsis;
+}
+
+.garage-motorcycle-story {
+  max-width: 70ch;
+  margin: 24px 0;
+  color: rgba(247, 244, 239, 0.7);
+  line-height: 1.7;
+}
+
+.garage-contact-strip,
+.profile-photo-editor {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.garage-contact-strip li {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid rgba(215, 222, 226, 0.18);
+  border-radius: 6px;
+  background: #17191c;
+}
+
+.garage-contact-strip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.garage-contact-strip span {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  border-radius: 3px;
+  background: rgba(5, 5, 6, 0.78);
+  color: #fff;
+  padding: 3px 5px;
+  font: 700 0.65rem/1 var(--font-geist-mono), monospace;
+}
+
+.garage-profile-not-found {
+  width: min(660px, 100%);
+  margin: 8vh auto 0;
+  border: 1px solid rgba(215, 222, 226, 0.18);
+  border-radius: 14px;
+  background: #101113;
+  padding: clamp(28px, 6vw, 56px);
+}
+
+.garage-profile-not-found p {
+  margin: 18px 0 26px;
+  color: rgba(247, 244, 239, 0.68);
+  line-height: 1.65;
+}
+
+.profile-settings {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 20px;
+  color: #17130f;
+}
+
+.profile-settings__header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 8px 0 24px;
+  color: #fff8eb;
+}
+
+.profile-settings__header > div > span {
+  color: #ffbe45;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-settings__header h1 {
+  max-width: 14ch;
+  margin: 6px 0 10px;
+  font-size: clamp(2.2rem, 5vw, 4.2rem);
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+}
+
+.profile-settings__header p {
+  margin: 0;
+  color: rgba(255, 248, 235, 0.68);
+}
+
+.profile-settings__header [data-slot="button"] {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.profile-settings__grid,
+.profile-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.profile-settings__section {
+  background: #f7f4ef;
+  color: #17130f;
+}
+
+.profile-settings__section [data-slot="card-title"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.15rem;
+  font-weight: 850;
+}
+
+.profile-settings__section [data-slot="card-description"] {
+  color: rgba(23, 19, 15, 0.58);
+}
+
+.profile-settings__section [data-slot="input"],
+.profile-settings__section [data-slot="select-trigger"],
+.profile-settings__section textarea {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(23, 19, 15, 0.17);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #17130f;
+}
+
+.profile-settings__section textarea {
+  resize: vertical;
+  padding: 10px 12px;
+  font: inherit;
+  outline: none;
+}
+
+.profile-settings__section textarea:focus-visible {
+  border-color: #b8362a;
+  box-shadow: 0 0 0 3px rgba(184, 54, 42, 0.16);
+}
+
+.profile-field {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.profile-field > span,
+.member-media-uploader > p,
+.profile-settings__direction {
+  color: rgba(23, 19, 15, 0.56);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.profile-field--wide {
+  grid-column: 1 / -1;
+}
+
+.profile-settings__save {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-settings__save p,
+.profile-settings__media-status {
+  min-height: 1.5em;
+  margin: 0;
+  color: #47604e;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.profile-settings__media-section [data-slot="card-content"] {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 20px;
+}
+
+.profile-avatar-editor > img,
+.profile-avatar-editor__empty {
+  width: 128px;
+  height: 128px;
+  border: 1px solid rgba(23, 19, 15, 0.14);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.profile-avatar-editor__empty {
+  display: grid;
+  place-items: center;
+  background: #e7e4df;
+  color: rgba(23, 19, 15, 0.48);
+}
+
+.profile-avatar-editor__empty svg {
+  width: 42px;
+  height: 42px;
+}
+
+.member-media-uploader {
+  display: grid;
+  gap: 8px;
+}
+
+.member-media-uploader__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.member-media-uploader__status,
+.member-media-uploader__limit {
+  min-height: 1.3em;
+  margin: 0;
+}
+
+.member-media-uploader__limit {
+  color: #8c241a !important;
+  font-weight: 800;
+}
+
+.profile-photo-editor li {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(23, 19, 15, 0.14);
+  border-radius: 8px;
+  background: #e7e4df;
+}
+
+.profile-photo-editor img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: cover;
+}
+
+.profile-photo-editor > li > span {
+  display: block;
+  padding: 8px;
+  font: 700 0.7rem/1 var(--font-geist-mono), monospace;
+}
+
+.profile-photo-editor__actions {
+  display: flex;
+  gap: 5px;
+  padding: 0 8px 8px;
+}
+
+.profile-settings-load {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 280px;
+  color: #fff8eb;
+}
+
+@media (max-width: 760px) {
+  .garage-identity-plate {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+
+  .garage-specifications {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .garage-contact-strip,
+  .profile-photo-editor {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .profile-settings__grid,
+  .profile-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-settings__grid > *,
+  .profile-field--wide {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .garage-profile-page {
+    padding-inline: 12px;
+  }
+
+  .garage-identity-plate {
+    grid-template-columns: 1fr;
+  }
+
+  .garage-avatar {
+    width: 104px;
+  }
+
+  .garage-contact-strip,
+  .profile-photo-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-settings__header {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .profile-settings__media-section [data-slot="card-content"] {
+    grid-template-columns: 1fr;
+  }
+
+  .member-media-uploader__controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .garage-profile-page *,
+  .profile-settings * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

@@ -13,12 +13,14 @@ import {
   configureCheckInAction,
   configureEventRosterAction,
   createEventDraftAction,
+  deleteMemberMediaAction,
   getMemberProfileAction,
   getMemberProfileEditorAction,
   issueSelfCheckInQrAction,
   listEventAttendeesAction,
   loginWithPasswordAction,
   logoutAction,
+  reorderMotorcyclePhotosAction,
   registerForEventAction,
   scanPassAction,
   signUpRiderAction,
@@ -69,6 +71,8 @@ interface DemoContextValue {
   getMemberProfileEditor: () => Promise<MemberProfileEditorView>;
   updateMemberProfile: (input: UpdateMemberProfileInput) => Promise<MemberProfileEditorView>;
   upsertMotorcycle: (input: UpsertMotorcycleInput) => Promise<MotorcycleShowcase>;
+  deleteMemberMedia: (mediaId: string) => Promise<MemberProfileEditorView>;
+  reorderMotorcyclePhotos: (mediaIds: string[]) => Promise<MemberProfileEditorView>;
   requireLogin: (notice: string) => boolean;
   events: Event[];
   passes: Pass[];
@@ -190,6 +194,14 @@ export function DemoProvider({
     (input: UpsertMotorcycleInput) => upsertMotorcycleAction(input),
     [],
   );
+  const deleteMemberMedia = useCallback(
+    (mediaId: string) => deleteMemberMediaAction(mediaId),
+    [],
+  );
+  const reorderMotorcyclePhotos = useCallback(
+    (mediaIds: string[]) => reorderMotorcyclePhotosAction(mediaIds),
+    [],
+  );
 
   const requireLogin = useCallback(
     (notice: string) => {
@@ -306,6 +318,8 @@ export function DemoProvider({
       getMemberProfileEditor,
       updateMemberProfile,
       upsertMotorcycle,
+      deleteMemberMedia,
+      reorderMotorcyclePhotos,
       requireLogin,
       events,
       passes,
@@ -359,6 +373,8 @@ export function DemoProvider({
       getMemberProfileEditor,
       updateMemberProfile,
       upsertMotorcycle,
+      deleteMemberMedia,
+      reorderMotorcyclePhotos,
       users,
     ],
   );

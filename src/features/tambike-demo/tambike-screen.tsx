@@ -42,6 +42,7 @@ import { useDemo } from "./demo-provider";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
 import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
+import { ProfileSettings } from "@/features/member-profiles/profile-settings";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -242,17 +243,17 @@ const eventVisuals: Record<
 export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenProps) {
   if (view === "discovery") {
     return (
-      <AppShell>
+      <TambikeAppShell>
         <DiscoveryScreen compact={false} query={eventQuery} />
-      </AppShell>
+      </TambikeAppShell>
     );
   }
 
   if (view === "events") {
     return (
-      <AppShell>
+      <TambikeAppShell>
         <DiscoveryScreen compact query={eventQuery} />
-      </AppShell>
+      </TambikeAppShell>
     );
   }
 
@@ -268,7 +269,7 @@ export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenP
       {view === "profile" && <ProfileScreen />}
     </>
   );
-  return <AppShell>{content}</AppShell>;
+  return <TambikeAppShell>{content}</TambikeAppShell>;
 }
 
 function SpeedometerNavGauge() {
@@ -364,7 +365,7 @@ function SpeedometerNavGauge() {
   );
 }
 
-function AppShell({ children }: { children: React.ReactNode }) {
+export function TambikeAppShell({ children }: { children: React.ReactNode }) {
   const { role, currentUser, logout } = useDemo();
   const [navOpen, setNavOpen] = useState(false);
   const panelLink = panelLinkByRole[role];
@@ -1646,57 +1647,13 @@ function SignupScreen() {
 }
 
 function ProfileScreen() {
-  const { currentUser, updateProfile } = useDemo();
-  const [saved, setSaved] = useState(false);
+  const { currentUser } = useDemo();
 
   if (!currentUser) {
     return <AuthRequired title="Log in to view profile" body="Your account keeps ride details and passes together." />;
   }
 
-  return (
-    <LightView>
-      <HeroPanel
-        eyebrow={`${roleLabels[currentUser.role]} profile`}
-        title={currentUser.displayName}
-        body={`${currentUser.email} · ${currentUser.verificationStatus} · Joined ${currentUser.joinedAt}`}
-      />
-      <form
-        className="prototype-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          const formData = new FormData(event.currentTarget);
-          await updateProfile({
-            displayName: String(formData.get("displayName") ?? ""),
-            area: String(formData.get("area") ?? ""),
-            bikeModel: String(formData.get("bikeModel") ?? ""),
-            clubName: String(formData.get("clubName") ?? ""),
-          });
-          setSaved(true);
-        }}
-      >
-        <label className="checkout-field">
-          <span>Display name</span>
-          <input name="displayName" required defaultValue={currentUser.displayName} />
-        </label>
-        <label className="checkout-field">
-          <span>Area / city</span>
-          <input name="area" required defaultValue={currentUser.area} />
-        </label>
-        <label className="checkout-field">
-          <span>Motorcycle (optional)</span>
-          <input name="bikeModel" defaultValue={currentUser.bikeModel ?? ""} placeholder="Yamaha Mio Gear" />
-        </label>
-        <label className="checkout-field">
-          <span>Riding group (optional)</span>
-          <input name="clubName" defaultValue={currentUser.clubName ?? ""} placeholder="Weekend Tambike Crew" />
-        </label>
-        <button className="checkout-button" type="submit">
-          Save profile
-        </button>
-        {saved && <PassStrip title="Profile saved" body="Your ride details were updated." />}
-      </form>
-    </LightView>
-  );
+  return <LightView><ProfileSettings /></LightView>;
 }
 
 function AuthRequired({ title, body }: { title: string; body: string }) {
