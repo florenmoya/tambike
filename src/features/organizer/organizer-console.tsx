@@ -62,6 +62,7 @@ import {
 import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
 import { CheckInPolicyPanel } from "@/features/check-in/check-in-policy-panel";
 import { OrganizerGiveawayWorkspace } from "@/features/giveaways/organizer-giveaway-workspace";
+import { OrganizerRosterPanel } from "@/features/member-profiles/organizer-roster-panel";
 import { demoEvents } from "@/features/tambike-demo/data";
 import { EVENT_LOCATION_LIMITS } from "@/features/tambike-demo/event-location";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
@@ -807,29 +808,28 @@ function EventDetailSection({ event }: { event: Event }) {
 
 function AttendeesSection({ event }: { event: Event }) {
   return (
-    <TablePanel
-      title={`${event.title} attendees`}
-      description="Live attendance totals for this event. Rider-level records are not fabricated in the organizer workspace."
-      actions={
-        <Button asChild variant="outline" size="sm">
-          <Link href={`/organizer/events/${event.id}/scanner`}>
-            <ScanLineIcon data-icon="inline-start" />
-            Open scanner
-          </Link>
-        </Button>
-      }
-    >
-      <div className="grid gap-3 md:grid-cols-4">
-        <MetricBlock label="Going" value={String(event.going)} />
-        <MetricBlock label="Confirmed check-ins" value={String(getCheckIns(event))} />
-        <MetricBlock label="Pending staff review" value={String(event.pendingCheckIns ?? 0)} />
-        <MetricBlock label="Interested" value={String(event.interested)} />
-      </div>
-      <div className="mt-4 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-        Pending review requests do not count as attendance. Use the staff scanner to confirm arrivals; a
-        rider-level attendee directory can be added when the backend exposes it.
-      </div>
-    </TablePanel>
+    <div className="grid gap-4 px-4 lg:px-6">
+      <TablePanel
+        title={`${event.title} attendees`}
+        description="Live RSVP, privacy, and confirmed arrival totals for this event."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/organizer/events/${event.id}/scanner`}>
+              <ScanLineIcon data-icon="inline-start" />
+              Open scanner
+            </Link>
+          </Button>
+        }
+      >
+        <div className="grid gap-3 md:grid-cols-4">
+          <MetricBlock label="Going" value={String(event.going)} />
+          <MetricBlock label="Confirmed check-ins" value={String(getCheckIns(event))} />
+          <MetricBlock label="Pending staff review" value={String(event.pendingCheckIns ?? 0)} />
+          <MetricBlock label="Interested" value={String(event.interested)} />
+        </div>
+      </TablePanel>
+      <OrganizerRosterPanel eventId={event.id} />
+    </div>
   );
 }
 

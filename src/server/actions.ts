@@ -139,6 +139,11 @@ export async function listEventAttendeesAction(
   return backend.listEventAttendees(token ?? undefined, eventId, options);
 }
 
+export async function getEventAttendeeSummaryAction(eventId: string) {
+  const backend = await getTambikeBackend();
+  return backend.getEventAttendeeSummary(eventId);
+}
+
 export async function updateEventRosterIdentityAction(
   eventId: string,
   input: { rosterIdentity: RosterIdentity },
@@ -146,6 +151,12 @@ export async function updateEventRosterIdentityAction(
   const backend = await getTambikeBackend();
   const token = await readRequiredSessionToken();
   return backend.updateEventRosterIdentity(token, eventId, input);
+}
+
+export async function getEventRosterIdentityAction(eventId: string) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.getEventRosterIdentity(token, eventId);
 }
 
 export async function approvePublishAction(eventId: string) {

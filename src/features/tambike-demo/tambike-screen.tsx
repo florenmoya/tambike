@@ -44,6 +44,10 @@ import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel"
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
 import { ProfileSettings } from "@/features/member-profiles/profile-settings";
 import {
+  RosterIdentityField,
+  registrationRosterIdentity,
+} from "@/features/member-profiles/roster-identity-field";
+import {
   filterEventsByQuery,
   getEventCtaState,
   type EventQueryInput,
@@ -54,6 +58,7 @@ import type {
   EventType,
   Pass,
   Role,
+  RosterIdentity,
 } from "./types";
 
 export type TambikeView =
@@ -912,7 +917,7 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
 }
 
 function EventDetail({ eventId }: { eventId?: string }) {
-  const { authNotice, currentUser, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
+  const { authNotice, currentUser, events, passes, registerForEvent, requireLogin, setAuthNotice } = useDemo();
   const event = findEvent(events, eventId);
   const organizer = getOrganizer(event.organizerId);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1072,6 +1077,12 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 <strong>{event.expectedRiders}</strong>
               </div>
             </div>
+            <Link className="ghost-action as-link" href={`/events/${event.id}/attendees`}>
+              View attendee roster
+            </Link>
+            {passes.some((pass) => pass.eventId === event.id) ? (
+              <ExistingRsvpIdentityEditor eventId={event.id} />
+            ) : null}
             <div className="event-detail-location-card">
               <Building2 aria-hidden="true" />
               <div>
@@ -1105,18 +1116,38 @@ function EventDetail({ eventId }: { eventId?: string }) {
 }
 
 function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
-  const { registerForEvent } = useDemo();
+  const { getMemberProfileEditor, registerForEvent } = useDemo();
   const router = useRouter();
   const [attendance, setAttendance] = useState<AttendanceType>("direct");
+  const [rosterIdentity, setRosterIdentity] = useState<RosterIdentity | null>(null);
+  const [rosterProfile, setRosterProfile] = useState<Awaited<ReturnType<typeof getMemberProfileEditor>> | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    let active = true;
+    getMemberProfileEditor()
+      .then((profile) => {
+        if (!active) return;
+        setRosterProfile(profile);
+        setRosterIdentity(registrationRosterIdentity(profile));
+      })
+      .catch(() => {
+        if (active) setError("Attendance privacy could not be loaded. Close this form and try again.");
+      });
+    return () => { active = false; };
+  }, [getMemberProfileEditor]);
+
   const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
+    if (!rosterIdentity) {
+      setError("Choose how you should appear on this event roster.");
+      return;
+    }
     setError("");
     setIsSubmitting(true);
     try {
-      const passId = await registerForEvent(event.id, attendance, "going");
+      const passId = await registerForEvent(event.id, attendance, "going", rosterIdentity);
       if (passId) {
         onClose();
         router.push(`/passes/${passId}`);
@@ -1171,17 +1202,95 @@ function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
             <span>Not sure / join with club</span>
           </label>
         </fieldset>
+        {rosterProfile ? (
+          <RosterIdentityField
+            idPrefix={`registration-${event.id}`}
+            value={rosterIdentity}
+            onChange={setRosterIdentity}
+            defaultIdentity={rosterProfile.defaultRosterIdentity}
+            visibility={rosterProfile.visibility}
+            isPublished={rosterProfile.isPublished}
+            context="registration"
+            disabled={isSubmitting}
+          />
+        ) : (
+          <p className="inline-feedback" aria-live="polite">Loading attendance privacy…</p>
+        )}
         {error && <p className="inline-error" aria-live="polite">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="buy-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="checkout-button" disabled={isSubmitting}>
+          <button type="submit" className="checkout-button" disabled={isSubmitting || !rosterIdentity}>
             {isSubmitting ? "Creating pass..." : "Get Tambike Pass"}
           </button>
         </div>
       </form>
     </div>
+  );
+}
+
+function ExistingRsvpIdentityEditor({ eventId }: { eventId: string }) {
+  const {
+    getEventRosterIdentity,
+    getMemberProfileEditor,
+    updateEventRosterIdentity,
+  } = useDemo();
+  const [profile, setProfile] = useState<Awaited<ReturnType<typeof getMemberProfileEditor>> | null>(null);
+  const [rosterIdentity, setRosterIdentity] = useState<RosterIdentity | null>(null);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([getMemberProfileEditor(), getEventRosterIdentity(eventId)])
+      .then(([nextProfile, identity]) => {
+        if (!active) return;
+        setProfile(nextProfile);
+        setRosterIdentity(identity);
+      })
+      .catch(() => {
+        if (active) setStatus("Your event privacy choice could not be loaded.");
+      });
+    return () => { active = false; };
+  }, [eventId, getEventRosterIdentity, getMemberProfileEditor]);
+
+  const save = async () => {
+    if (!rosterIdentity || pending) return;
+    setPending(true);
+    setStatus("");
+    try {
+      const saved = await updateEventRosterIdentity(eventId, rosterIdentity);
+      setRosterIdentity(saved);
+      setStatus("Event roster privacy saved.");
+    } catch {
+      setStatus("Event roster privacy was not saved. Try again.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <section className="existing-rsvp-identity" aria-label="Existing RSVP roster privacy">
+      {profile && rosterIdentity ? (
+        <>
+          <RosterIdentityField
+            idPrefix={`existing-rsvp-${eventId}`}
+            value={rosterIdentity}
+            onChange={setRosterIdentity}
+            defaultIdentity={profile.defaultRosterIdentity}
+            visibility={profile.visibility}
+            isPublished={profile.isPublished}
+            context="existing-rsvp"
+            disabled={pending}
+          />
+          <button className="buy-secondary" type="button" disabled={pending} onClick={() => void save()}>
+            {pending ? "Saving…" : "Save event privacy"}
+          </button>
+        </>
+      ) : null}
+      <p className="inline-feedback" aria-live="polite">{status}</p>
+    </section>
   );
 }
 

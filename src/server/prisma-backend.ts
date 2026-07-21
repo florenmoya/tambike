@@ -4814,6 +4814,15 @@ export class PrismaTambikeBackend {
     };
   }
 
+  async getEventAttendeeSummary(eventId: string): Promise<EventAttendeeSummary> {
+    const event = await this.requireRosterEvent(eventId);
+    return this.buildPrismaRosterSummary(
+      event.id,
+      event.title,
+      event.rosterSettings?.enabled ?? false,
+    );
+  }
+
   async updateEventRosterIdentity(
     sessionToken: string,
     eventId: string,
@@ -4836,6 +4845,17 @@ export class PrismaTambikeBackend {
     });
     await this.audit("RSVP_UPDATED", user.id, "Event", eventId);
     return { rosterIdentity: updated.rosterIdentity as RosterIdentity };
+  }
+
+  async getEventRosterIdentity(sessionToken: string, eventId: string) {
+    const user = await this.requireUser(sessionToken);
+    await this.requireEvent(eventId);
+    const rsvp = await this.prisma.rSVP.findUnique({
+      where: { eventId_userId: { eventId, userId: user.id } },
+      select: { rosterIdentity: true },
+    });
+    if (!rsvp) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return { rosterIdentity: rsvp.rosterIdentity as RosterIdentity };
   }
 
   async configureCheckIn(

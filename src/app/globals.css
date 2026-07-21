@@ -2802,6 +2802,365 @@ svg {
   }
 }
 
+.event-roster-page-shell {
+  min-height: calc(100vh - 76px);
+  padding: clamp(28px, 6vw, 72px) clamp(14px, 4vw, 48px);
+  background: #f7f4ef;
+  color: #17130f;
+}
+
+.event-roster,
+.organizer-roster-panel {
+  width: min(1180px, 100%);
+  margin-inline: auto;
+}
+
+.event-roster__header {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(24px, 5vw, 52px);
+  border: 1px solid rgba(215, 222, 226, 0.22);
+  border-radius: 12px;
+  background: #050506;
+  color: #f7f4ef;
+}
+
+.event-roster__header::after {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, #e63b2e 0 18%, #ffbe45 18% 65%, #20b26b 65%);
+  content: "";
+}
+
+.event-roster__eyebrow,
+.roster-anonymous-card > span,
+.roster-rider-card__motorcycle > span {
+  font: 750 0.7rem/1.2 var(--font-geist-mono), monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.event-roster__header h1 {
+  max-width: 18ch;
+  margin: 12px 0 8px;
+  font-size: clamp(2rem, 5vw, 4.5rem);
+  line-height: 0.96;
+  letter-spacing: -0.06em;
+}
+
+.event-roster__header > p {
+  max-width: 68ch;
+  color: #d7dee2;
+}
+
+.event-roster__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(215, 222, 226, 0.2);
+  border-radius: 8px;
+  background: rgba(215, 222, 226, 0.2);
+}
+
+.roster-metric {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  background: #101012;
+}
+
+.roster-metric span {
+  color: #d7dee2;
+  font-size: 0.78rem;
+}
+
+.roster-metric strong {
+  font: 750 clamp(1.6rem, 4vw, 2.7rem)/1 var(--font-geist-mono), monospace;
+  color: #ffbe45;
+}
+
+.event-roster__state {
+  margin-top: 18px;
+}
+
+.event-roster__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.roster-rider-card,
+.roster-anonymous-card {
+  overflow: hidden;
+  border: 1px solid rgba(23, 19, 15, 0.16);
+  border-radius: 10px;
+  background: #fffdfa;
+  color: #17130f;
+  box-shadow: 0 18px 38px rgba(5, 5, 6, 0.08);
+}
+
+.roster-rider-card {
+  display: grid;
+  text-decoration: none;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.roster-rider-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 22px 44px rgba(5, 5, 6, 0.13);
+}
+
+.roster-rider-card:focus-visible,
+.roster-identity-options input:focus-visible + span {
+  outline: 3px solid #ffbe45;
+  outline-offset: 3px;
+}
+
+.roster-rider-card__identity {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.roster-rider-avatar {
+  display: grid;
+  width: 60px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #050506;
+  color: #ffbe45;
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+.roster-rider-avatar img,
+.roster-rider-card__motorcycle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.roster-rider-card__identity h3,
+.roster-rider-card__identity p {
+  margin: 0;
+}
+
+.roster-rider-card__identity p {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: #625c54;
+  font-size: 0.82rem;
+}
+
+.roster-rider-card__identity svg {
+  width: 14px;
+}
+
+.roster-rider-card__motorcycle {
+  position: relative;
+  min-height: 210px;
+  padding: 150px 14px 14px;
+  background: #050506;
+  color: #f7f4ef;
+}
+
+.roster-rider-card__motorcycle img,
+.roster-rider-card__motorcycle-empty {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 138px;
+}
+
+.roster-rider-card__motorcycle-empty {
+  display: grid;
+  place-items: center;
+  background: #171719;
+  color: #d7dee2;
+}
+
+.roster-rider-card__motorcycle strong,
+.roster-rider-card__motorcycle span {
+  display: block;
+}
+
+.roster-rider-card__motorcycle span {
+  color: #ffbe45;
+}
+
+.roster-rider-card__no-bike {
+  padding: 18px 14px;
+  border-top: 1px solid rgba(23, 19, 15, 0.1);
+  color: #625c54;
+  font-size: 0.82rem;
+}
+
+.roster-anonymous-card {
+  display: grid;
+  min-height: 260px;
+  align-content: end;
+  gap: 8px;
+  padding: 24px;
+  border-style: dashed;
+  background: repeating-linear-gradient(-45deg, #f1ede6, #f1ede6 9px, #f7f4ef 9px, #f7f4ef 18px);
+}
+
+.roster-anonymous-card svg {
+  width: 32px;
+  height: 32px;
+  color: #e63b2e;
+}
+
+.roster-anonymous-card p {
+  margin: 0;
+  color: #625c54;
+  font-size: 0.84rem;
+}
+
+.event-roster__more {
+  display: flex;
+  justify-content: center;
+  padding-top: 20px;
+}
+
+.event-roster__status,
+.organizer-roster-panel__status {
+  min-height: 1.4em;
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+}
+
+.roster-identity-field {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid rgba(23, 19, 15, 0.16);
+  border-radius: 9px;
+}
+
+.roster-identity-field legend {
+  padding-inline: 5px;
+  font-weight: 800;
+}
+
+.roster-identity-field > p {
+  margin: 0;
+  color: #625c54;
+  font-size: 0.8rem;
+}
+
+.roster-identity-options {
+  display: grid;
+  gap: 8px;
+}
+
+.roster-identity-options label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.roster-identity-options input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: #e63b2e;
+}
+
+.roster-identity-options span,
+.roster-identity-options strong {
+  display: block;
+}
+
+.roster-identity-field__notice {
+  padding: 9px 10px;
+  border-left: 3px solid #e63b2e;
+  background: rgba(230, 59, 46, 0.08);
+}
+
+.existing-rsvp-identity {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.organizer-roster-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.organizer-roster-panel__heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.organizer-roster-panel__totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.organizer-roster-panel__totals span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 0.8rem;
+}
+
+.organizer-roster-panel__totals svg {
+  width: 15px;
+}
+
+.organizer-roster-panel .event-roster__header {
+  padding: 24px;
+}
+
+.organizer-roster-panel .event-roster__header h1 {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+}
+
+@media (max-width: 640px) {
+  .event-roster__metrics,
+  .organizer-roster-panel__heading {
+    grid-template-columns: 1fr;
+  }
+
+  .event-roster__metrics {
+    gap: 0;
+  }
+
+  .roster-metric + .roster-metric {
+    border-top: 1px solid rgba(215, 222, 226, 0.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .event-roster *,
+  .organizer-roster-panel * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
 @media (max-width: 1050px) {
   .site-header {
     grid-template-columns: minmax(0, 1fr) auto;

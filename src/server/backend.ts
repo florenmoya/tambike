@@ -4282,6 +4282,11 @@ export class TambikeBackend {
     };
   }
 
+  async getEventAttendeeSummary(eventId: string): Promise<EventAttendeeSummary> {
+    const event = this.requireEvent(eventId);
+    return this.buildMemoryRosterSummary(event, this.rosterSettings.get(event.id) ?? false);
+  }
+
   async updateEventRosterIdentity(
     sessionToken: string,
     eventId: string,
@@ -4299,6 +4304,16 @@ export class TambikeBackend {
     this.rsvps.set(key, updated);
     this.audit("RSVP_UPDATED", user.id, eventId);
     return { rosterIdentity: updated.rosterIdentity };
+  }
+
+  async getEventRosterIdentity(sessionToken: string, eventId: string) {
+    const user = this.requireUser(sessionToken);
+    this.requireEvent(eventId);
+    const rsvp = this.rsvps.get(`${eventId}:${user.id}`);
+    if (!rsvp) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return { rosterIdentity: rsvp.rosterIdentity ?? "ANONYMOUS" } satisfies {
+      rosterIdentity: RosterIdentity;
+    };
   }
 
   async configureCheckIn(

@@ -16,6 +16,7 @@ import {
   deleteMemberMediaAction,
   getMemberProfileAction,
   getMemberProfileEditorAction,
+  getEventRosterIdentityAction,
   issueSelfCheckInQrAction,
   listEventAttendeesAction,
   loginWithPasswordAction,
@@ -96,6 +97,7 @@ interface DemoContextValue {
     eventId: string,
     rosterIdentity: RosterIdentity,
   ) => Promise<RosterIdentity>;
+  getEventRosterIdentity: (eventId: string) => Promise<RosterIdentity>;
   scannerOutcome: ScannerOutcome;
   setScannerOutcome: (outcome: ScannerOutcome) => void;
   scanPass: (eventId: string, qrToken: string, method: ScanMethod) => Promise<ScanPassResult>;
@@ -275,6 +277,11 @@ export function DemoProvider({
       (await updateEventRosterIdentityAction(eventId, { rosterIdentity })).rosterIdentity,
     [],
   );
+  const getEventRosterIdentity = useCallback(
+    async (eventId: string) =>
+      (await getEventRosterIdentityAction(eventId)).rosterIdentity,
+    [],
+  );
 
   const createEventDraft = useCallback(
     async (input: CreateEventInput) => {
@@ -353,6 +360,7 @@ export function DemoProvider({
       configureEventRoster,
       listEventAttendees,
       updateEventRosterIdentity,
+      getEventRosterIdentity,
       scannerOutcome,
       setScannerOutcome,
       scanPass,
@@ -383,6 +391,7 @@ export function DemoProvider({
       configureEventRoster,
       listEventAttendees,
       updateEventRosterIdentity,
+      getEventRosterIdentity,
       requireLogin,
       role,
       scannerOutcome,
