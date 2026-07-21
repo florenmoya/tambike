@@ -4634,11 +4634,11 @@ export class PrismaTambikeBackend {
     input: { enabled: boolean },
   ): Promise<EventAttendeeSummary> {
     const user = await this.requireUser(sessionToken);
+    const event = await this.requireRosterEvent(eventId);
+    this.requireRosterConfigurator(user, event);
     if (typeof input?.enabled !== "boolean") {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    const event = await this.requireRosterEvent(eventId);
-    this.requireRosterConfigurator(user, event);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw(
@@ -4677,12 +4677,12 @@ export class PrismaTambikeBackend {
   ): Promise<EventAttendeeRosterPage> {
     const event = await this.requireRosterEvent(eventId);
     const enabled = event.rosterSettings?.enabled ?? false;
-    const limit = normalizeRosterPageLimit(options.limit);
-    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
     if (enabled) {
       if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
       await this.requireUser(sessionToken);
     }
+    const limit = normalizeRosterPageLimit(options.limit);
+    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
 
     const summary = await this.buildPrismaRosterSummary(event.id, event.title, enabled);
     if (!enabled) {

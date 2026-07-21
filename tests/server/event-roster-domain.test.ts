@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   classifyRosterEntry,
+  compareRosterRsvpIds,
   decodeRosterCursor,
   encodeRosterCursor,
   normalizeRosterPageLimit,
@@ -42,9 +43,15 @@ describe("event roster policy helpers", () => {
       Buffer.from(JSON.stringify([value.goingAt]), "utf8").toString("base64url"),
       Buffer.from(JSON.stringify(["not-a-date", "rsvp-123"]), "utf8").toString("base64url"),
       Buffer.from(JSON.stringify([value.goingAt, ""]), "utf8").toString("base64url"),
+      Buffer.from(JSON.stringify([value.goingAt, value.rsvpId], null, 2), "utf8").toString("base64url"),
     ]) {
       expect(() => decodeRosterCursor(cursor)).toThrowError(expect.objectContaining({ code: "INVALID_INPUT" }));
     }
+  });
+
+  test("orders RSVP ids by raw codepoint for the ASCII identifier alphabet", () => {
+    const ids = ["rsvp-a", "rsvp-_", "rsvp-A", "rsvp-!"];
+    expect(ids.sort(compareRosterRsvpIds)).toEqual(["rsvp-!", "rsvp-A", "rsvp-_", "rsvp-a"]);
   });
 
   test("defaults page size to 24, clamps to 50, and rejects invalid limits", () => {
@@ -74,7 +81,8 @@ describe("in-memory organizer-controlled event rosters", () => {
       attendees: [],
       pageSize: 24,
     });
-    await expect(backend.configureEventRoster(actors.outsider.sessionToken, event.id, { enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(backend.configureEventRoster(actors.outsider.sessionToken, event.id, { enabled: "bad" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(backend.configureEventRoster(actors.organizer.sessionToken, "missing-event", { enabled: "bad" as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(backend.configureEventRoster(actors.organizer.sessionToken, event.id, { enabled: true })).resolves.toMatchObject({ rosterEnabled: true });
     await expect(backend.configureEventRoster(actors.admin.sessionToken, event.id, { enabled: false })).resolves.toMatchObject({ rosterEnabled: false });
 
@@ -110,7 +118,7 @@ describe("in-memory organizer-controlled event rosters", () => {
     await backend.updateMemberProfile(interested.sessionToken, { ...visibleProfile, displayName: "Interested Rider" });
     await backend.registerForEvent(interested.sessionToken, event.id, { status: "interested", attendanceType: "direct", rosterIdentity: "VISIBLE" });
 
-    await expect(backend.listEventAttendees(undefined, event.id, {})).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    await expect(backend.listEventAttendees(undefined, event.id, { cursor: "broken", limit: 0 })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     const page = await backend.listEventAttendees(actors.rider.sessionToken, event.id, {});
     expect(page.summary).toMatchObject({ goingCount: 4, visibleCount: 1, anonymousCount: 3 });
     expect(page.attendees).toEqual([
@@ -118,6 +126,60 @@ describe("in-memory organizer-controlled event rosters", () => {
     ]);
     expect(JSON.stringify(page)).not.toContain("email");
     expect(JSON.stringify(page)).not.toContain("userId");
+  });
+
+  test("uses the same raw RSVP-id order for equal-time sorting and cursor boundaries", async () => {
+    const eventId = "tambike-cafe-classico";
+    const goingAt = "2026-07-22T08:00:00.000Z";
+    const fixtures = [
+      { id: "rsvp-a", userId: "user-roster-lower", displayName: "Lower Rider", email: "lower-roster@example.test" },
+      { id: "rsvp-_", userId: "user-roster-underscore", displayName: "Underscore Rider", email: "underscore-roster@example.test" },
+      { id: "rsvp-A", userId: "user-roster-upper", displayName: "Upper Rider", email: "upper-roster@example.test" },
+      { id: "rsvp-!", userId: "user-roster-punctuation", displayName: "Punctuation Rider", email: "punctuation-roster@example.test" },
+    ];
+    const backend = await createTambikeTestBackend({
+      fixture: {
+        users: fixtures.map((fixture) => ({
+          id: fixture.userId,
+          displayName: fixture.displayName,
+          email: fixture.email,
+          password: "password123",
+          role: "rider" as const,
+          verificationStatus: "UNVERIFIED" as const,
+          area: "Manila",
+          joinedAt: "July 22, 2026",
+        })),
+        rsvps: fixtures.map((fixture) => ({
+          id: fixture.id,
+          eventId,
+          userId: fixture.userId,
+          status: "going" as const,
+          attendanceType: "direct" as const,
+          rosterIdentity: "VISIBLE" as const,
+          goingAt,
+        })),
+      },
+    });
+    const organizer = await backend.loginWithPassword("organizer@bayanko.ph", "password123");
+    for (const fixture of fixtures) {
+      const rider = await backend.loginWithPassword(fixture.email, "password123");
+      await backend.updateMemberProfile(rider.sessionToken, {
+        ...visibleProfile,
+        displayName: fixture.displayName,
+      });
+    }
+    await backend.configureEventRoster(organizer.sessionToken, eventId, { enabled: true });
+
+    const first = await backend.listEventAttendees(organizer.sessionToken, eventId, { limit: 2 });
+    const second = await backend.listEventAttendees(organizer.sessionToken, eventId, { limit: 2, cursor: first.nextCursor });
+    expect([...first.attendees, ...second.attendees].map((entry) => entry.displayName)).toEqual([
+      "Punctuation Rider",
+      "Upper Rider",
+      "Underscore Rider",
+      "Lower Rider",
+    ]);
+    expect(second.nextCursor).toBeUndefined();
+    expect(new Set([...first.attendees, ...second.attendees].map((entry) => entry.slug)).size).toBe(4);
   });
 
   test("snapshots the saved default on creation, preserves existing choices, and supports per-event override", async () => {

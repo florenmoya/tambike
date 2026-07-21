@@ -12,6 +12,11 @@ export type RosterCursorValue = {
   rsvpId: string;
 };
 
+export function compareRosterRsvpIds(left: string, right: string) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function invalidInput(): never {
   throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
 }
@@ -58,7 +63,9 @@ export function decodeRosterCursor(cursor: string): RosterCursorValue {
     invalidInput();
   }
 
-  return { goingAt: decoded[0], rsvpId: decoded[1] };
+  const value = { goingAt: decoded[0], rsvpId: decoded[1] };
+  if (encodeRosterCursor(value) !== cursor) invalidInput();
+  return value;
 }
 
 export function classifyRosterEntry(input: {

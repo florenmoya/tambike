@@ -31,9 +31,10 @@ describe("Prisma event rosters", () => {
         attendees: [],
         pageSize: 24,
       });
-      await expect(backendClients.primary.backend.configureEventRoster(publicRider.sessionToken, fixture.eventId, { enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(backendClients.primary.backend.configureEventRoster(publicRider.sessionToken, fixture.eventId, { enabled: "bad" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(backendClients.primary.backend.configureEventRoster(fixture.organizerSession, "missing-event", { enabled: "bad" as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
       await backendClients.primary.backend.configureEventRoster(fixture.organizerSession, fixture.eventId, { enabled: true });
-      await expect(backendClients.primary.backend.listEventAttendees(undefined, fixture.eventId, {})).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+      await expect(backendClients.primary.backend.listEventAttendees(undefined, fixture.eventId, { cursor: "malformed", limit: 0 })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
 
       const baseProfile = {
         area: "Antipolo",

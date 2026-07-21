@@ -99,6 +99,7 @@ import type {
 } from "@/features/member-profiles/types";
 import {
   classifyRosterEntry,
+  compareRosterRsvpIds,
   decodeRosterCursor,
   encodeRosterCursor,
   normalizeRosterPageLimit,
@@ -4137,12 +4138,12 @@ export class TambikeBackend {
   ): Promise<EventAttendeeRosterPage> {
     const event = this.requireEvent(eventId);
     const enabled = this.rosterSettings.get(event.id) ?? false;
-    const limit = normalizeRosterPageLimit(options.limit);
-    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
     if (enabled) {
       if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
       this.requireUser(sessionToken);
     }
+    const limit = normalizeRosterPageLimit(options.limit);
+    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
 
     const summary = this.buildMemoryRosterSummary(event, enabled);
     if (!enabled) {
@@ -4165,7 +4166,8 @@ export class TambikeBackend {
       .sort(
         (left, right) =>
           left.rsvp.goingAt!.localeCompare(right.rsvp.goingAt!) ||
-          (left.rsvp.id ?? `${left.rsvp.eventId}:${left.rsvp.userId}`).localeCompare(
+          compareRosterRsvpIds(
+            left.rsvp.id ?? `${left.rsvp.eventId}:${left.rsvp.userId}`,
             right.rsvp.id ?? `${right.rsvp.eventId}:${right.rsvp.userId}`,
           ),
       );
@@ -4173,7 +4175,7 @@ export class TambikeBackend {
       ? visible.filter(({ rsvp }) => {
           const id = rsvp.id ?? `${rsvp.eventId}:${rsvp.userId}`;
           return rsvp.goingAt! > cursor.goingAt ||
-            (rsvp.goingAt === cursor.goingAt && id > cursor.rsvpId);
+            (rsvp.goingAt === cursor.goingAt && compareRosterRsvpIds(id, cursor.rsvpId) > 0);
         })
       : visible;
     const pageEntries = afterCursor.slice(0, limit + 1);
