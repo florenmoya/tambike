@@ -1,0 +1,11 @@
+{
+  "eventId": "tambike-cafe-classico",
+  "avatar": ".codex/generated/sample-rider/avatar.png",
+  "motorcyclePhotos": [
+    ".codex/generated/sample-rider/motorcycle-01.png",
+    ".codex/generated/sample-rider/motorcycle-02.png",
+    ".codex/generated/sample-rider/motorcycle-03.png",
+    ".codex/generated/sample-rider/motorcycle-04.png",
+    ".codex/generated/sample-rider/motorcycle-05.png"
+  ]
+}

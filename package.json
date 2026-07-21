@@ -12,6 +12,7 @@
     "start": "next start",
     "lint": "eslint",
     "smoke:member-media-s3": "tsx scripts/smoke-member-media-s3.ts",
+    "provision:sample-rider": "tsx --conditions=react-server scripts/provision-sample-rider.ts",
     "test:server": "vitest run tests/server",
     "test:prisma": "vitest run --config vitest.prisma-integration.config.ts",
     "test:prisma:prepare": "tsx tests/prisma-integration/prepare.ts",
