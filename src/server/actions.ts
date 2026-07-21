@@ -22,6 +22,7 @@ import type {
 import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 import { BackendError, getTambikeBackend } from "./backend";
 import { clearSessionToken, readSessionToken, setSessionToken } from "./session-cookie";
+import type { FinalizeMemberMediaInput } from "./member-media/service";
 
 async function snapshot(sessionToken?: string): Promise<DemoState> {
   const backend = await getTambikeBackend();
@@ -77,6 +78,25 @@ export async function upsertMotorcycleAction(input: UpsertMotorcycleInput) {
   const backend = await getTambikeBackend();
   const token = await readRequiredSessionToken();
   return backend.upsertMotorcycle(token, input);
+}
+
+export async function finalizeMemberMediaAction(input: FinalizeMemberMediaInput) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.finalizeMemberMedia(token, input);
+}
+
+export async function deleteMemberMediaAction(mediaId: string) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  await backend.deleteMemberMedia(token, mediaId);
+  return backend.getMemberProfileEditor(token);
+}
+
+export async function reorderMotorcyclePhotosAction(mediaIds: string[]) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.reorderMotorcyclePhotos(token, mediaIds);
 }
 
 export async function createEventDraftAction(input: CreateEventInput) {

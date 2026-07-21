@@ -155,6 +155,16 @@ import {
   toMemberProfileEditorView,
   toMemberProfileView,
 } from "./member-profiles/profile-domain";
+import {
+  createMemberMediaLifecycleService,
+  MemberMediaLifecycleError,
+  type AuthorizedMemberMediaDescriptor,
+  type FinalizeMemberMediaInput,
+  type FinalizedMemberMediaRecord,
+  type MemberMediaLifecycleOptions,
+  type MemberMediaPersistence,
+} from "./member-media/service";
+import { MemberMediaError } from "./member-media/types";
 
 export class BackendError extends Error {
   constructor(
@@ -169,6 +179,12 @@ export class BackendError extends Error {
       | "SELF_CHECK_IN_DISABLED"
       | "CHECK_IN_NOT_OPEN"
       | "QR_EXPIRED"
+      | "UPLOAD_NOT_FOUND"
+      | "UPLOAD_EXPIRED"
+      | "UPLOAD_OWNERSHIP_MISMATCH"
+      | "PHOTO_LIMIT"
+      | "MEDIA_UNAVAILABLE"
+      | "INVALID_IMAGE"
       | "GIVEAWAY_COMPLIANCE_REQUIRED"
       | "INVALID_GIVEAWAY_STATE"
       | "GIVEAWAY_ENTRY_MODE_LOCKED"
@@ -271,6 +287,10 @@ type BackendUser = UserProfile & {
   defaultRosterIdentity?: RosterIdentity;
   profilePhotoMediaId?: string;
   profilePhotoStorageKey?: string;
+  profilePhotoMimeType?: string;
+  profilePhotoWidth?: number;
+  profilePhotoHeight?: number;
+  profilePhotoFinalizedAt?: Date;
 };
 
 type BackendMotorcycle = {
@@ -286,9 +306,11 @@ type BackendMotorcycle = {
     id: string;
     mediaId: string;
     storageKey: string;
+    mimeType: string;
     position: number;
     width: number;
     height: number;
+    finalizedAt: Date;
   }>;
 };
 
@@ -741,6 +763,7 @@ export type TambikeTestSeedOptions = {
   generateGiveawayDrawSeed?: () => Uint8Array;
   /** Deterministic test seam for IDs that participate in frozen draw state. */
   generateGiveawayUuid?: () => string;
+  memberMedia?: MemberMediaLifecycleOptions;
 };
 
 function slugify(value: string) {
@@ -912,6 +935,7 @@ export class TambikeBackend {
     auditEventsById: new Map(),
   };
   private readonly audits: AuditRecord[] = [];
+  private readonly memberMedia;
 
   private readonly generateGiveawayDrawSeed: () => Uint8Array;
   private readonly generateGiveawayUuid: () => string;
@@ -919,6 +943,7 @@ export class TambikeBackend {
   private constructor(seed: BackendSeed, options: TambikeTestSeedOptions) {
     this.generateGiveawayDrawSeed = options.generateGiveawayDrawSeed ?? generateDrawSeed;
     this.generateGiveawayUuid = options.generateGiveawayUuid ?? randomUUID;
+    this.memberMedia = createMemberMediaLifecycleService(options.memberMedia);
     for (const user of seed.users) {
       this.users.set(user.id, { ...user });
     }
@@ -1133,6 +1158,56 @@ export class TambikeBackend {
     };
     this.motorcycles.set(user.id, motorcycle);
     return this.toMemberProfileView(user).motorcycle!;
+  }
+
+  async createMemberMediaUpload(sessionToken: string, mimeType: string) {
+    const user = this.requireUser(sessionToken);
+    try {
+      return await this.memberMedia.createUpload(user.id, mimeType);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async finalizeMemberMedia(sessionToken: string, input: FinalizeMemberMediaInput) {
+    const user = this.requireUser(sessionToken);
+    try {
+      return await this.memberMedia.finalize(
+        user.id,
+        input,
+        this.memberMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async deleteMemberMedia(sessionToken: string, mediaId: string) {
+    const user = this.requireUser(sessionToken);
+    try {
+      await this.memberMedia.delete(user.id, mediaId, this.memberMediaPersistence());
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async reorderMotorcyclePhotos(sessionToken: string, mediaIds: string[]) {
+    const user = this.requireUser(sessionToken);
+    try {
+      await this.memberMedia.reorder(user.id, mediaIds, this.memberMediaPersistence());
+      return this.getMemberProfileEditor(sessionToken);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async getMemberMedia(sessionToken: string | undefined, mediaId: string) {
+    const descriptor = this.resolveMemberMediaDescriptor(sessionToken, mediaId);
+    try {
+      return await this.memberMedia.read(descriptor);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
   }
 
   async createEventDraft(sessionToken: string, input: CreateEventInput) {
@@ -7607,6 +7682,159 @@ export class TambikeBackend {
       visibleCount,
       anonymousCount: going.length - visibleCount,
     };
+  }
+
+  private memberMediaPersistence(): MemberMediaPersistence {
+    return {
+      saveFinalized: async (userId, record) => this.saveFinalizedMemberMedia(userId, record),
+      remove: async (userId, mediaId) => this.removeMemberMediaRecord(userId, mediaId),
+      reorder: async (userId, mediaIds) => this.reorderMemberMediaRecords(userId, mediaIds),
+    };
+  }
+
+  private saveFinalizedMemberMedia(userId: string, record: FinalizedMemberMediaRecord) {
+    const user = this.users.get(userId);
+    if (!user) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+
+    if (record.purpose === "avatar") {
+      const replacedStorageKeys = user.profilePhotoStorageKey
+        ? [user.profilePhotoStorageKey]
+        : [];
+      Object.assign(user, {
+        profilePhotoMediaId: record.mediaId,
+        profilePhotoStorageKey: record.storageKey,
+        profilePhotoMimeType: record.mimeType,
+        profilePhotoWidth: record.width,
+        profilePhotoHeight: record.height,
+        profilePhotoFinalizedAt: record.finalizedAt,
+      });
+      return Promise.resolve({ mediaId: record.mediaId, replacedStorageKeys });
+    }
+
+    const motorcycle = this.motorcycles.get(userId);
+    if (!motorcycle) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    const requestedPosition = record.motorcyclePhotoPosition;
+    if (
+      requestedPosition !== undefined &&
+      (!Number.isInteger(requestedPosition) || requestedPosition < 0 || requestedPosition > 4)
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const position = requestedPosition ?? [0, 1, 2, 3, 4].find(
+      (candidate) => !motorcycle.photos.some((photo) => photo.position === candidate),
+    );
+    if (position === undefined) throw new BackendError("PHOTO_LIMIT", "PHOTO_LIMIT");
+    const existing = motorcycle.photos.find((photo) => photo.position === position);
+    const nextPhoto: BackendMotorcycle["photos"][number] = {
+      id: existing?.id ?? `motorcycle-photo-${randomUUID()}`,
+      mediaId: record.mediaId,
+      storageKey: record.storageKey,
+      mimeType: record.mimeType,
+      position,
+      width: record.width,
+      height: record.height,
+      finalizedAt: record.finalizedAt,
+    };
+    motorcycle.photos = [
+      ...motorcycle.photos.filter((photo) => photo.position !== position),
+      nextPhoto,
+    ].sort((left, right) => left.position - right.position);
+    return Promise.resolve({
+      mediaId: record.mediaId,
+      replacedStorageKeys: existing ? [existing.storageKey] : [],
+    });
+  }
+
+  private removeMemberMediaRecord(userId: string, mediaId: string) {
+    const user = this.users.get(userId);
+    if (!user) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+    if (user.profilePhotoMediaId === mediaId && user.profilePhotoStorageKey) {
+      const storageKey = user.profilePhotoStorageKey;
+      user.profilePhotoMediaId = undefined;
+      user.profilePhotoStorageKey = undefined;
+      user.profilePhotoMimeType = undefined;
+      user.profilePhotoWidth = undefined;
+      user.profilePhotoHeight = undefined;
+      user.profilePhotoFinalizedAt = undefined;
+      return Promise.resolve({ storageKey });
+    }
+
+    const motorcycle = this.motorcycles.get(userId);
+    const index = motorcycle?.photos.findIndex((photo) => photo.mediaId === mediaId) ?? -1;
+    if (!motorcycle || index < 0) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const [removed] = motorcycle.photos.splice(index, 1);
+    motorcycle.photos
+      .sort((left, right) => left.position - right.position)
+      .forEach((photo, position) => { photo.position = position; });
+    return Promise.resolve({ storageKey: removed.storageKey });
+  }
+
+  private reorderMemberMediaRecords(userId: string, mediaIds: string[]) {
+    const motorcycle = this.motorcycles.get(userId);
+    if (
+      !motorcycle ||
+      mediaIds.length !== motorcycle.photos.length ||
+      new Set(mediaIds).size !== mediaIds.length ||
+      mediaIds.some((mediaId) => !motorcycle.photos.some((photo) => photo.mediaId === mediaId))
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const photosByMediaId = new Map(motorcycle.photos.map((photo) => [photo.mediaId, photo]));
+    motorcycle.photos = mediaIds.map((mediaId, position) => ({
+      ...photosByMediaId.get(mediaId)!,
+      position,
+    }));
+    return Promise.resolve();
+  }
+
+  private resolveMemberMediaDescriptor(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): AuthorizedMemberMediaDescriptor {
+    let owner = Array.from(this.users.values()).find(
+      (candidate) => candidate.profilePhotoMediaId === mediaId,
+    );
+    let storageKey = owner?.profilePhotoStorageKey;
+    let mimeType = owner?.profilePhotoMimeType;
+    if (!owner) {
+      for (const motorcycle of this.motorcycles.values()) {
+        const photo = motorcycle.photos.find((candidate) => candidate.mediaId === mediaId);
+        if (photo) {
+          owner = this.users.get(motorcycle.userId);
+          storageKey = photo.storageKey;
+          mimeType = photo.mimeType;
+          break;
+        }
+      }
+    }
+    if (!owner || !storageKey || mimeType !== "image/webp") {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
+    const ownsProfile = validSessionUser?.id === owner.id;
+    const isAdmin = validSessionUser?.role === "admin";
+    const viewer = validSessionUser
+      ? { role: validSessionUser.role, ownsProfile }
+      : null;
+    if ((!owner.profileSlug && !ownsProfile && !isAdmin) ||
+        !canViewMemberProfile(viewer, owner.profileVisibility ?? "PRIVATE")) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    return { storageKey, mimeType };
+  }
+
+  private toMemberMediaBackendError(error: unknown): unknown {
+    if (error instanceof BackendError) return error;
+    if (error instanceof MemberMediaError) {
+      return new BackendError("INVALID_IMAGE", "INVALID_IMAGE");
+    }
+    if (error instanceof MemberMediaLifecycleError) {
+      const code = error.code;
+      return new BackendError(code, code);
+    }
+    return error;
   }
 
   private audit(

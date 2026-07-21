@@ -78,6 +78,7 @@ export function createS3MemberMediaStore(
         Body?: unknown;
         ContentType?: string;
         ContentLength?: number;
+        LastModified?: Date;
       };
       if (!isMemberMediaBody(output.Body)) {
         throw new Error("MEMBER_MEDIA_UNAVAILABLE: S3 object body is missing");
@@ -86,6 +87,7 @@ export function createS3MemberMediaStore(
         body: output.Body,
         contentType: output.ContentType,
         contentLength: output.ContentLength,
+        lastModified: output.LastModified,
       };
     },
 

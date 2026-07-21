@@ -19,6 +19,7 @@ export interface StoredMemberMediaObject {
   body: MemberMediaBody;
   contentType?: string;
   contentLength?: number;
+  lastModified?: Date;
 }
 
 export interface PutMemberMediaObjectInput {

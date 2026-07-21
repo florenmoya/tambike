@@ -154,6 +154,16 @@ import {
   encodeRosterCursor,
   normalizeRosterPageLimit,
 } from "./member-profiles/roster-domain";
+import {
+  createMemberMediaLifecycleService,
+  MemberMediaLifecycleError,
+  type AuthorizedMemberMediaDescriptor,
+  type FinalizeMemberMediaInput,
+  type FinalizedMemberMediaRecord,
+  type MemberMediaLifecycleOptions,
+  type MemberMediaPersistence,
+} from "./member-media/service";
+import { MemberMediaError } from "./member-media/types";
 
 type SignupWithPasswordInput = SignupInput & {
   password: string;
@@ -411,11 +421,18 @@ function defaultRulesForEvent(type: EventType) {
 }
 
 export class PrismaTambikeBackend {
-  private constructor(private readonly prisma: PrismaClient) {}
+  private readonly memberMedia;
 
-  static create(databaseUrl: string) {
+  private constructor(
+    private readonly prisma: PrismaClient,
+    options: { memberMedia?: MemberMediaLifecycleOptions } = {},
+  ) {
+    this.memberMedia = createMemberMediaLifecycleService(options.memberMedia);
+  }
+
+  static create(databaseUrl: string, options: { memberMedia?: MemberMediaLifecycleOptions } = {}) {
     const adapter = new PrismaPg(databaseUrl);
-    return new PrismaTambikeBackend(new PrismaClient({ adapter }));
+    return new PrismaTambikeBackend(new PrismaClient({ adapter }), options);
   }
 
   async disconnect() {
@@ -665,6 +682,56 @@ export class PrismaTambikeBackend {
         height: photo.height,
       })),
     };
+  }
+
+  async createMemberMediaUpload(sessionToken: string, mimeType: string) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      return await this.memberMedia.createUpload(user.id, mimeType);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async finalizeMemberMedia(sessionToken: string, input: FinalizeMemberMediaInput) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      return await this.memberMedia.finalize(
+        user.id,
+        input,
+        this.memberMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async deleteMemberMedia(sessionToken: string, mediaId: string) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      await this.memberMedia.delete(user.id, mediaId, this.memberMediaPersistence());
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async reorderMotorcyclePhotos(sessionToken: string, mediaIds: string[]) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      await this.memberMedia.reorder(user.id, mediaIds, this.memberMediaPersistence());
+      return this.getMemberProfileEditor(sessionToken);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async getMemberMedia(sessionToken: string | undefined, mediaId: string) {
+    const descriptor = await this.resolveMemberMediaDescriptor(sessionToken, mediaId);
+    try {
+      return await this.memberMedia.read(descriptor);
+    } catch (error) {
+      throw this.toMemberMediaBackendError(error);
+    }
   }
 
   /**
@@ -9107,6 +9174,233 @@ export class PrismaTambikeBackend {
       status: pass.status as Pass["status"],
       generatedAt: pass.generatedAt.toISOString(),
     };
+  }
+
+  private memberMediaPersistence(): MemberMediaPersistence {
+    return {
+      saveFinalized: (userId, record) => this.saveFinalizedMemberMedia(userId, record),
+      remove: (userId, mediaId) => this.removeMemberMediaRecord(userId, mediaId),
+      reorder: (userId, mediaIds) => this.reorderMemberMediaRecords(userId, mediaIds),
+    };
+  }
+
+  private async lockMemberMediaOwner(tx: Prisma.TransactionClient, userId: string) {
+    const resource = profileOwnerLockResource(userId);
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+  }
+
+  private saveFinalizedMemberMedia(userId: string, record: FinalizedMemberMediaRecord) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockMemberMediaOwner(tx, userId);
+      if (record.purpose === "avatar") {
+        const owner = await tx.user.findUniqueOrThrow({
+          where: { id: userId },
+          select: { profilePhotoStorageKey: true },
+        });
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            profilePhotoMediaId: record.mediaId,
+            profilePhotoStorageKey: record.storageKey,
+            profilePhotoMimeType: record.mimeType,
+            profilePhotoWidth: record.width,
+            profilePhotoHeight: record.height,
+            profilePhotoFinalizedAt: record.finalizedAt,
+          },
+        });
+        return {
+          mediaId: record.mediaId,
+          replacedStorageKeys: owner.profilePhotoStorageKey
+            ? [owner.profilePhotoStorageKey]
+            : [],
+        };
+      }
+
+      const motorcycle = await tx.motorcycle.findUnique({
+        where: { userId },
+        include: { photos: { orderBy: { position: "asc" } } },
+      });
+      if (!motorcycle) throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      const requestedPosition = record.motorcyclePhotoPosition;
+      if (
+        requestedPosition !== undefined &&
+        (!Number.isInteger(requestedPosition) || requestedPosition < 0 || requestedPosition > 4)
+      ) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      const position = requestedPosition ?? [0, 1, 2, 3, 4].find(
+        (candidate) => !motorcycle.photos.some((photo) => photo.position === candidate),
+      );
+      if (position === undefined) throw new BackendError("PHOTO_LIMIT", "PHOTO_LIMIT");
+      const existing = motorcycle.photos.find((photo) => photo.position === position);
+      if (existing) {
+        await tx.motorcyclePhoto.update({
+          where: { id: existing.id },
+          data: {
+            mediaId: record.mediaId,
+            storageKey: record.storageKey,
+            mimeType: record.mimeType,
+            width: record.width,
+            height: record.height,
+            finalizedAt: record.finalizedAt,
+          },
+        });
+      } else {
+        await tx.motorcyclePhoto.create({
+          data: {
+            motorcycleId: motorcycle.id,
+            position,
+            mediaId: record.mediaId,
+            storageKey: record.storageKey,
+            mimeType: record.mimeType,
+            width: record.width,
+            height: record.height,
+            finalizedAt: record.finalizedAt,
+          },
+        });
+      }
+      return {
+        mediaId: record.mediaId,
+        replacedStorageKeys: existing ? [existing.storageKey] : [],
+      };
+    });
+  }
+
+  private removeMemberMediaRecord(userId: string, mediaId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockMemberMediaOwner(tx, userId);
+      const owner = await tx.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { profilePhotoMediaId: true, profilePhotoStorageKey: true },
+      });
+      if (owner.profilePhotoMediaId === mediaId && owner.profilePhotoStorageKey) {
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            profilePhotoMediaId: null,
+            profilePhotoStorageKey: null,
+            profilePhotoMimeType: null,
+            profilePhotoWidth: null,
+            profilePhotoHeight: null,
+            profilePhotoFinalizedAt: null,
+          },
+        });
+        return { storageKey: owner.profilePhotoStorageKey };
+      }
+
+      const photo = await tx.motorcyclePhoto.findUnique({
+        where: { mediaId },
+        include: { motorcycle: { select: { id: true, userId: true } } },
+      });
+      if (!photo || photo.motorcycle.userId !== userId) {
+        throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
+      await tx.motorcyclePhoto.delete({ where: { id: photo.id } });
+      const remaining = await tx.motorcyclePhoto.findMany({
+        where: { motorcycleId: photo.motorcycle.id },
+        orderBy: { position: "asc" },
+        select: { id: true },
+      });
+      await tx.motorcyclePhoto.updateMany({
+        where: { motorcycleId: photo.motorcycle.id },
+        data: { position: { increment: 10 } },
+      });
+      for (const [position, item] of remaining.entries()) {
+        await tx.motorcyclePhoto.update({ where: { id: item.id }, data: { position } });
+      }
+      return { storageKey: photo.storageKey };
+    });
+  }
+
+  private reorderMemberMediaRecords(userId: string, mediaIds: string[]) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockMemberMediaOwner(tx, userId);
+      const motorcycle = await tx.motorcycle.findUnique({
+        where: { userId },
+        include: { photos: true },
+      });
+      if (
+        !motorcycle ||
+        mediaIds.length !== motorcycle.photos.length ||
+        new Set(mediaIds).size !== mediaIds.length ||
+        mediaIds.some((mediaId) => !motorcycle.photos.some((photo) => photo.mediaId === mediaId))
+      ) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      await tx.motorcyclePhoto.updateMany({
+        where: { motorcycleId: motorcycle.id },
+        data: { position: { increment: 10 } },
+      });
+      for (const [position, mediaId] of mediaIds.entries()) {
+        await tx.motorcyclePhoto.update({ where: { mediaId }, data: { position } });
+      }
+    });
+  }
+
+  private async resolveMemberMediaDescriptor(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): Promise<AuthorizedMemberMediaDescriptor> {
+    const avatarOwner = await this.prisma.user.findUnique({
+      where: { profilePhotoMediaId: mediaId },
+      select: {
+        id: true,
+        role: true,
+        profileSlug: true,
+        profileVisibility: true,
+        profilePhotoStorageKey: true,
+        profilePhotoMimeType: true,
+      },
+    });
+    const motorcyclePhoto = avatarOwner
+      ? null
+      : await this.prisma.motorcyclePhoto.findUnique({
+          where: { mediaId },
+          select: {
+            storageKey: true,
+            mimeType: true,
+            motorcycle: {
+              select: {
+                user: {
+                  select: { id: true, role: true, profileSlug: true, profileVisibility: true },
+                },
+              },
+            },
+          },
+        });
+    const owner = avatarOwner ?? motorcyclePhoto?.motorcycle.user;
+    const storageKey = avatarOwner?.profilePhotoStorageKey ?? motorcyclePhoto?.storageKey;
+    const mimeType = avatarOwner?.profilePhotoMimeType ?? motorcyclePhoto?.mimeType;
+    if (!owner || !storageKey || mimeType !== "image/webp") {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    const sessionUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
+    const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
+    const ownsProfile = validSessionUser?.id === owner.id;
+    const isAdmin = validSessionUser?.role === "admin";
+    const viewer = validSessionUser
+      ? { role: validSessionUser.role as AccountRole, ownsProfile }
+      : null;
+    if (
+      (!owner.profileSlug && !ownsProfile && !isAdmin) ||
+      !canViewMemberProfile(viewer, owner.profileVisibility)
+    ) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    return { storageKey, mimeType };
+  }
+
+  private toMemberMediaBackendError(error: unknown): unknown {
+    if (error instanceof BackendError) return error;
+    if (error instanceof MemberMediaError) {
+      return new BackendError("INVALID_IMAGE", "INVALID_IMAGE");
+    }
+    if (error instanceof MemberMediaLifecycleError) {
+      const code = error.code;
+      return new BackendError(code, code);
+    }
+    return error;
   }
 
   private riskFlagsFor(type: EventType, expectedRiders: number) {
