@@ -91,6 +91,11 @@ describe("member profile, motorcycle, roster, and media schema contract", () => 
       expect(memberProfileTypes).toContain(`export interface ${exportedName}`);
     }
     expect(memberProfileTypes).toContain("profilePhotoUrl?: string");
+    expect(memberProfileTypes).toContain("slug: string;");
+    expect(memberProfileTypes).toContain(
+      'export interface MemberProfileEditorView extends Omit<MemberProfileView, "slug">',
+    );
+    expect(memberProfileTypes).toContain("slug: string | null;");
     expect(memberProfileTypes).not.toMatch(/storageKey|passwordHash|verificationStatus|email:\s*string/);
   });
 });

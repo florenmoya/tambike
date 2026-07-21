@@ -25,7 +25,8 @@ export interface MemberProfileView {
   organizer?: { hostedEventCount: number };
 }
 
-export interface MemberProfileEditorView extends MemberProfileView {
+export interface MemberProfileEditorView extends Omit<MemberProfileView, "slug"> {
+  slug: string | null;
   defaultRosterIdentity: RosterIdentity;
   isPublished: boolean;
 }
