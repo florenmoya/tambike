@@ -15,6 +15,13 @@ Official references:
 
 Use Vercel's **team issuer** mode for the exact team that owns Tambike. The issuer is `https://oidc.vercel.com/<team-slug>`, the audience is `https://vercel.com/<team-slug>`, and the production subject is `owner:<team-slug>:project:<project-name>:environment:production`.
 
+Install the required Vercel CLI and record the version before any identity or project check:
+
+```powershell
+npm i -g vercel
+vercel --version
+```
+
 This checkout can be intentionally unlinked. Inspect it before any Vercel command:
 
 ```powershell
@@ -47,7 +54,23 @@ aws cloudformation validate-template `
   --template-body file://infra/aws/tambike-member-media.yaml
 ```
 
-If the AWS account already has the team's Vercel OIDC provider, obtain its exact ARN and pass `ExistingOidcProviderArn`. Otherwise leave it empty and this stack creates `https://oidc.vercel.com/<team-slug>`. An AWS account can have only one OIDC provider for a given issuer URL.
+If the AWS account already has the team's Vercel OIDC provider, obtain its exact ARN and pass `ExistingOidcProviderArn`. Otherwise leave it empty and this stack creates `https://oidc.vercel.com/<team-slug>`. An AWS account can have only one OIDC provider for a given issuer URL. The parameter only selects create-versus-existing behavior; it is never used as the role principal.
+
+Before using an existing provider, prove that its ARN equals the exact current partition, account, and team-derived ARN:
+
+```powershell
+$VercelTeamSlug = "<exact-team-slug>"
+$ExistingOidcProviderArn = "<provider-arn-from-iam>"
+$Caller = aws sts get-caller-identity | ConvertFrom-Json
+$Partition = ($Caller.Arn -split ":")[1]
+$ExpectedOidcProviderArn = "arn:${Partition}:iam::$($Caller.Account):oidc-provider/oidc.vercel.com/$VercelTeamSlug"
+if ($ExistingOidcProviderArn -ne $ExpectedOidcProviderArn) {
+  throw "SMOKE_REFUSED: existing provider ARN does not match the current account and exact Vercel team issuer"
+}
+aws iam get-open-id-connect-provider --open-id-connect-provider-arn $ExpectedOidcProviderArn
+```
+
+The final command must report the URL `oidc.vercel.com/<exact-team-slug>` and audience `https://vercel.com/<exact-team-slug>`. A mismatched parameter cannot change the stack's derived IAM principal; deployment fails safely if the exact provider does not exist.
 
 Create or update the stack with exact values:
 
@@ -132,8 +155,33 @@ $env:AWS_REGION = "ap-southeast-1"
 $env:MEMBER_MEDIA_SMOKE_BUCKET_NAME = "<dedicated-test-bucket>"
 $env:MEMBER_MEDIA_SMOKE_ROLE_ARN = "<dedicated-test-role-arn>"
 $env:MEMBER_MEDIA_SMOKE_PREFIX = "smoke/member-media"
+$env:MEMBER_MEDIA_SMOKE_RUN_ID = "$(Get-Date -Format yyyyMMddHHmmss)-$([guid]::NewGuid())"
 $env:MEMBER_MEDIA_SMOKE_CONFIRM = "I_UNDERSTAND_THIS_USES_A_TEST_BUCKET"
 npm run smoke:member-media-s3
 ```
 
-The role must be assumable by the current test OIDC token. Run from an explicitly linked, verified test Vercel context (for example, through `vercel env run` only after the identity/link checks above), or supply a short-lived `VERCEL_OIDC_TOKEN` through an approved test workflow. The script creates unique exact keys under the supplied `smoke/` prefix, exercises the real presigned POST and application normalization/read path, and deletes only those run-owned keys. It refuses production-looking buckets, roles, and prefixes.
+The role must be assumable by the current test OIDC token. Run from an explicitly linked, verified test Vercel context (for example, through `vercel env run` only after the identity/link checks above), or supply a short-lived `VERCEL_OIDC_TOKEN` through an approved test workflow. `MEMBER_MEDIA_SMOKE_RUN_ID` predeclares the unique run namespace so the role policy can be bounded before execution; the command rejects any value that is not a 14-digit timestamp plus UUID. The script creates exact keys under the supplied `smoke/` prefix and run ID, exercises the real presigned POST and application normalization/read path, and deletes only those run-owned keys. It refuses production-looking buckets, roles, prefixes, and run IDs.
+
+The dedicated test role must not reuse the production role policy. Give it only these object permissions, replacing the bucket, base, and run placeholders for the bounded smoke execution:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<dedicated-test-bucket>/smoke/<base>/<run>/tmp/*",
+        "arn:aws:s3:::<dedicated-test-bucket>/smoke/<base>/<run>/media/*"
+      ]
+    }
+  ]
+}
+```
+
+Replace `<run>` with the exact `MEMBER_MEDIA_SMOKE_RUN_ID` value before attaching the policy. Do not add `s3:ListBucket`, a bucket-wide object wildcard, another prefix, or any other S3 action. Prepare the bounded test policy for that exact run through the approved test workflow; never broaden it to production `tmp/*` or `media/*`.
