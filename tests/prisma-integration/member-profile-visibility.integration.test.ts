@@ -177,4 +177,63 @@ describe("Prisma member profile visibility", () => {
       await closePrismaIntegrationClientPair(rawClients);
     }
   });
+
+  test("serializes overlapping candidate allocation across different slug bases", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl);
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+    const suffix = randomUUID();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, { suffix, riderCount: 3 });
+      const [existingOwner, racerOwner, racerTwoOwner] = fixture.riders;
+      if (!existingOwner || !racerOwner || !racerTwoOwner) {
+        throw new Error("PROFILE_FIXTURE_RIDERS_MISSING");
+      }
+      await backendClients.primary.backend.updateMemberProfile(existingOwner.sessionToken, {
+        ...profileInput,
+        displayName: "Racer",
+      });
+
+      const [racer, racerTwo] = await Promise.all([
+        backendClients.primary.backend.updateMemberProfile(racerOwner.sessionToken, {
+          ...profileInput,
+          displayName: "Racer",
+        }),
+        backendClients.secondary.backend.updateMemberProfile(racerTwoOwner.sessionToken, {
+          ...profileInput,
+          displayName: "Racer 2",
+        }),
+      ]);
+      expect(racer.slug).toBeTruthy();
+      expect(racerTwo.slug).toBeTruthy();
+      expect(racer.slug).not.toBe(racerTwo.slug);
+
+      const persisted = await rawClients.primary.user.findMany({
+        where: { id: { in: [racerOwner.userId, racerTwoOwner.userId] } },
+        select: { id: true, profileSlug: true },
+      });
+      const persistedById = new Map(persisted.map((user) => [user.id, user.profileSlug]));
+      expect(persistedById.get(racerOwner.userId)).toBe(racer.slug);
+      expect(persistedById.get(racerTwoOwner.userId)).toBe(racerTwo.slug);
+
+      await expect(
+        backendClients.primary.backend.updateMemberProfile(racerOwner.sessionToken, {
+          ...profileInput,
+          displayName: "Renamed Racer",
+        }),
+      ).resolves.toMatchObject({ slug: racer.slug });
+      await expect(
+        backendClients.secondary.backend.updateMemberProfile(racerTwoOwner.sessionToken, {
+          ...profileInput,
+          displayName: "Renamed Racer Two",
+        }),
+      ).resolves.toMatchObject({ slug: racerTwo.slug });
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
 });

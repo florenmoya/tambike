@@ -141,7 +141,7 @@ import {
   parseMotorcycleInput,
   parseProfileInput,
   profileOwnerLockResource,
-  profileSlugLockResource,
+  profileSlugAllocationLockResource,
   resolveStableProfileSlug,
   toMemberProfileEditorView,
   toMemberProfileView as sanitizeMemberProfile,
@@ -588,8 +588,8 @@ export class PrismaTambikeBackend {
               select: { profileSlug: true },
             })
           ).profileSlug,
-        acquireSlugLock: (base) => {
-          const resource = profileSlugLockResource(base);
+        acquireSlugAllocationLock: () => {
+          const resource = profileSlugAllocationLockResource();
           return tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
         },
         allocateSlug: (base) => this.allocatePrismaProfileSlug(tx, base),

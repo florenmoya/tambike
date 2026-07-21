@@ -84,8 +84,8 @@ export function profileOwnerLockResource(userId: string) {
   return `tambike:member-profile-owner:${userId}`;
 }
 
-export function profileSlugLockResource(slugBase: string) {
-  return `tambike:member-profile-slug:${slugBase}`;
+export function profileSlugAllocationLockResource() {
+  return "tambike:member-profile-slug-allocation";
 }
 
 export async function resolveStableProfileSlug(
@@ -93,7 +93,7 @@ export async function resolveStableProfileSlug(
   dependencies: {
     acquireOwnerLock: () => Promise<unknown>;
     readCurrentSlug: () => Promise<string | null>;
-    acquireSlugLock: (slugBase: string) => Promise<unknown>;
+    acquireSlugAllocationLock: () => Promise<unknown>;
     allocateSlug: (slugBase: string) => Promise<string>;
   },
 ) {
@@ -102,7 +102,7 @@ export async function resolveStableProfileSlug(
   if (currentSlug) return currentSlug;
 
   const base = profileSlugBase(displayName);
-  await dependencies.acquireSlugLock(base);
+  await dependencies.acquireSlugAllocationLock();
   return dependencies.allocateSlug(base);
 }
 

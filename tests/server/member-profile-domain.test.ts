@@ -6,8 +6,8 @@ import {
   parseMotorcycleInput,
   parseProfileInput,
   profileOwnerLockResource,
+  profileSlugAllocationLockResource,
   profileSlugBase,
-  profileSlugLockResource,
   resolveStableProfileSlug,
   toMemberProfileView,
 } from "../../src/server/member-profiles/profile-domain";
@@ -38,9 +38,11 @@ describe("member profile policy and sanitization", () => {
     expect(profileSlugBase("x".repeat(80))).toHaveLength(48);
   });
 
-  test("uses separate namespaced owner and candidate-slug lock resources", () => {
+  test("uses namespaced owner and global slug-allocation lock resources", () => {
     expect(profileOwnerLockResource("user-123")).toBe("tambike:member-profile-owner:user-123");
-    expect(profileSlugLockResource("same-rider")).toBe("tambike:member-profile-slug:same-rider");
+    expect(profileSlugAllocationLockResource()).toBe(
+      "tambike:member-profile-slug-allocation",
+    );
   });
 
   test("acquires the owner lock before re-reading or allocating a first-save slug", async () => {
@@ -53,8 +55,8 @@ describe("member profile policy and sanitization", () => {
         calls.push("read-current");
         return null;
       },
-      acquireSlugLock: async (base) => {
-        calls.push(`slug-lock:${base}`);
+      acquireSlugAllocationLock: async () => {
+        calls.push("slug-allocation-lock");
       },
       allocateSlug: async (base) => {
         calls.push(`allocate:${base}`);
@@ -66,7 +68,7 @@ describe("member profile policy and sanitization", () => {
     expect(calls).toEqual([
       "owner-lock",
       "read-current",
-      "slug-lock:new-rider",
+      "slug-allocation-lock",
       "allocate:new-rider",
     ]);
   });
@@ -81,8 +83,8 @@ describe("member profile policy and sanitization", () => {
         calls.push("read-current");
         return "original-slug";
       },
-      acquireSlugLock: async () => {
-        calls.push("unexpected-slug-lock");
+      acquireSlugAllocationLock: async () => {
+        calls.push("unexpected-slug-allocation-lock");
       },
       allocateSlug: async () => {
         calls.push("unexpected-allocation");
