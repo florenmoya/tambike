@@ -197,24 +197,34 @@ describe("Prisma member profile visibility", () => {
       if (!existingOwner || !racerOwner || !racerTwoOwner) {
         throw new Error("PROFILE_FIXTURE_RIDERS_MISSING");
       }
-      await backendClients.primary.backend.updateMemberProfile(existingOwner.sessionToken, {
+      const firstDisplayName = `Racer ${suffix.slice(0, 8)}`;
+      const secondDisplayName = `${firstDisplayName} 2`;
+      const firstBase = profileSlugBase(firstDisplayName);
+      const secondBase = profileSlugBase(secondDisplayName);
+      expect(firstBase.length).toBeLessThan(48);
+      expect(secondBase).toBe(`${firstBase}-2`);
+
+      const seeded = await backendClients.primary.backend.updateMemberProfile(existingOwner.sessionToken, {
         ...profileInput,
-        displayName: "Racer",
+        displayName: firstDisplayName,
       });
+      expect(seeded.slug).toBe(firstBase);
 
       const [racer, racerTwo] = await Promise.all([
         backendClients.primary.backend.updateMemberProfile(racerOwner.sessionToken, {
           ...profileInput,
-          displayName: "Racer",
+          displayName: firstDisplayName,
         }),
         backendClients.secondary.backend.updateMemberProfile(racerTwoOwner.sessionToken, {
           ...profileInput,
-          displayName: "Racer 2",
+          displayName: secondDisplayName,
         }),
       ]);
-      expect(racer.slug).toBeTruthy();
-      expect(racerTwo.slug).toBeTruthy();
       expect(racer.slug).not.toBe(racerTwo.slug);
+      expect([
+        [`${firstBase}-2`, `${firstBase}-3`].sort(),
+        [`${firstBase}-2`, `${secondBase}-2`].sort(),
+      ]).toContainEqual([racer.slug, racerTwo.slug].sort());
 
       const persisted = await rawClients.primary.user.findMany({
         where: { id: { in: [racerOwner.userId, racerTwoOwner.userId] } },
