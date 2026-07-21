@@ -1,6 +1,8 @@
 export type Role = "guest" | "rider" | "organizer" | "admin";
 
 export type {
+  EventAttendeeRosterPage,
+  EventAttendeeSummary,
   MemberProfileEditorView,
   MemberProfileView,
   MotorcycleShowcase,
@@ -201,6 +203,7 @@ export interface RSVP {
   status: "interested" | "going";
   attendanceType: AttendanceType;
   clubName?: string;
+  rosterIdentity?: import("../member-profiles/types").RosterIdentity;
 }
 
 export interface Pass {

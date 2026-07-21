@@ -5,6 +5,7 @@ import type {
   Pass,
   UserProfile,
 } from "../../../src/features/tambike-demo/types";
+import type { RosterIdentity } from "../../../src/features/member-profiles/types";
 
 export type AuthenticatedFixture = {
   user: UserProfile;
@@ -74,10 +75,12 @@ export async function registerTestPass(
   backend: TambikeBackend,
   rider: AuthenticatedFixture,
   eventId: string,
+  rosterIdentity?: RosterIdentity,
 ): Promise<Pass> {
   const registration = await backend.registerForEvent(rider.sessionToken, eventId, {
     status: "going",
     attendanceType: "direct",
+    rosterIdentity,
   });
 
   if (!registration.pass) {

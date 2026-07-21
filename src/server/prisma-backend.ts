@@ -87,6 +87,9 @@ import type {
   MemberProfileEditorView,
   MemberProfileView,
   MotorcycleShowcase,
+  EventAttendeeRosterPage,
+  EventAttendeeSummary,
+  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -146,6 +149,11 @@ import {
   toMemberProfileEditorView,
   toMemberProfileView as sanitizeMemberProfile,
 } from "./member-profiles/profile-domain";
+import {
+  decodeRosterCursor,
+  encodeRosterCursor,
+  normalizeRosterPageLimit,
+} from "./member-profiles/roster-domain";
 
 type SignupWithPasswordInput = SignupInput & {
   password: string;
@@ -4544,12 +4552,19 @@ export class PrismaTambikeBackend {
     if (!cta.canRegister && !cta.canShowInterest) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
+    if (
+      input.rosterIdentity !== undefined &&
+      input.rosterIdentity !== "VISIBLE" &&
+      input.rosterIdentity !== "ANONYMOUS"
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       await this.lockGiveawayEvent(tx, event.id);
       const previousRsvp = await tx.rSVP.findUnique({
         where: { eventId_userId: { eventId: event.id, userId: user.id } },
-        select: { status: true, goingAt: true },
+        select: { status: true, goingAt: true, rosterIdentity: true },
       });
       const now = new Date();
       const goingAt =
@@ -4567,12 +4582,16 @@ export class PrismaTambikeBackend {
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
+          rosterIdentity: input.rosterIdentity ?? user.defaultRosterIdentity,
         },
         update: {
           status: input.status,
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
+          ...(input.rosterIdentity === undefined
+            ? {}
+            : { rosterIdentity: input.rosterIdentity }),
         },
       });
       const pass =
@@ -4600,12 +4619,156 @@ export class PrismaTambikeBackend {
       status: input.status,
       attendanceType: input.attendanceType,
       clubName: result.rsvp.clubName ?? undefined,
+      rosterIdentity: result.rsvp.rosterIdentity,
     };
     if (!result.pass) {
       return { rsvp: rsvpDto, pass: null };
     }
     await this.audit("PASS_CREATED", user.id, "Pass", result.pass.id);
     return { rsvp: rsvpDto, pass: this.toPass(result.pass) };
+  }
+
+  async configureEventRoster(
+    sessionToken: string,
+    eventId: string,
+    input: { enabled: boolean },
+  ): Promise<EventAttendeeSummary> {
+    const user = await this.requireUser(sessionToken);
+    if (typeof input?.enabled !== "boolean") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const event = await this.requireRosterEvent(eventId);
+    this.requireRosterConfigurator(user, event);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`,
+      );
+      const previousEnabled =
+        (await tx.eventRosterSettings.findUnique({
+          where: { eventId },
+          select: { enabled: true },
+        }))?.enabled ?? false;
+      await tx.eventRosterSettings.upsert({
+        where: { eventId },
+        create: { eventId, enabled: input.enabled },
+        update: { enabled: input.enabled },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "ROSTER_SETTINGS_UPDATED",
+          actorUserId: user.id,
+          targetType: "Event",
+          targetId: eventId,
+          metadata: {
+            previousEnabled,
+            nextEnabled: input.enabled,
+          },
+        },
+      });
+    });
+    return this.buildPrismaRosterSummary(eventId, event.title, input.enabled);
+  }
+
+  async listEventAttendees(
+    sessionToken: string | undefined,
+    eventId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<EventAttendeeRosterPage> {
+    const event = await this.requireRosterEvent(eventId);
+    const enabled = event.rosterSettings?.enabled ?? false;
+    const limit = normalizeRosterPageLimit(options.limit);
+    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
+    if (enabled) {
+      if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      await this.requireUser(sessionToken);
+    }
+
+    const summary = await this.buildPrismaRosterSummary(event.id, event.title, enabled);
+    if (!enabled) {
+      return { summary, attendees: [], pageSize: limit };
+    }
+
+    const visibleWhere = {
+      eventId,
+      status: "going" as const,
+      goingAt: { not: null },
+      rosterIdentity: "VISIBLE" as const,
+      user: {
+        profileSlug: { not: null },
+        profileVisibility: { not: "PRIVATE" as const },
+      },
+      ...(cursor
+        ? {
+            OR: [
+              { goingAt: { gt: new Date(cursor.goingAt) } },
+              { goingAt: new Date(cursor.goingAt), id: { gt: cursor.rsvpId } },
+            ],
+          }
+        : {}),
+    } satisfies Prisma.RSVPWhereInput;
+    const rows = await this.prisma.rSVP.findMany({
+      where: visibleWhere,
+      orderBy: [{ goingAt: "asc" }, { id: "asc" }],
+      take: limit + 1,
+      select: {
+        id: true,
+        goingAt: true,
+        user: {
+          include: {
+            motorcycle: { include: { photos: { orderBy: { position: "asc" } } } },
+          },
+        },
+      },
+    });
+    const hasNextPage = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const attendees = await Promise.all(
+      selected.map(async ({ user: attendee }) => {
+        const profile = await this.sanitizeMemberProfile(attendee);
+        return {
+          slug: profile.slug,
+          displayName: profile.displayName,
+          area: profile.area,
+          profilePhotoUrl: profile.profilePhotoUrl,
+          motorcycle: profile.motorcycle,
+        };
+      }),
+    );
+    const last = selected.at(-1);
+    return {
+      summary,
+      attendees,
+      nextCursor:
+        hasNextPage && last?.goingAt
+          ? encodeRosterCursor({ goingAt: last.goingAt.toISOString(), rsvpId: last.id })
+          : undefined,
+      pageSize: limit,
+    };
+  }
+
+  async updateEventRosterIdentity(
+    sessionToken: string,
+    eventId: string,
+    input: { rosterIdentity: RosterIdentity },
+  ) {
+    const user = await this.requireUser(sessionToken);
+    await this.requireEvent(eventId);
+    if (input?.rosterIdentity !== "VISIBLE" && input?.rosterIdentity !== "ANONYMOUS") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const existing = await this.prisma.rSVP.findUnique({
+      where: { eventId_userId: { eventId, userId: user.id } },
+      select: { id: true },
+    });
+    if (!existing) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const updated = await this.prisma.rSVP.update({
+      where: { id: existing.id },
+      data: { rosterIdentity: input.rosterIdentity },
+      select: { rosterIdentity: true },
+    });
+    await this.audit("RSVP_UPDATED", user.id, "Event", eventId);
+    return { rosterIdentity: updated.rosterIdentity as RosterIdentity };
   }
 
   async configureCheckIn(
@@ -8554,6 +8717,52 @@ export class PrismaTambikeBackend {
     return event;
   }
 
+  private async requireRosterEvent(eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        id: true,
+        title: true,
+        organizer: { select: { userId: true } },
+        rosterSettings: { select: { enabled: true } },
+      },
+    });
+    if (!event) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return event;
+  }
+
+  private async buildPrismaRosterSummary(
+    eventId: string,
+    eventTitle: string,
+    enabled: boolean,
+  ): Promise<EventAttendeeSummary> {
+    const [goingCount, visibleCount] = await Promise.all([
+      this.prisma.rSVP.count({ where: { eventId, status: "going" } }),
+      enabled
+        ? this.prisma.rSVP.count({
+            where: {
+              eventId,
+              status: "going",
+              goingAt: { not: null },
+              rosterIdentity: "VISIBLE",
+              user: {
+                profileSlug: { not: null },
+                profileVisibility: { not: "PRIVATE" },
+              },
+            },
+          })
+        : Promise.resolve(0),
+    ]);
+    return {
+      eventId,
+      eventTitle,
+      rosterEnabled: enabled,
+      goingCount,
+      visibleCount,
+      anonymousCount: goingCount - visibleCount,
+    };
+  }
+
   private async lockCheckInEvent(tx: Prisma.TransactionClient, eventId: string) {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`,
@@ -8688,6 +8897,15 @@ export class PrismaTambikeBackend {
     ) {
       return;
     }
+    throw new BackendError("FORBIDDEN", "FORBIDDEN");
+  }
+
+  private requireRosterConfigurator(
+    user: { id: string; role: string },
+    event: { organizer: { userId: string } },
+  ) {
+    if (user.role === "admin") return;
+    if (user.role === "organizer" && event.organizer.userId === user.id) return;
     throw new BackendError("FORBIDDEN", "FORBIDDEN");
   }
 

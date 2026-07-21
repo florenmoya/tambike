@@ -17,6 +17,7 @@ import type {
 import type {
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
+  RosterIdentity,
 } from "@/features/member-profiles/types";
 import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 import { BackendError, getTambikeBackend } from "./backend";
@@ -91,6 +92,7 @@ export async function registerForEventAction(
     status: "interested" | "going";
     attendanceType: AttendanceType;
     clubName?: string;
+    rosterIdentity?: RosterIdentity;
   },
 ) {
   const backend = await getTambikeBackend();
@@ -100,6 +102,30 @@ export async function registerForEventAction(
     state: await snapshot(),
     passId: result.pass?.id ?? null,
   };
+}
+
+export async function configureEventRosterAction(eventId: string, input: { enabled: boolean }) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.configureEventRoster(token, eventId, input);
+}
+
+export async function listEventAttendeesAction(
+  eventId: string,
+  options: { cursor?: string; limit?: number } = {},
+) {
+  const backend = await getTambikeBackend();
+  const token = await readSessionToken();
+  return backend.listEventAttendees(token ?? undefined, eventId, options);
+}
+
+export async function updateEventRosterIdentityAction(
+  eventId: string,
+  input: { rosterIdentity: RosterIdentity },
+) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.updateEventRosterIdentity(token, eventId, input);
 }
 
 export async function approvePublishAction(eventId: string) {

@@ -90,11 +90,19 @@ import type {
   MemberProfileEditorView,
   MemberProfileView,
   MotorcycleShowcase,
+  EventAttendeeRosterPage,
+  EventAttendeeSummary,
   ProfileVisibility,
   RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
+import {
+  classifyRosterEntry,
+  decodeRosterCursor,
+  encodeRosterCursor,
+  normalizeRosterPageLimit,
+} from "./member-profiles/roster-domain";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
 import {
   buildPublicDrawVerification,
@@ -186,6 +194,7 @@ export type RegistrationInput = {
   status: "interested" | "going";
   attendanceType: AttendanceType;
   clubName?: string;
+  rosterIdentity?: RosterIdentity;
 };
 
 export type SignupWithPasswordInput = SignupInput & {
@@ -198,6 +207,7 @@ export type AuditAction =
   | "PROFILE_UPDATED"
   | "EVENT_DRAFT_CREATED"
   | "RSVP_UPDATED"
+  | "ROSTER_SETTINGS_UPDATED"
   | "PASS_CREATED"
   | "CHECK_IN_CREATED"
   | "CHECK_IN_CONFIRMED"
@@ -319,6 +329,7 @@ type AuditRecord = {
   action: AuditAction;
   actorUserId?: string;
   targetId?: string;
+  metadata?: Record<string, boolean>;
   createdAt: Date;
 };
 
@@ -710,7 +721,7 @@ type QualifiedAutomaticGiveawayGroup = {
 type BackendSeed = {
   users: BackendUser[];
   events: Event[];
-  rsvps: Array<RSVP & { userId: string; goingAt?: string }>;
+  rsvps: Array<RSVP & { userId: string; goingAt?: string; id?: string }>;
   passes: Array<Pass & { userId: string }>;
   giveaways: GiveawayAggregate[];
   perkRedemptions: PerkRedemptionRecord[];
@@ -718,7 +729,7 @@ type BackendSeed = {
 
 export type TambikeTestFixture = {
   users?: Array<UserProfile & { password: string }>;
-  rsvps?: Array<RSVP & { userId: string; goingAt?: string }>;
+  rsvps?: Array<RSVP & { userId: string; goingAt?: string; id?: string }>;
   passes?: Array<Pass & { userId: string }>;
 };
 
@@ -851,7 +862,10 @@ async function createSeed(options: TambikeTestSeedOptions = {}): Promise<Backend
   return {
     users,
     events,
-    rsvps: (options.fixture?.rsvps ?? []).map((rsvp) => ({ ...rsvp })),
+    rsvps: (options.fixture?.rsvps ?? []).map((rsvp) => ({
+      ...rsvp,
+      rosterIdentity: rsvp.rosterIdentity ?? "ANONYMOUS",
+    })),
     passes: (options.fixture?.passes ?? []).map((pass) => ({ ...pass })),
     giveaways: [],
     perkRedemptions: [],
@@ -862,7 +876,8 @@ export class TambikeBackend {
   private readonly users = new Map<string, BackendUser>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
-  private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string }>();
+  private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string; id?: string }>();
+  private readonly rosterSettings = new Map<string, boolean>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly motorcycles = new Map<string, BackendMotorcycle>();
   private readonly checkIns = new Map<string, CheckInRecord>();
@@ -4037,13 +4052,26 @@ export class TambikeBackend {
 
     const rsvpKey = `${event.id}:${user.id}`;
     const previousRsvp = this.rsvps.get(rsvpKey);
+    if (
+      input.rosterIdentity !== undefined &&
+      input.rosterIdentity !== "VISIBLE" &&
+      input.rosterIdentity !== "ANONYMOUS"
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
     const now = new Date().toISOString();
-    const rsvp: RSVP & { userId: string; goingAt?: string } = {
+    const rsvp: RSVP & { userId: string; goingAt?: string; id: string } = {
+      id: previousRsvp?.id ?? `rsvp-${randomUUID()}`,
       eventId: event.id,
       userId: user.id,
       status: input.status,
       attendanceType: input.attendanceType,
       clubName: input.clubName?.trim() || user.clubName,
+      rosterIdentity:
+        input.rosterIdentity ??
+        previousRsvp?.rosterIdentity ??
+        user.defaultRosterIdentity ??
+        "ANONYMOUS",
       ...(input.status === "going"
         ? {
             goingAt:
@@ -4079,6 +4107,120 @@ export class TambikeBackend {
     this.audit("PASS_CREATED", user.id, pass.id);
     this.reconcileAutomaticEligibilityForEvent(event.id, user.id);
     return { rsvp, pass: { ...pass } };
+  }
+
+  async configureEventRoster(
+    sessionToken: string,
+    eventId: string,
+    input: { enabled: boolean },
+  ): Promise<EventAttendeeSummary> {
+    const user = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireRosterConfigurator(user, event);
+    if (typeof input?.enabled !== "boolean") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const previousEnabled = this.rosterSettings.get(event.id) ?? false;
+    this.rosterSettings.set(event.id, input.enabled);
+    this.audit("ROSTER_SETTINGS_UPDATED", user.id, event.id, {
+      previousEnabled,
+      nextEnabled: input.enabled,
+    });
+    return this.buildMemoryRosterSummary(event, input.enabled);
+  }
+
+  async listEventAttendees(
+    sessionToken: string | undefined,
+    eventId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<EventAttendeeRosterPage> {
+    const event = this.requireEvent(eventId);
+    const enabled = this.rosterSettings.get(event.id) ?? false;
+    const limit = normalizeRosterPageLimit(options.limit);
+    const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
+    if (enabled) {
+      if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      this.requireUser(sessionToken);
+    }
+
+    const summary = this.buildMemoryRosterSummary(event, enabled);
+    if (!enabled) {
+      return { summary, attendees: [], pageSize: limit };
+    }
+
+    const visible = Array.from(this.rsvps.values())
+      .filter((rsvp) => rsvp.eventId === event.id && rsvp.status === "going" && rsvp.goingAt)
+      .map((rsvp) => ({ rsvp, user: this.users.get(rsvp.userId) }))
+      .filter(
+        (entry): entry is typeof entry & { user: BackendUser } =>
+          Boolean(entry.user) &&
+          classifyRosterEntry({
+            enabled,
+            rosterIdentity: entry.rsvp.rosterIdentity ?? "ANONYMOUS",
+            profileSlug: entry.user?.profileSlug,
+            profileVisibility: entry.user?.profileVisibility ?? "PRIVATE",
+          }) === "VISIBLE",
+      )
+      .sort(
+        (left, right) =>
+          left.rsvp.goingAt!.localeCompare(right.rsvp.goingAt!) ||
+          (left.rsvp.id ?? `${left.rsvp.eventId}:${left.rsvp.userId}`).localeCompare(
+            right.rsvp.id ?? `${right.rsvp.eventId}:${right.rsvp.userId}`,
+          ),
+      );
+    const afterCursor = cursor
+      ? visible.filter(({ rsvp }) => {
+          const id = rsvp.id ?? `${rsvp.eventId}:${rsvp.userId}`;
+          return rsvp.goingAt! > cursor.goingAt ||
+            (rsvp.goingAt === cursor.goingAt && id > cursor.rsvpId);
+        })
+      : visible;
+    const pageEntries = afterCursor.slice(0, limit + 1);
+    const hasNextPage = pageEntries.length > limit;
+    const selected = pageEntries.slice(0, limit);
+    const attendees = selected.map(({ user }) => {
+      const profile = this.toMemberProfileView(user);
+      return {
+        slug: profile.slug,
+        displayName: profile.displayName,
+        area: profile.area,
+        profilePhotoUrl: profile.profilePhotoUrl,
+        motorcycle: profile.motorcycle,
+      };
+    });
+    const last = selected.at(-1)?.rsvp;
+    return {
+      summary,
+      attendees,
+      nextCursor:
+        hasNextPage && last?.goingAt
+          ? encodeRosterCursor({
+              goingAt: last.goingAt,
+              rsvpId: last.id ?? `${last.eventId}:${last.userId}`,
+            })
+          : undefined,
+      pageSize: limit,
+    };
+  }
+
+  async updateEventRosterIdentity(
+    sessionToken: string,
+    eventId: string,
+    input: { rosterIdentity: RosterIdentity },
+  ) {
+    const user = this.requireUser(sessionToken);
+    this.requireEvent(eventId);
+    if (input?.rosterIdentity !== "VISIBLE" && input?.rosterIdentity !== "ANONYMOUS") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const key = `${eventId}:${user.id}`;
+    const rsvp = this.rsvps.get(key);
+    if (!rsvp) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const updated = { ...rsvp, rosterIdentity: input.rosterIdentity };
+    this.rsvps.set(key, updated);
+    this.audit("RSVP_UPDATED", user.id, eventId);
+    return { rosterIdentity: updated.rosterIdentity };
   }
 
   async configureCheckIn(
@@ -7401,6 +7543,12 @@ export class TambikeBackend {
     throw new BackendError("FORBIDDEN", "FORBIDDEN");
   }
 
+  private requireRosterConfigurator(user: BackendUser, event: Event) {
+    if (user.role === "admin") return;
+    if (user.role === "organizer" && user.organizerProfileId === event.organizerId) return;
+    throw new BackendError("FORBIDDEN", "FORBIDDEN");
+  }
+
   private requireCheckInStaff(user: BackendUser, event: Event) {
     if (user.role === "admin") {
       return;
@@ -7434,12 +7582,43 @@ export class TambikeBackend {
     return Array.from(this.users.values()).find((user) => user.email === email) ?? null;
   }
 
-  private audit(action: AuditAction, actorUserId?: string, targetId?: string) {
+  private buildMemoryRosterSummary(event: Event, enabled: boolean): EventAttendeeSummary {
+    const going = Array.from(this.rsvps.values()).filter(
+      (rsvp) => rsvp.eventId === event.id && rsvp.status === "going",
+    );
+    const visibleCount = enabled
+      ? going.filter((rsvp) => {
+          const user = this.users.get(rsvp.userId);
+          return Boolean(rsvp.goingAt) && Boolean(user) && classifyRosterEntry({
+            enabled,
+            rosterIdentity: rsvp.rosterIdentity ?? "ANONYMOUS",
+            profileSlug: user?.profileSlug,
+            profileVisibility: user?.profileVisibility ?? "PRIVATE",
+          }) === "VISIBLE";
+        }).length
+      : 0;
+    return {
+      eventId: event.id,
+      eventTitle: event.title,
+      rosterEnabled: enabled,
+      goingCount: going.length,
+      visibleCount,
+      anonymousCount: going.length - visibleCount,
+    };
+  }
+
+  private audit(
+    action: AuditAction,
+    actorUserId?: string,
+    targetId?: string,
+    metadata?: Record<string, boolean>,
+  ) {
     this.audits.push({
       id: `audit-${randomUUID()}`,
       action,
       actorUserId,
       targetId,
+      metadata,
       createdAt: new Date(),
     });
   }
