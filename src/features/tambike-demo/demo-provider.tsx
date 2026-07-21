@@ -12,6 +12,8 @@ import {
   approvePublishAction,
   configureCheckInAction,
   createEventDraftAction,
+  getMemberProfileAction,
+  getMemberProfileEditorAction,
   issueSelfCheckInQrAction,
   loginWithPasswordAction,
   logoutAction,
@@ -19,7 +21,16 @@ import {
   scanPassAction,
   signUpRiderAction,
   updateProfileAction,
+  updateMemberProfileAction,
+  upsertMotorcycleAction,
 } from "@/server/actions";
+import type {
+  MemberProfileEditorView,
+  MemberProfileView,
+  MotorcycleShowcase,
+  UpdateMemberProfileInput,
+  UpsertMotorcycleInput,
+} from "@/features/member-profiles/types";
 import type {
   AttendanceType,
   CheckInConfiguration,
@@ -48,6 +59,10 @@ interface DemoContextValue {
   signUpRider: (input: SignupInput) => Promise<UserProfile>;
   logout: () => Promise<void>;
   updateProfile: (input: ProfileInput) => Promise<void>;
+  getMemberProfile: (slug: string) => Promise<MemberProfileView>;
+  getMemberProfileEditor: () => Promise<MemberProfileEditorView>;
+  updateMemberProfile: (input: UpdateMemberProfileInput) => Promise<MemberProfileEditorView>;
+  upsertMotorcycle: (input: UpsertMotorcycleInput) => Promise<MotorcycleShowcase>;
   requireLogin: (notice: string) => boolean;
   events: Event[];
   passes: Pass[];
@@ -149,6 +164,17 @@ export function DemoProvider({
     [applyState],
   );
 
+  const getMemberProfile = useCallback((slug: string) => getMemberProfileAction(slug), []);
+  const getMemberProfileEditor = useCallback(() => getMemberProfileEditorAction(), []);
+  const updateMemberProfile = useCallback(
+    (input: UpdateMemberProfileInput) => updateMemberProfileAction(input),
+    [],
+  );
+  const upsertMotorcycle = useCallback(
+    (input: UpsertMotorcycleInput) => upsertMotorcycleAction(input),
+    [],
+  );
+
   const requireLogin = useCallback(
     (notice: string) => {
       if (currentUser) {
@@ -243,6 +269,10 @@ export function DemoProvider({
       signUpRider,
       logout,
       updateProfile,
+      getMemberProfile,
+      getMemberProfileEditor,
+      updateMemberProfile,
+      upsertMotorcycle,
       requireLogin,
       events,
       passes,
@@ -286,6 +316,10 @@ export function DemoProvider({
       setScannerOutcome,
       signUpRider,
       updateProfile,
+      getMemberProfile,
+      getMemberProfileEditor,
+      updateMemberProfile,
+      upsertMotorcycle,
       users,
     ],
   );

@@ -1,5 +1,15 @@
 export type Role = "guest" | "rider" | "organizer" | "admin";
 
+export type {
+  MemberProfileEditorView,
+  MemberProfileView,
+  MotorcycleShowcase,
+  ProfileVisibility,
+  RosterIdentity,
+  UpdateMemberProfileInput,
+  UpsertMotorcycleInput,
+} from "../member-profiles/types";
+
 export type AccountRole = Exclude<Role, "guest">;
 
 export type VerificationStatus =

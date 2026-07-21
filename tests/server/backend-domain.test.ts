@@ -29,14 +29,29 @@ const validDraftInput: CreateEventInput = {
 };
 
 describe("Tambike backend domain rules", () => {
-  test("seeds only the canonical organizer and admin with curated location snapshots", async () => {
+  test("returns the full account list only to an authenticated admin", async () => {
     const backend = await createTambikeTestBackend();
-    const snapshot = backend.getSnapshot();
+    const guestSnapshot = backend.getSnapshot();
+    const rider = await backend.signUpRider({
+      displayName: "Snapshot Rider",
+      email: "snapshot-rider@example.test",
+      password: "password123",
+      area: "Quezon City",
+    });
+    const organizer = await backend.loginWithPassword("organizer@bayanko.ph", "password123");
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
 
-    expect(snapshot.users).toHaveLength(2);
+    expect(guestSnapshot.users).toEqual([]);
+    expect(backend.getSnapshot(rider.sessionToken).users).toEqual([]);
+    expect(backend.getSnapshot(organizer.sessionToken).users).toEqual([]);
+    expect(backend.getSnapshot(rider.sessionToken).currentUser?.email).toBe("snapshot-rider@example.test");
+
+    const snapshot = backend.getSnapshot(admin.sessionToken);
+    expect(snapshot.users).toHaveLength(3);
     expect(snapshot.users.map((user) => user.email).sort()).toEqual([
       "admin@bayanko.ph",
       "organizer@bayanko.ph",
+      "snapshot-rider@example.test",
     ]);
     expect(snapshot.users.find((user) => user.id === TAMBIKE_ORGANIZER_USER_ID)).toMatchObject({
       displayName: "Tambike Organizer",
@@ -54,6 +69,28 @@ describe("Tambike backend domain rules", () => {
       ),
     ).toBe(false);
     expect(snapshot.users.some((user) => user.email.endsWith("@seed.tambike.local"))).toBe(false);
+
+    const suspendedBackend = await createTambikeTestBackend({
+      fixture: {
+        users: [
+          {
+            id: "suspended-admin",
+            displayName: "Suspended Admin",
+            email: "suspended-admin@example.test",
+            password: "password123",
+            role: "admin",
+            verificationStatus: "SUSPENDED",
+            area: "Manila",
+            joinedAt: "July 22, 2026",
+          },
+        ],
+      },
+    });
+    const suspendedAdmin = await suspendedBackend.loginWithPassword(
+      "suspended-admin@example.test",
+      "password123",
+    );
+    expect(suspendedBackend.getSnapshot(suspendedAdmin.sessionToken).users).toEqual([]);
 
     expect(snapshot.events).toHaveLength(24);
     expect(snapshot.events.every((event) => event.organizerId === TAMBIKE_ORGANIZER_PROFILE_ID)).toBe(

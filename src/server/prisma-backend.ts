@@ -83,6 +83,13 @@ import type {
   SignupInput,
   UserProfile,
 } from "@/features/tambike-demo/types";
+import type {
+  MemberProfileEditorView,
+  MemberProfileView,
+  MotorcycleShowcase,
+  UpdateMemberProfileInput,
+  UpsertMotorcycleInput,
+} from "@/features/member-profiles/types";
 import {
   BackendError,
   type AuditAction,
@@ -129,6 +136,14 @@ import {
   assertSafeGiveawayNotification,
   createGiveawayNotificationDraft,
 } from "./giveaways/notifications";
+import {
+  canViewMemberProfile,
+  parseMotorcycleInput,
+  parseProfileInput,
+  profileSlugBase,
+  toMemberProfileEditorView,
+  toMemberProfileView as sanitizeMemberProfile,
+} from "./member-profiles/profile-domain";
 
 type SignupWithPasswordInput = SignupInput & {
   password: string;
@@ -400,7 +415,9 @@ export class PrismaTambikeBackend {
   async getSnapshot(sessionToken?: string) {
     const currentUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
     const [users, events, currentPasses, persistedSettings] = await Promise.all([
-      this.listPublicUsers(),
+      currentUser?.role === "admin" && currentUser.verificationStatus !== "SUSPENDED"
+        ? this.listPublicUsers()
+        : Promise.resolve([]),
       this.listEvents(),
       currentUser ? this.listPassesForUser(currentUser.id) : Promise.resolve([]),
       this.prisma.eventCheckInSettings.findMany(),
@@ -494,6 +511,142 @@ export class PrismaTambikeBackend {
     });
     await this.audit("PROFILE_UPDATED", user.id, "User", user.id);
     return this.toUserProfile(updated);
+  }
+
+  async getMemberProfile(
+    sessionToken: string | undefined,
+    slug: string,
+  ): Promise<MemberProfileView> {
+    const profile = await this.prisma.user.findUnique({
+      where: { profileSlug: slug },
+      include: {
+        organizerProfile: { select: { id: true } },
+        motorcycle: { include: { photos: { orderBy: { position: "asc" } } } },
+      },
+    });
+    if (!profile?.profileSlug) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    const sessionUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
+    const viewer =
+      sessionUser && sessionUser.verificationStatus !== "SUSPENDED"
+        ? { role: sessionUser.role, ownsProfile: sessionUser.id === profile.id }
+        : null;
+    if (!canViewMemberProfile(viewer, profile.profileVisibility)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return this.sanitizeMemberProfile(profile);
+  }
+
+  async getMemberProfileEditor(sessionToken: string): Promise<MemberProfileEditorView> {
+    const sessionUser = await this.requireUser(sessionToken);
+    const profile = await this.prisma.user.findUniqueOrThrow({
+      where: { id: sessionUser.id },
+      include: {
+        organizerProfile: { select: { id: true } },
+        motorcycle: { include: { photos: { orderBy: { position: "asc" } } } },
+      },
+    });
+    const hostedEventCount = profile.organizerProfile
+      ? await this.prisma.event.count({ where: { organizerId: profile.organizerProfile.id } })
+      : undefined;
+    return toMemberProfileEditorView(
+      {
+        ...this.toInternalMemberProfile(profile, hostedEventCount),
+        slug: profile.profileSlug,
+      },
+      profile.defaultRosterIdentity,
+    );
+  }
+
+  async updateMemberProfile(
+    sessionToken: string,
+    input: UpdateMemberProfileInput,
+  ): Promise<MemberProfileEditorView> {
+    const sessionUser = await this.requireUser(sessionToken);
+    let parsed: UpdateMemberProfileInput;
+    try {
+      parsed = parseProfileInput(input);
+    } catch {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const current = await tx.user.findUniqueOrThrow({
+        where: { id: sessionUser.id },
+        select: { profileSlug: true },
+      });
+      let profileSlug = current.profileSlug;
+      if (!profileSlug) {
+        const base = profileSlugBase(parsed.displayName);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${base}, 0))`;
+        profileSlug = await this.allocatePrismaProfileSlug(tx, base);
+      }
+      await tx.user.update({
+        where: { id: sessionUser.id },
+        data: {
+          displayName: parsed.displayName,
+          area: parsed.area,
+          profileBio: parsed.bio ?? null,
+          profileVisibility: parsed.visibility,
+          defaultRosterIdentity: parsed.defaultRosterIdentity,
+          profileSlug,
+        },
+      });
+    });
+    await this.audit("PROFILE_UPDATED", sessionUser.id, "User", sessionUser.id);
+    return this.getMemberProfileEditor(sessionToken);
+  }
+
+  async upsertMotorcycle(
+    sessionToken: string,
+    input: UpsertMotorcycleInput,
+  ): Promise<MotorcycleShowcase> {
+    const user = await this.requireUser(sessionToken);
+    let parsed: UpsertMotorcycleInput;
+    try {
+      parsed = parseMotorcycleInput(input);
+    } catch {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const motorcycle = await this.prisma.motorcycle.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        make: parsed.make,
+        model: parsed.model,
+        year: parsed.year,
+        displacementCc: parsed.displacementCc,
+        nickname: parsed.nickname,
+        description: parsed.description,
+      },
+      update: {
+        make: parsed.make,
+        model: parsed.model,
+        year: parsed.year ?? null,
+        displacementCc: parsed.displacementCc ?? null,
+        nickname: parsed.nickname ?? null,
+        description: parsed.description ?? null,
+      },
+      include: { photos: { orderBy: { position: "asc" } } },
+    });
+    return {
+      make: motorcycle.make,
+      model: motorcycle.model,
+      year: motorcycle.year ?? undefined,
+      displacementCc: motorcycle.displacementCc ?? undefined,
+      nickname: motorcycle.nickname ?? undefined,
+      description: motorcycle.description ?? undefined,
+      photos: motorcycle.photos.map((photo) => ({
+        url: `/media/${encodeURIComponent(photo.mediaId)}`,
+        position: photo.position,
+        width: photo.width,
+        height: photo.height,
+      })),
+    };
   }
 
   /**
@@ -8573,6 +8726,86 @@ export class PrismaTambikeBackend {
         targetId,
       },
     });
+  }
+
+  private async allocatePrismaProfileSlug(tx: Prisma.TransactionClient, base: string) {
+    if (!(await tx.user.findUnique({ where: { profileSlug: base }, select: { id: true } }))) {
+      return base;
+    }
+    for (let suffix = 2; ; suffix += 1) {
+      const candidate = `${base}-${suffix}`;
+      if (!(await tx.user.findUnique({ where: { profileSlug: candidate }, select: { id: true } }))) {
+        return candidate;
+      }
+    }
+  }
+
+  private toInternalMemberProfile(
+    profile: {
+      id: string;
+      email: string;
+      passwordHash: string;
+      verificationStatus: string;
+      profileSlug: string | null;
+      displayName: string;
+      area: string;
+      role: string;
+      profileBio: string | null;
+      profileVisibility: "PUBLIC" | "MEMBERS_ONLY" | "PRIVATE";
+      profilePhotoMediaId: string | null;
+      profilePhotoStorageKey: string | null;
+      createdAt: Date;
+      motorcycle: {
+        id: string;
+        userId: string;
+        make: string;
+        model: string;
+        year: number | null;
+        displacementCc: number | null;
+        nickname: string | null;
+        description: string | null;
+        photos: Array<{
+          id: string;
+          mediaId: string;
+          storageKey: string;
+          position: number;
+          width: number;
+          height: number;
+        }>;
+      } | null;
+    },
+    hostedEventCount?: number,
+  ) {
+    return {
+      userId: profile.id,
+      email: profile.email,
+      passwordHash: profile.passwordHash,
+      verificationStatus: profile.verificationStatus,
+      profilePhotoStorageKey: profile.profilePhotoStorageKey,
+      slug: profile.profileSlug ?? "",
+      displayName: profile.displayName,
+      area: profile.area,
+      role: profile.role as "rider" | "organizer" | "admin",
+      bio: profile.profileBio,
+      visibility: profile.profileVisibility,
+      joinedAt: formatJoinedAt(profile.createdAt),
+      profilePhotoMediaId: profile.profilePhotoMediaId,
+      motorcycle: profile.motorcycle,
+      hostedEventCount,
+    };
+  }
+
+  private async sanitizeMemberProfile(
+    profile: Parameters<PrismaTambikeBackend["toInternalMemberProfile"]>[0],
+  ) {
+    const hostedEventCount = profile.role === "organizer"
+      ? await this.prisma.event.count({
+          where: {
+            organizer: { userId: profile.id },
+          },
+        })
+      : undefined;
+    return sanitizeMemberProfile(this.toInternalMemberProfile(profile, hostedEventCount));
   }
 
   private toUserProfile(user: PrismaUserRecord): UserProfile {

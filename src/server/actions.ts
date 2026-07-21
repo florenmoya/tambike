@@ -14,6 +14,10 @@ import type {
   SelfCheckInCode,
   SignupInput,
 } from "@/features/tambike-demo/types";
+import type {
+  UpdateMemberProfileInput,
+  UpsertMotorcycleInput,
+} from "@/features/member-profiles/types";
 import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 import { BackendError, getTambikeBackend } from "./backend";
 import { clearSessionToken, readSessionToken, setSessionToken } from "./session-cookie";
@@ -48,6 +52,30 @@ export async function updateProfileAction(input: ProfileInput) {
   const token = await readRequiredSessionToken();
   await backend.updateProfile(token, input);
   return snapshot();
+}
+
+export async function getMemberProfileAction(slug: string) {
+  const backend = await getTambikeBackend();
+  const token = await readSessionToken();
+  return backend.getMemberProfile(token ?? undefined, slug);
+}
+
+export async function getMemberProfileEditorAction() {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.getMemberProfileEditor(token);
+}
+
+export async function updateMemberProfileAction(input: UpdateMemberProfileInput) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.updateMemberProfile(token, input);
+}
+
+export async function upsertMotorcycleAction(input: UpsertMotorcycleInput) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.upsertMotorcycle(token, input);
 }
 
 export async function createEventDraftAction(input: CreateEventInput) {

@@ -86,6 +86,15 @@ import type {
   SignupInput,
   UserProfile,
 } from "@/features/tambike-demo/types";
+import type {
+  MemberProfileEditorView,
+  MemberProfileView,
+  MotorcycleShowcase,
+  ProfileVisibility,
+  RosterIdentity,
+  UpdateMemberProfileInput,
+  UpsertMotorcycleInput,
+} from "@/features/member-profiles/types";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
 import {
   buildPublicDrawVerification,
@@ -129,6 +138,14 @@ import {
   createGiveawayNotificationDraft,
   type GiveawayNotificationDraft,
 } from "./giveaways/notifications";
+import {
+  canViewMemberProfile,
+  parseMotorcycleInput,
+  parseProfileInput,
+  profileSlugBase,
+  toMemberProfileEditorView,
+  toMemberProfileView,
+} from "./member-profiles/profile-domain";
 
 export class BackendError extends Error {
   constructor(
@@ -237,6 +254,31 @@ export type AuditAction =
 
 type BackendUser = UserProfile & {
   passwordHash: string;
+  profileSlug?: string;
+  profileBio?: string;
+  profileVisibility?: ProfileVisibility;
+  defaultRosterIdentity?: RosterIdentity;
+  profilePhotoMediaId?: string;
+  profilePhotoStorageKey?: string;
+};
+
+type BackendMotorcycle = {
+  id: string;
+  userId: string;
+  make: string;
+  model: string;
+  year?: number;
+  displacementCc?: number;
+  nickname?: string;
+  description?: string;
+  photos: Array<{
+    id: string;
+    mediaId: string;
+    storageKey: string;
+    position: number;
+    width: number;
+    height: number;
+  }>;
 };
 
 type SessionRecord = {
@@ -813,6 +855,7 @@ export class TambikeBackend {
   private readonly events = new Map<string, Event>();
   private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string }>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
+  private readonly motorcycles = new Map<string, BackendMotorcycle>();
   private readonly checkIns = new Map<string, CheckInRecord>();
   private readonly checkInSettings = new Map<string, CheckInSettings>();
   private readonly selfCheckInSessions = new Map<string, SelfCheckInSession>();
@@ -898,7 +941,10 @@ export class TambikeBackend {
 
     return {
       currentUser: currentUser ? cloneUser(currentUser) : null,
-      users: this.listPublicUsers(),
+      users:
+        currentUser?.role === "admin" && currentUser.verificationStatus !== "SUSPENDED"
+          ? this.listPublicUsers()
+          : [],
       events,
       passes: currentPasses,
       checkInSettings: events.map((event) => ({ ...this.getCheckInSettings(event.id) })),
@@ -972,6 +1018,96 @@ export class TambikeBackend {
     this.users.set(updated.id, updated);
     this.audit("PROFILE_UPDATED", user.id, user.id);
     return cloneUser(updated);
+  }
+
+  async getMemberProfile(
+    sessionToken: string | undefined,
+    slug: string,
+  ): Promise<MemberProfileView> {
+    const profile = Array.from(this.users.values()).find(
+      (candidate) => candidate.profileSlug === slug,
+    );
+    if (!profile?.profileSlug) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const viewer =
+      sessionUser && sessionUser.verificationStatus !== "SUSPENDED"
+        ? { role: sessionUser.role, ownsProfile: sessionUser.id === profile.id }
+        : null;
+    const visibility = profile.profileVisibility ?? "PRIVATE";
+    if (!canViewMemberProfile(viewer, visibility)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+
+    return this.toMemberProfileView(profile);
+  }
+
+  async getMemberProfileEditor(sessionToken: string): Promise<MemberProfileEditorView> {
+    const user = this.requireUser(sessionToken);
+    return toMemberProfileEditorView(
+      {
+        ...this.toInternalMemberProfile(user),
+        slug: user.profileSlug ?? null,
+      },
+      user.defaultRosterIdentity ?? "ANONYMOUS",
+    );
+  }
+
+  async updateMemberProfile(
+    sessionToken: string,
+    input: UpdateMemberProfileInput,
+  ): Promise<MemberProfileEditorView> {
+    const user = this.requireUser(sessionToken);
+    let parsed: UpdateMemberProfileInput;
+    try {
+      parsed = parseProfileInput(input);
+    } catch {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const profileSlug = user.profileSlug ?? this.allocateProfileSlug(parsed.displayName);
+    const updated: BackendUser = {
+      ...user,
+      displayName: parsed.displayName,
+      area: parsed.area,
+      profileSlug,
+      profileBio: parsed.bio,
+      profileVisibility: parsed.visibility,
+      defaultRosterIdentity: parsed.defaultRosterIdentity,
+    };
+    this.users.set(updated.id, updated);
+    this.audit("PROFILE_UPDATED", user.id, user.id);
+    return this.getMemberProfileEditor(sessionToken);
+  }
+
+  async upsertMotorcycle(
+    sessionToken: string,
+    input: UpsertMotorcycleInput,
+  ): Promise<MotorcycleShowcase> {
+    const user = this.requireUser(sessionToken);
+    let parsed: UpsertMotorcycleInput;
+    try {
+      parsed = parseMotorcycleInput(input);
+    } catch {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const existing = this.motorcycles.get(user.id);
+    const motorcycle: BackendMotorcycle = {
+      id: existing?.id ?? `motorcycle-${randomUUID()}`,
+      userId: user.id,
+      make: parsed.make,
+      model: parsed.model,
+      year: parsed.year,
+      displacementCc: parsed.displacementCc,
+      nickname: parsed.nickname,
+      description: parsed.description,
+      photos: existing?.photos ?? [],
+    };
+    this.motorcycles.set(user.id, motorcycle);
+    return this.toMemberProfileView(user).motorcycle!;
   }
 
   async createEventDraft(sessionToken: string, input: CreateEventInput) {
@@ -4223,6 +4359,49 @@ export class TambikeBackend {
       Array.from(this.events.values()).map((event) => this.withAttendanceCounts(event)),
       query,
     );
+  }
+
+  private allocateProfileSlug(displayName: string) {
+    const base = profileSlugBase(displayName);
+    const existing = new Set(
+      Array.from(this.users.values())
+        .map((user) => user.profileSlug)
+        .filter((slug): slug is string => Boolean(slug)),
+    );
+    if (!existing.has(base)) return base;
+    for (let suffix = 2; ; suffix += 1) {
+      const candidate = `${base}-${suffix}`;
+      if (!existing.has(candidate)) return candidate;
+    }
+  }
+
+  private toInternalMemberProfile(user: BackendUser) {
+    return {
+      userId: user.id,
+      email: user.email,
+      passwordHash: user.passwordHash,
+      verificationStatus: user.verificationStatus,
+      profilePhotoStorageKey: user.profilePhotoStorageKey,
+      slug: user.profileSlug ?? "",
+      displayName: user.displayName,
+      area: user.area,
+      role: user.role,
+      bio: user.profileBio,
+      visibility: user.profileVisibility ?? ("PRIVATE" as const),
+      joinedAt: user.joinedAt,
+      profilePhotoMediaId: user.profilePhotoMediaId,
+      motorcycle: this.motorcycles.get(user.id),
+      hostedEventCount:
+        user.role === "organizer" && user.organizerProfileId
+          ? Array.from(this.events.values()).filter(
+              (event) => event.organizerId === user.organizerProfileId,
+            ).length
+          : undefined,
+    };
+  }
+
+  private toMemberProfileView(user: BackendUser) {
+    return toMemberProfileView(this.toInternalMemberProfile(user));
   }
 
   private parseCreateGiveaway(input: unknown): CreateGiveawayInput {
