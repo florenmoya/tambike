@@ -111,6 +111,17 @@ interface DemoContextValue {
 
 const DemoContext = createContext<DemoContextValue | null>(null);
 
+export function synchronizeAccountFromEditor(
+  account: UserProfile,
+  editor: MemberProfileEditorView,
+): UserProfile {
+  return {
+    ...account,
+    displayName: editor.displayName,
+    area: editor.area,
+  };
+}
+
 export function DemoProvider({
   children,
   initialState,
@@ -187,8 +198,18 @@ export function DemoProvider({
   const getMemberProfile = useCallback((slug: string) => getMemberProfileAction(slug), []);
   const getMemberProfileEditor = useCallback(() => getMemberProfileEditorAction(), []);
   const updateMemberProfile = useCallback(
-    (input: UpdateMemberProfileInput) => updateMemberProfileAction(input),
-    [],
+    async (input: UpdateMemberProfileInput) => {
+      const editor = await updateMemberProfileAction(input);
+      if (currentUser) {
+        const updatedAccount = synchronizeAccountFromEditor(currentUser, editor);
+        setCurrentUser(updatedAccount);
+        setUsers((accounts) => accounts.map((account) =>
+          account.id === updatedAccount.id ? updatedAccount : account,
+        ));
+      }
+      return editor;
+    },
+    [currentUser],
   );
   const upsertMotorcycle = useCallback(
     (input: UpsertMotorcycleInput) => upsertMotorcycleAction(input),

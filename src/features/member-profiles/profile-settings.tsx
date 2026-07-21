@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
@@ -35,6 +34,7 @@ import type {
   UpsertMotorcycleInput,
 } from "./types";
 import { MemberMediaUploader } from "./member-media-uploader";
+import { MemberMediaImage } from "./member-profile-screen";
 
 function actionErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -54,6 +54,41 @@ function mediaIdFromUrl(url: string) {
 function optionalNumber(value: FormDataEntryValue | null) {
   const text = String(value ?? "").trim();
   return text ? Number(text) : undefined;
+}
+
+interface ProfileDraft {
+  displayName: string;
+  area: string;
+  bio: string;
+  visibility: ProfileVisibility;
+  defaultRosterIdentity: RosterIdentity;
+}
+
+interface EditorRefreshState {
+  editor: MemberProfileEditorView;
+  draft: ProfileDraft;
+  profileDirty: boolean;
+}
+
+function profileDraftFromEditor(editor: MemberProfileEditorView): ProfileDraft {
+  return {
+    displayName: editor.displayName,
+    area: editor.area,
+    bio: editor.bio ?? "",
+    visibility: editor.visibility,
+    defaultRosterIdentity: editor.defaultRosterIdentity,
+  };
+}
+
+export function reconcileEditorRefresh(
+  state: EditorRefreshState,
+  refreshed: MemberProfileEditorView,
+): EditorRefreshState {
+  return {
+    editor: refreshed,
+    draft: state.profileDirty ? state.draft : profileDraftFromEditor(refreshed),
+    profileDirty: state.profileDirty,
+  };
 }
 
 export function ProfileSettings() {
@@ -106,11 +141,12 @@ function LoadedProfileSettings({
     deleteMemberMedia,
     reorderMotorcyclePhotos,
   } = useDemo();
-  const [editor, setEditor] = useState(initialEditor);
-  const [visibility, setVisibility] = useState<ProfileVisibility>(initialEditor.visibility);
-  const [defaultRosterIdentity, setDefaultRosterIdentity] = useState<RosterIdentity>(
-    initialEditor.defaultRosterIdentity,
-  );
+  const [profileEditorState, setProfileEditorState] = useState<EditorRefreshState>(() => ({
+    editor: initialEditor,
+    draft: profileDraftFromEditor(initialEditor),
+    profileDirty: false,
+  }));
+  const { editor, draft: profileDraft } = profileEditorState;
   const [profileStatus, setProfileStatus] = useState("");
   const [motorcycleStatus, setMotorcycleStatus] = useState("");
   const [mediaStatus, setMediaStatus] = useState("");
@@ -121,21 +157,33 @@ function LoadedProfileSettings({
 
   const refreshEditor = async () => {
     const refreshed = await getMemberProfileEditor();
-    setEditor(refreshed);
+    setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
   };
 
-  const handleProfileSave = async (formData: FormData) => {
+  const updateProfileDraft = (changes: Partial<ProfileDraft>) => {
+    setProfileEditorState((current) => ({
+      ...current,
+      draft: { ...current.draft, ...changes },
+      profileDirty: true,
+    }));
+  };
+
+  const handleProfileSave = async () => {
     setProfilePending(true);
     setProfileStatus("");
     try {
       const saved = await updateMemberProfile({
-        displayName: String(formData.get("displayName") ?? ""),
-        area: String(formData.get("area") ?? ""),
-        bio: String(formData.get("bio") ?? ""),
-        visibility,
-        defaultRosterIdentity,
+        displayName: profileDraft.displayName,
+        area: profileDraft.area,
+        bio: profileDraft.bio,
+        visibility: profileDraft.visibility,
+        defaultRosterIdentity: profileDraft.defaultRosterIdentity,
       });
-      setEditor(saved);
+      setProfileEditorState({
+        editor: saved,
+        draft: profileDraftFromEditor(saved),
+        profileDirty: false,
+      });
       setProfileStatus(saved.isPublished ? "Profile changes saved." : "Private profile saved.");
     } catch (error) {
       setProfileStatus(actionErrorMessage(error));
@@ -171,7 +219,7 @@ function LoadedProfileSettings({
     setMediaStatus("");
     try {
       const refreshed = await deleteMemberMedia(mediaIdFromUrl(url));
-      setEditor(refreshed);
+      setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
       setMediaStatus(`${label} deleted.`);
     } catch (error) {
       setMediaStatus(actionErrorMessage(error));
@@ -191,7 +239,7 @@ function LoadedProfileSettings({
       const refreshed = await reorderMotorcyclePhotos(
         reordered.map((photo) => mediaIdFromUrl(photo.url)),
       );
-      setEditor(refreshed);
+      setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
       setMediaStatus(`Photo ${index + 1} moved ${direction < 0 ? "earlier" : "later"}.`);
     } catch (error) {
       setMediaStatus(actionErrorMessage(error));
@@ -200,7 +248,7 @@ function LoadedProfileSettings({
     }
   };
 
-  const publishLabel = !editor.isPublished && visibility !== "PRIVATE"
+  const publishLabel = !editor.isPublished && profileDraft.visibility !== "PRIVATE"
     ? "Publish profile"
     : "Save profile changes";
 
@@ -232,20 +280,20 @@ function LoadedProfileSettings({
           <CardContent className="profile-fields">
             <div className="profile-field">
               <Label htmlFor="profile-display-name">Display name</Label>
-              <Input id="profile-display-name" name="displayName" required defaultValue={editor.displayName} maxLength={80} />
+              <Input id="profile-display-name" name="displayName" required value={profileDraft.displayName} maxLength={80} onChange={(event) => updateProfileDraft({ displayName: event.currentTarget.value })} />
             </div>
             <div className="profile-field">
               <Label htmlFor="profile-area">Area / city</Label>
-              <Input id="profile-area" name="area" required defaultValue={editor.area} maxLength={80} />
+              <Input id="profile-area" name="area" required value={profileDraft.area} maxLength={80} onChange={(event) => updateProfileDraft({ area: event.currentTarget.value })} />
             </div>
             <div className="profile-field profile-field--wide">
               <Label htmlFor="profile-bio">Garage note</Label>
-              <textarea id="profile-bio" name="bio" defaultValue={editor.bio ?? ""} maxLength={500} rows={5} />
+              <textarea id="profile-bio" name="bio" value={profileDraft.bio} maxLength={500} rows={5} onChange={(event) => updateProfileDraft({ bio: event.currentTarget.value })} />
               <span>Up to 500 characters. Contact details do not belong here.</span>
             </div>
             <div className="profile-field">
               <Label htmlFor="profile-visibility">Profile visibility</Label>
-              <Select value={visibility} onValueChange={(value) => setVisibility(value as ProfileVisibility)}>
+              <Select value={profileDraft.visibility} onValueChange={(value) => updateProfileDraft({ visibility: value as ProfileVisibility })}>
                 <SelectTrigger id="profile-visibility" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="PUBLIC">Public — anyone with the link</SelectItem>
@@ -266,8 +314,8 @@ function LoadedProfileSettings({
             <div className="profile-field profile-field--wide">
               <Label htmlFor="default-roster-identity">Default event roster identity</Label>
               <Select
-                value={defaultRosterIdentity}
-                onValueChange={(value) => setDefaultRosterIdentity(value as RosterIdentity)}
+                value={profileDraft.defaultRosterIdentity}
+                onValueChange={(value) => updateProfileDraft({ defaultRosterIdentity: value as RosterIdentity })}
               >
                 <SelectTrigger id="default-roster-identity" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -296,7 +344,7 @@ function LoadedProfileSettings({
         </CardHeader>
         <CardContent className="profile-avatar-editor">
           {editor.profilePhotoUrl ? (
-            <Image src={editor.profilePhotoUrl} alt="Current avatar photo" width={512} height={512} sizes="112px" />
+            <MemberMediaImage src={editor.profilePhotoUrl} alt="Current avatar photo" width={512} height={512} sizes="112px" />
           ) : (
             <div className="profile-avatar-editor__empty" aria-label="No avatar photo"><UserRound aria-hidden="true" /></div>
           )}
@@ -356,7 +404,7 @@ function LoadedProfileSettings({
             <ol className="profile-photo-editor" aria-label="Ordered motorcycle photos">
               {photos.map((photo, index) => (
                 <li key={photo.url}>
-                  <Image src={photo.url} alt={`Motorcycle photo ${index + 1}`} width={photo.width || 400} height={photo.height || 300} sizes="(max-width: 640px) 45vw, 220px" />
+                  <MemberMediaImage src={photo.url} alt={`Motorcycle photo ${index + 1}`} width={photo.width || 400} height={photo.height || 300} sizes="(max-width: 640px) 45vw, 220px" />
                   <span>Frame {String(index + 1).padStart(2, "0")}</span>
                   <div className="profile-photo-editor__actions">
                     <Button type="button" size="icon-sm" variant="outline" title="Move motorcycle photo earlier" aria-label={`Move motorcycle photo ${index + 1} earlier`} disabled={mediaPending || index === 0} onClick={() => movePhoto(index, -1)}><ArrowLeft aria-hidden="true" /></Button>

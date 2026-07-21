@@ -1,4 +1,4 @@
-import Image from "next/image";
+import Image, { type ImageProps } from "next/image";
 import Link from "next/link";
 import { CalendarDays, MapPin, ShieldCheck } from "lucide-react";
 
@@ -18,13 +18,17 @@ function motorcycleTitle(motorcycle: MotorcycleShowcase) {
   return motorcycle.nickname || `${motorcycle.make} ${motorcycle.model}`;
 }
 
+export function MemberMediaImage(props: ImageProps) {
+  return <Image {...props} unoptimized />;
+}
+
 export function MemberProfileScreen({ profile }: { profile: MemberProfileView }) {
   const motorcycle = profile.motorcycle;
   const photos = motorcycle?.photos.toSorted((left, right) => left.position - right.position) ?? [];
   const hero = photos[0];
 
   return (
-    <main className="garage-profile-page">
+    <section className="garage-profile-page" aria-label={`${profile.displayName} rider garage`}>
       <div className="garage-profile-shell">
         <Link className="garage-profile-back" href="/events">
           Tambike / Rider garages
@@ -34,7 +38,7 @@ export function MemberProfileScreen({ profile }: { profile: MemberProfileView })
           <header className="garage-identity-plate">
             <div className="garage-avatar">
               {profile.profilePhotoUrl ? (
-                <Image
+                <MemberMediaImage
                   src={profile.profilePhotoUrl}
                   alt={`${profile.displayName} profile photo`}
                   width={512}
@@ -79,7 +83,7 @@ export function MemberProfileScreen({ profile }: { profile: MemberProfileView })
 
               {hero ? (
                 <div className="garage-motorcycle-hero">
-                  <Image
+                  <MemberMediaImage
                     src={hero.url}
                     alt={`${profile.displayName}'s ${motorcycle.make} ${motorcycle.model}`}
                     width={1600}
@@ -111,7 +115,7 @@ export function MemberProfileScreen({ profile }: { profile: MemberProfileView })
                 <ol className="garage-contact-strip" aria-label="Motorcycle photo contact strip">
                   {photos.map((photo, index) => (
                     <li key={photo.url}>
-                      <Image
+                      <MemberMediaImage
                         src={photo.url}
                         alt={`${motorcycleTitle(motorcycle)} photo ${index + 1} of ${photos.length}`}
                         width={photo.width || 400}
@@ -133,6 +137,6 @@ export function MemberProfileScreen({ profile }: { profile: MemberProfileView })
           )}
         </article>
       </div>
-    </main>
+    </section>
   );
 }
