@@ -5,7 +5,10 @@ import {
   canViewMemberProfile,
   parseMotorcycleInput,
   parseProfileInput,
+  profileOwnerLockResource,
   profileSlugBase,
+  profileSlugLockResource,
+  resolveStableProfileSlug,
   toMemberProfileView,
 } from "../../src/server/member-profiles/profile-domain";
 import { createTambikeTestBackend } from "../../src/server/testing";
@@ -33,6 +36,62 @@ describe("member profile policy and sanitization", () => {
     expect(profileSlugBase("  Míka Santos — Sample Rider  ")).toBe("mika-santos-sample-rider");
     expect(profileSlugBase("🏍️")).toBe("rider");
     expect(profileSlugBase("x".repeat(80))).toHaveLength(48);
+  });
+
+  test("uses separate namespaced owner and candidate-slug lock resources", () => {
+    expect(profileOwnerLockResource("user-123")).toBe("tambike:member-profile-owner:user-123");
+    expect(profileSlugLockResource("same-rider")).toBe("tambike:member-profile-slug:same-rider");
+  });
+
+  test("acquires the owner lock before re-reading or allocating a first-save slug", async () => {
+    const calls: string[] = [];
+    const slug = await resolveStableProfileSlug("New Rider", {
+      acquireOwnerLock: async () => {
+        calls.push("owner-lock");
+      },
+      readCurrentSlug: async () => {
+        calls.push("read-current");
+        return null;
+      },
+      acquireSlugLock: async (base) => {
+        calls.push(`slug-lock:${base}`);
+      },
+      allocateSlug: async (base) => {
+        calls.push(`allocate:${base}`);
+        return base;
+      },
+    });
+
+    expect(slug).toBe("new-rider");
+    expect(calls).toEqual([
+      "owner-lock",
+      "read-current",
+      "slug-lock:new-rider",
+      "allocate:new-rider",
+    ]);
+  });
+
+  test("returns the authoritative slug after owner locking without reallocating", async () => {
+    const calls: string[] = [];
+    const slug = await resolveStableProfileSlug("Changed Name", {
+      acquireOwnerLock: async () => {
+        calls.push("owner-lock");
+      },
+      readCurrentSlug: async () => {
+        calls.push("read-current");
+        return "original-slug";
+      },
+      acquireSlugLock: async () => {
+        calls.push("unexpected-slug-lock");
+      },
+      allocateSlug: async () => {
+        calls.push("unexpected-allocation");
+        return "wrong";
+      },
+    });
+
+    expect(slug).toBe("original-slug");
+    expect(calls).toEqual(["owner-lock", "read-current"]);
   });
 
   test("normalizes valid profile input and rejects blank or over-limit fields", () => {

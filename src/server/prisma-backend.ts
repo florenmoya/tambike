@@ -140,7 +140,9 @@ import {
   canViewMemberProfile,
   parseMotorcycleInput,
   parseProfileInput,
-  profileSlugBase,
+  profileOwnerLockResource,
+  profileSlugLockResource,
+  resolveStableProfileSlug,
   toMemberProfileEditorView,
   toMemberProfileView as sanitizeMemberProfile,
 } from "./member-profiles/profile-domain";
@@ -574,16 +576,24 @@ export class PrismaTambikeBackend {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const current = await tx.user.findUniqueOrThrow({
-        where: { id: sessionUser.id },
-        select: { profileSlug: true },
+      const profileSlug = await resolveStableProfileSlug(parsed.displayName, {
+        acquireOwnerLock: () => {
+          const resource = profileOwnerLockResource(sessionUser.id);
+          return tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+        },
+        readCurrentSlug: async () =>
+          (
+            await tx.user.findUniqueOrThrow({
+              where: { id: sessionUser.id },
+              select: { profileSlug: true },
+            })
+          ).profileSlug,
+        acquireSlugLock: (base) => {
+          const resource = profileSlugLockResource(base);
+          return tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
+        },
+        allocateSlug: (base) => this.allocatePrismaProfileSlug(tx, base),
       });
-      let profileSlug = current.profileSlug;
-      if (!profileSlug) {
-        const base = profileSlugBase(parsed.displayName);
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${base}, 0))`;
-        profileSlug = await this.allocatePrismaProfileSlug(tx, base);
-      }
       await tx.user.update({
         where: { id: sessionUser.id },
         data: {

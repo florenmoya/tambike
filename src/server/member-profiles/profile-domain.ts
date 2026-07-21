@@ -80,6 +80,32 @@ export function profileSlugBase(displayName: string) {
   );
 }
 
+export function profileOwnerLockResource(userId: string) {
+  return `tambike:member-profile-owner:${userId}`;
+}
+
+export function profileSlugLockResource(slugBase: string) {
+  return `tambike:member-profile-slug:${slugBase}`;
+}
+
+export async function resolveStableProfileSlug(
+  displayName: string,
+  dependencies: {
+    acquireOwnerLock: () => Promise<unknown>;
+    readCurrentSlug: () => Promise<string | null>;
+    acquireSlugLock: (slugBase: string) => Promise<unknown>;
+    allocateSlug: (slugBase: string) => Promise<string>;
+  },
+) {
+  await dependencies.acquireOwnerLock();
+  const currentSlug = await dependencies.readCurrentSlug();
+  if (currentSlug) return currentSlug;
+
+  const base = profileSlugBase(displayName);
+  await dependencies.acquireSlugLock(base);
+  return dependencies.allocateSlug(base);
+}
+
 function invalidInput(): never {
   throw new Error("INVALID_INPUT");
 }

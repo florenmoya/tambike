@@ -751,9 +751,18 @@ function cloneEvent(event: Event): Event {
 }
 
 function cloneUser(user: BackendUser): UserProfile {
-  const { passwordHash, ...profile } = user;
-  void passwordHash;
-  return { ...profile };
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    email: user.email,
+    role: user.role,
+    verificationStatus: user.verificationStatus,
+    area: user.area,
+    bikeModel: user.bikeModel,
+    clubName: user.clubName,
+    joinedAt: user.joinedAt,
+    organizerProfileId: user.organizerProfileId,
+  };
 }
 
 function makeSessionToken() {

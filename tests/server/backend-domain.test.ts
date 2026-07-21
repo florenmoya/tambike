@@ -104,6 +104,56 @@ describe("Tambike backend domain rules", () => {
     expect(backend).not.toHaveProperty("listOrganizerVerifications");
   });
 
+  test("never clones backend-only profile or storage fields into snapshots", async () => {
+    const backend = await createTambikeTestBackend({
+      fixture: {
+        users: [
+          {
+            id: "internal-profile-rider",
+            displayName: "Internal Profile Rider",
+            email: "internal-profile-rider@example.test",
+            password: "password123",
+            role: "rider",
+            verificationStatus: "APPROVED",
+            area: "Davao City",
+            joinedAt: "July 22, 2026",
+            profileSlug: "internal-profile-rider",
+            profileBio: "Backend-only profile state",
+            profileVisibility: "PUBLIC",
+            defaultRosterIdentity: "VISIBLE",
+            profilePhotoMediaId: "opaque-avatar-id",
+            profilePhotoStorageKey: "media/users/internal-profile-rider/avatar/private.webp",
+          } as never,
+        ],
+      },
+    });
+    const rider = await backend.loginWithPassword(
+      "internal-profile-rider@example.test",
+      "password123",
+    );
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+    const riderSnapshot = backend.getSnapshot(rider.sessionToken);
+    const adminSnapshot = backend.getSnapshot(admin.sessionToken);
+
+    expect(riderSnapshot.currentUser?.email).toBe("internal-profile-rider@example.test");
+    const serialized = JSON.stringify({
+      currentUser: riderSnapshot.currentUser,
+      users: adminSnapshot.users,
+    });
+    for (const forbidden of [
+      "passwordHash",
+      "profileSlug",
+      "profileBio",
+      "profileVisibility",
+      "defaultRosterIdentity",
+      "profilePhotoMediaId",
+      "profilePhotoStorageKey",
+      "media/users/internal-profile-rider",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
   test("signs up a rider with an unverified role and a server session", async () => {
     const backend = await createTambikeTestBackend();
 

@@ -118,4 +118,63 @@ describe("Prisma member profile visibility", () => {
       await closePrismaIntegrationClientPair(rawClients);
     }
   });
+
+  test("serializes concurrent first saves for the same owner and preserves one slug", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl);
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+    const suffix = randomUUID();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, { suffix, riderCount: 2 });
+      const [sameNameOwner, differentNameOwner] = fixture.riders;
+      if (!sameNameOwner || !differentNameOwner) throw new Error("PROFILE_FIXTURE_RIDERS_MISSING");
+
+      const sameName = `Same Owner ${suffix}`;
+      const sameNameBase = profileSlugBase(sameName);
+      const sameNameResults = await Promise.all([
+        backendClients.primary.backend.updateMemberProfile(sameNameOwner.sessionToken, {
+          ...profileInput,
+          displayName: sameName,
+        }),
+        backendClients.secondary.backend.updateMemberProfile(sameNameOwner.sessionToken, {
+          ...profileInput,
+          displayName: sameName,
+        }),
+      ]);
+      expect(sameNameResults.map((result) => result.slug)).toEqual([sameNameBase, sameNameBase]);
+      await expect(
+        rawClients.primary.user.findUniqueOrThrow({
+          where: { id: sameNameOwner.userId },
+          select: { profileSlug: true },
+        }),
+      ).resolves.toEqual({ profileSlug: sameNameBase });
+
+      const firstName = `First Owner Name ${suffix}`;
+      const secondName = `Second Owner Name ${suffix}`;
+      const allowedSlugs = [profileSlugBase(firstName), profileSlugBase(secondName)];
+      const differentNameResults = await Promise.all([
+        backendClients.primary.backend.updateMemberProfile(differentNameOwner.sessionToken, {
+          ...profileInput,
+          displayName: firstName,
+        }),
+        backendClients.secondary.backend.updateMemberProfile(differentNameOwner.sessionToken, {
+          ...profileInput,
+          displayName: secondName,
+        }),
+      ]);
+      expect(new Set(differentNameResults.map((result) => result.slug)).size).toBe(1);
+      expect(allowedSlugs).toContain(differentNameResults[0]?.slug);
+      const persisted = await rawClients.primary.user.findUniqueOrThrow({
+        where: { id: differentNameOwner.userId },
+        select: { profileSlug: true },
+      });
+      expect(persisted.profileSlug).toBe(differentNameResults[0]?.slug);
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
 });
