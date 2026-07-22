@@ -30,7 +30,7 @@ Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
 
 Resources:
-  SmokeMemberMediaBucket:
+  Bucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -127,8 +127,8 @@ Resources:
                   - s3:GetObject
                   - s3:DeleteObject
                 Resource:
-                  - !Sub ${SmokeMemberMediaBucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*
-                  - !Sub ${SmokeMemberMediaBucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*
+                  - !Sub ${Bucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*
+                  - !Sub ${Bucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*
       Tags:
         - Key: Application
           Value: tambike
@@ -145,7 +145,7 @@ Resources:
 Outputs:
   SmokeBucketName:
     Description: Set as MEMBER_MEDIA_SMOKE_BUCKET_NAME for this disposable smoke run.
-    Value: !Ref SmokeMemberMediaBucket
+    Value: !Ref Bucket
   SmokeRoleArn:
     Description: Set as MEMBER_MEDIA_SMOKE_ROLE_ARN for this disposable smoke run.
     Value: !GetAtt SmokeVercelMemberMediaRole.Arn

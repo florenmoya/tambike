@@ -241,15 +241,15 @@ aws s3api delete-bucket --bucket $SmokeBucketName --region ap-southeast-1
 
 ## Repeat runs and output-less failed-create recovery
 
-The smoke bucket intentionally has no fixed `BucketName`. CloudFormation generates a unique physical name from the `tambike-member-media-nonprod` stack and `SmokeMemberMediaBucket` logical resource, so a completed stack deletion followed by a fresh `SmokeRunId` supports the next run without a global-name collision. Always use a new run ID and deploy the same `$SmokeStackName` only after the prior stack is deleted.
+The smoke bucket intentionally has no fixed `BucketName`. CloudFormation generates a unique physical name from the `tambike-member-media-nonprod` stack and short `Bucket` logical resource, preserving the delimiter-bounded `nonprod` marker that the smoke safety check requires. A completed stack deletion followed by a fresh `SmokeRunId` supports the next run without a global-name collision. Always use a new run ID and deploy the same `$SmokeStackName` only after the prior stack is deleted.
 
-If create fails before stack outputs are available, do not guess a bucket name or scan the account. This output-less failed-create recovery is bounded by the same stack-derived `SmokeMemberMediaBucket` physical ID and the exact `SmokeRunId` tag supplied to that failed deployment:
+If create fails before stack outputs are available, do not guess a bucket name or scan the account. This output-less failed-create recovery is bounded by the same stack-derived `Bucket` physical ID and the exact `SmokeRunId` tag supplied to that failed deployment:
 
 ```powershell
 $FailedBucketName = aws cloudformation describe-stack-resources `
   --region ap-southeast-1 `
   --stack-name $SmokeStackName `
-  --query "StackResources[?LogicalResourceId=='SmokeMemberMediaBucket'].PhysicalResourceId | [0]" `
+  --query "StackResources[?LogicalResourceId=='Bucket'].PhysicalResourceId | [0]" `
   --output text
 if ([string]::IsNullOrWhiteSpace($FailedBucketName) -or $FailedBucketName -eq "None") {
   throw "SMOKE_REFUSED: no stack-derived smoke bucket is available for recovery"

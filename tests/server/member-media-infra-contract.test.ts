@@ -37,7 +37,7 @@ describe("private member media infrastructure contract", () => {
     const productionTemplate = source("infra/aws/tambike-member-media.yaml");
     const guide = source("docs/deployment/member-media-aws-oidc.md");
 
-    expect(template).toMatch(/SmokeMemberMediaBucket:[\s\S]*DeletionPolicy: Retain[\s\S]*UpdateReplacePolicy: Retain/);
+    expect(template).toMatch(/\n  Bucket:[\s\S]*DeletionPolicy: Retain[\s\S]*UpdateReplacePolicy: Retain/);
     expect(template).toContain("VercelTeamSlug:");
     expect(template).toContain("VercelProjectName:");
     expect(template).toContain("ExistingOidcProviderArn:");
@@ -66,10 +66,10 @@ describe("private member media infrastructure contract", () => {
     expect(template).not.toMatch(/^\s*Action:\s*["']?\*["']?\s*$/m);
     expect(template).toContain("/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*");
     expect(template).toContain("/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*");
-    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/tmp/*");
-    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/media/*");
-    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/*");
-    expect(template).toMatch(/Outputs:[\s\S]*SmokeBucketName:[\s\S]*Value: !Ref SmokeMemberMediaBucket/);
+    expect(template).not.toContain("${Bucket.Arn}/tmp/*");
+    expect(template).not.toContain("${Bucket.Arn}/media/*");
+    expect(template).not.toContain("${Bucket.Arn}/*");
+    expect(template).toMatch(/Outputs:[\s\S]*SmokeBucketName:[\s\S]*Value: !Ref Bucket/);
     expect(template).toMatch(/SmokeRoleArn:[\s\S]*Value: !GetAtt SmokeVercelMemberMediaRole\.Arn/);
     for (const setting of [
       "BlockPublicAcls: true",
@@ -115,11 +115,21 @@ describe("private member media infrastructure contract", () => {
     expect(guide).toContain("describe-stack-resources");
     expect(guide).toContain("SmokeRunId");
     expect(guide).toContain("output-less failed-create recovery");
+    expect(guide).toContain("LogicalResourceId=='Bucket'");
     expect(guide).toContain("raw anonymous request against the exact finalized object");
     expect(productionTemplate).not.toContain("environment:development");
     expect(productionTemplate).not.toContain("nonprod");
     expect(productionTemplate).toContain("!Sub ${MemberMediaBucket.Arn}/tmp/*");
     expect(productionTemplate).toContain("!Sub ${MemberMediaBucket.Arn}/media/*");
+  });
+
+  test("uses a short bucket logical ID so the generated nonprod name preserves its delimiter-bounded safety marker", () => {
+    const template = source("infra/aws/tambike-member-media-smoke.yaml");
+
+    expect(template).toMatch(/^  Bucket:\s*$/m);
+    expect(template).not.toContain("SmokeMemberMediaBucket:");
+    expect(template).toContain("${Bucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*");
+    expect(template).toContain("${Bucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*");
   });
 
   test("defines a region-independent, private, encrypted, versioned bucket", () => {
