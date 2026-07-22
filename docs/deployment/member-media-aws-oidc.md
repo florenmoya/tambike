@@ -40,7 +40,7 @@ Confirm all of these before continuing:
 4. `vercel project inspect` reports the exact `VercelProjectName` in that team.
 5. The project's Security settings use team issuer mode.
 
-Do not run `vercel link`, `vercel env pull`, or another project-scoped command from an unlinked checkout merely to discover values. Those commands can create or change local linkage. Link only as a separate, explicitly approved operation after the expected team and project are known.
+Do not run `vercel link`, `vercel env pull`, `vercel env run`, or another project-scoped command from an unlinked checkout merely to discover values. Those commands can create or change local linkage. Link only as a separate, explicitly approved operation after the expected team and project are known.
 
 ## Validate and deploy the CloudFormation stack
 
