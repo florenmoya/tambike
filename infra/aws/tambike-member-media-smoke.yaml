@@ -35,7 +35,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub tambike-nonprod-smoke-${AWS::AccountId}-${AWS::Region}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -72,6 +71,8 @@ Resources:
           Value: nonprod-smoke
         - Key: SmokeRunId
           Value: !Ref SmokeRunId
+        - Key: StackName
+          Value: !Ref AWS::StackName
 
   VercelOidcProvider:
     Type: AWS::IAM::OIDCProvider
@@ -135,6 +136,11 @@ Resources:
           Value: nonprod-smoke
         - Key: SmokeRunId
           Value: !Ref SmokeRunId
+        - Key: OidcProviderArn
+          Value: !If
+            - CreateOidcProvider
+            - !Ref VercelOidcProvider
+            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/${VercelTeamSlug}
 
 Outputs:
   SmokeBucketName:

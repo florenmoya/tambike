@@ -118,6 +118,7 @@ function dependencies(
   return {
     store: s3.store,
     fetch: s3.post as typeof fetch,
+    anonymousFetch: (async () => new Response(null, { status: 403 })) as typeof fetch,
     createUuid: uuids(),
     now: () => fixedNow,
     persistence,
@@ -145,6 +146,42 @@ describe("member media real S3 smoke core", () => {
     expect(new Set(s3.deleteKeys)).toEqual(new Set([tempKey, mediaKey]));
     expect([...s3.objects]).toEqual([]);
     expect(result.media).toEqual({ mediaId: "media-id", width: 512, height: 512 });
+  });
+
+  test("proves the actual finalized raw object rejects an anonymous fetch before cleanup", async () => {
+    const s3 = fakeS3();
+    const anonymousFetch = vi.fn(async () => new Response(null, { status: 403 }));
+
+    const result = await runMemberMediaS3Smoke(validEnvironment, {
+      ...dependencies(s3),
+      anonymousFetch: anonymousFetch as typeof fetch,
+    });
+
+    const mediaKey = "smoke/member-media/20260722050000-run-id/media/users/smoke-user-id/avatar/media-id.webp";
+    expect(result.rawObjectKey).toBe(mediaKey);
+    expect(result.rawObjectUrl).toBe(
+      `https://tambike-member-media-smoke.s3.ap-southeast-1.amazonaws.com/${mediaKey}`,
+    );
+    expect(anonymousFetch).toHaveBeenCalledWith(result.rawObjectUrl, { method: "GET" });
+    expect(new Set(s3.deleteKeys)).toEqual(new Set([
+      "smoke/member-media/20260722050000-run-id/tmp/users/smoke-user-id/upload-id",
+      mediaKey,
+    ]));
+  });
+
+  test.each([200, 404, 500])("fails and still cleans exact keys when anonymous raw fetch returns %i", async (status) => {
+    const s3 = fakeS3();
+    const anonymousFetch = vi.fn(async () => new Response(null, { status }));
+
+    await expect(runMemberMediaS3Smoke(validEnvironment, {
+      ...dependencies(s3),
+      anonymousFetch: anonymousFetch as typeof fetch,
+    })).rejects.toThrow(`anonymous raw S3 object fetch returned ${status}`);
+
+    expect(new Set(s3.deleteKeys)).toEqual(new Set([
+      "smoke/member-media/20260722050000-run-id/tmp/users/smoke-user-id/upload-id",
+      "smoke/member-media/20260722050000-run-id/media/users/smoke-user-id/avatar/media-id.webp",
+    ]));
   });
 
   test("registers a final key before a put that times out after S3 accepted it", async () => {

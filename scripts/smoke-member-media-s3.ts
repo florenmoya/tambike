@@ -46,6 +46,7 @@ export interface SmokePersistence extends MemberMediaPersistence {
 export interface SmokeRunDependencies {
   store?: MemberMediaStore;
   fetch?: typeof fetch;
+  anonymousFetch?: typeof fetch;
   createUuid?: () => string;
   now?: () => Date;
   persistence?: SmokePersistence;
@@ -248,6 +249,24 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function rawS3ObjectUrl(config: SmokeConfiguration, key: string) {
+  const encodedKey = key.split("/").map(encodeURIComponent).join("/");
+  return `https://${config.bucketName}.s3.${config.region}.amazonaws.com/${encodedKey}`;
+}
+
+async function requireAnonymousRawObjectDenied(
+  config: SmokeConfiguration,
+  key: string,
+  fetcher: typeof fetch,
+) {
+  const url = rawS3ObjectUrl(config, key);
+  const response = await fetcher(url, { method: "GET" });
+  if (response.status !== 403) {
+    throw new Error(`anonymous raw S3 object fetch returned ${response.status}; expected 403`);
+  }
+  return url;
+}
+
 export async function runMemberMediaS3Smoke(
   env: SmokeEnvironment = runtimeSmokeEnvironment(),
   dependencies: SmokeRunDependencies = {},
@@ -256,6 +275,7 @@ export async function runMemberMediaS3Smoke(
   const now = dependencies.now ?? (() => new Date());
   const createUuid = dependencies.createUuid ?? randomUUID;
   const fetcher = dependencies.fetch ?? fetch;
+  const anonymousFetcher = dependencies.anonymousFetch ?? fetch;
   const runId = config.runId ?? `${now().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}-${createUuid()}`;
   const runPrefix = `${config.basePrefix}/${runId}/`;
   const ownedKeys = new Set<string>();
@@ -267,7 +287,7 @@ export async function runMemberMediaS3Smoke(
   const lifecycle = createMemberMediaLifecycleService({ store, now, createUuid });
   let primaryError: unknown;
   let result:
-    | { mediaId: string; width: number; height: number }
+    | { mediaId: string; width: number; height: number; rawObjectKey: string; rawObjectUrl: string }
     | undefined;
 
   try {
@@ -296,11 +316,21 @@ export async function runMemberMediaS3Smoke(
       throw new Error("normalized object is not a metadata-free 512x512 WebP avatar");
     }
 
+    const rawObjectKey = physicalRunKey(runPrefix, descriptor.storageKey);
+    requireOwnedRunKey(runPrefix, rawObjectKey, ownedKeys);
+    const rawObjectUrl = await requireAnonymousRawObjectDenied(
+      config,
+      rawObjectKey,
+      anonymousFetcher,
+    );
+
     await lifecycle.delete(userId, finalized.mediaId, persistence);
     result = {
       mediaId: finalized.mediaId,
       width: metadata.width,
       height: metadata.height,
+      rawObjectKey,
+      rawObjectUrl,
     };
   } catch (error) {
     primaryError = error;
@@ -337,7 +367,13 @@ export async function runMemberMediaS3Smoke(
     runPrefix,
     uploadedKeys: [...ownedKeys],
     deletedKeys: [...deletedKeys],
-    media: result,
+    media: {
+      mediaId: result.mediaId,
+      width: result.width,
+      height: result.height,
+    },
+    rawObjectKey: result.rawObjectKey,
+    rawObjectUrl: result.rawObjectUrl,
   };
 }
 

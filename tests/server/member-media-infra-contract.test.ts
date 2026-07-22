@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -12,6 +13,25 @@ function source(path: string) {
 }
 
 describe("private member media infrastructure contract", () => {
+  test("documents an executable splatted Vercel command that injects the smoke token without printing it", () => {
+    const guide = source("docs/deployment/member-media-aws-oidc.md");
+    const vercelArgs = "@('env', 'run', '--environment', 'preview', '--project', 'tambike', '--', 'npm', 'run', 'smoke:member-media-s3')";
+
+    expect(guide).toContain(`$VercelArgs = ${vercelArgs}`);
+    expect(guide).toContain("& vercel @VercelArgs");
+    expect(guide).not.toContain("vercel env pull --environment=preview");
+    expect(guide).not.toContain("$env:VERCEL_OIDC_TOKEN =");
+
+    const command = [
+      `$VercelArgs = ${vercelArgs}`,
+      '[Console]::Write(($VercelArgs -join "|"))',
+    ].join("; ");
+    const renderedArgs = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      encoding: "utf8",
+    }).trim();
+    expect(renderedArgs).toBe("env|run|--environment|preview|--project|tambike|--|npm|run|smoke:member-media-s3");
+  });
+
   test("ships a disposable non-production smoke stack with exact development OIDC and run-bounded access", () => {
     const template = source("infra/aws/tambike-member-media-smoke.yaml");
     const productionTemplate = source("infra/aws/tambike-member-media.yaml");
@@ -28,8 +48,9 @@ describe("private member media infrastructure contract", () => {
     expect(template).not.toContain("environment:production");
     expect(template).not.toContain("environment:preview");
     expect(template).not.toContain("project:*");
-    expect(template).toContain("tambike-nonprod-smoke");
+    expect(template).toContain("Value: !Ref AWS::StackName");
     expect(template).toContain("tb-nonprod-${SmokeRunId}");
+    expect(template).not.toMatch(/^\s*BucketName:/m);
     expect(template).toMatch(/VercelOidcProvider:[\s\S]*DeletionPolicy: Retain[\s\S]*UpdateReplacePolicy: Retain/);
     expect(template).toContain("s3:PutObject");
     expect(template).toContain("s3:GetObject");
@@ -70,19 +91,31 @@ describe("private member media infrastructure contract", () => {
     );
     expect(smokeTrust).toContain("oidc.vercel.com/${VercelTeamSlug}:aud");
     expect(smokeTrust).not.toContain("!Ref ExistingOidcProviderArn");
+    const smokeRole = template.slice(
+      template.indexOf("SmokeVercelMemberMediaRole:"),
+      template.indexOf("Outputs:"),
+    );
+    expect(smokeRole).toMatch(/OidcProviderArn:[\s\S]*!If[\s\S]*!Ref VercelOidcProvider[\s\S]*oidc-provider\/oidc\.vercel\.com\/\$\{VercelTeamSlug\}/);
     expect(guide).toContain("tambike-member-media-nonprod");
-    expect(guide).toContain("vercel env pull --environment=preview");
+    expect(guide).toContain("vercel env run");
     expect(guide).toContain("VERCEL_OIDC_TOKEN");
     expect(guide).toContain("MEMBER_MEDIA_SMOKE_BUCKET_NAME");
     expect(guide).toContain("MEMBER_MEDIA_SMOKE_ROLE_ARN");
     expect(guide).toContain("smoke/member-media");
     expect(guide).toContain("I_UNDERSTAND_THIS_USES_A_TEST_BUCKET");
-    expect(guide).toContain("https://$SmokeBucketName.s3.ap-southeast-1.amazonaws.com/");
+    const smokeScript = source("scripts/smoke-member-media-s3.ts");
+    expect(smokeScript).toContain("requireAnonymousRawObjectDenied");
+    expect(smokeScript).toContain("rawS3ObjectUrl");
     expect(guide).toContain("aws cloudformation delete-stack");
     expect(guide).toContain("aws s3 rm \"s3://$SmokeBucketName\" --recursive");
     expect(guide).toContain("retained Vercel OIDC provider");
     expect(guide).toContain("retained smoke bucket");
     expect(guide).toContain("ExistingOidcProviderArn=$SmokeOidcProviderArn");
+    expect(guide).toContain("& vercel @VercelArgs");
+    expect(guide).toContain("describe-stack-resources");
+    expect(guide).toContain("SmokeRunId");
+    expect(guide).toContain("output-less failed-create recovery");
+    expect(guide).toContain("raw anonymous request against the exact finalized object");
     expect(productionTemplate).not.toContain("environment:development");
     expect(productionTemplate).not.toContain("nonprod");
     expect(productionTemplate).toContain("!Sub ${MemberMediaBucket.Arn}/tmp/*");

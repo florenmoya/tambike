@@ -156,6 +156,7 @@ Run this from the verified Tambike project context described above. Generate the
 ```powershell
 $VercelTeamSlug = "florens-projects-aee3ca73"
 $VercelProjectName = "tambike"
+$SmokeStackName = "tambike-member-media-nonprod"
 $SmokeBasePrefix = "member-media"
 $SmokeRunId = "$(Get-Date -Format yyyyMMddHHmmss)-$([guid]::NewGuid().ToString())"
 $Caller = aws sts get-caller-identity | ConvertFrom-Json
@@ -178,7 +179,7 @@ if ($LASTEXITCODE -eq 0) {
 
 aws cloudformation deploy `
   --region ap-southeast-1 `
-  --stack-name tambike-member-media-nonprod `
+  --stack-name $SmokeStackName `
   --template-file infra/aws/tambike-member-media-smoke.yaml `
   --capabilities CAPABILITY_NAMED_IAM `
   --parameter-overrides `
@@ -191,7 +192,7 @@ aws cloudformation deploy `
 
 $SmokeOutputs = aws cloudformation describe-stacks `
   --region ap-southeast-1 `
-  --stack-name tambike-member-media-nonprod `
+  --stack-name $SmokeStackName `
   --query "Stacks[0].Outputs" | ConvertFrom-Json
 $SmokeBucketName = ($SmokeOutputs | Where-Object OutputKey -eq "SmokeBucketName").OutputValue
 $SmokeRoleArn = ($SmokeOutputs | Where-Object OutputKey -eq "SmokeRoleArn").OutputValue
@@ -203,43 +204,26 @@ if (-not $SmokeBucketName -or -not $SmokeRoleArn -or -not $SmokeOidcProviderArn)
 
 When no provider exists, the smoke stack creates it with `DeletionPolicy: Retain`. The retained Vercel OIDC provider survives deletion of the disposable stack, and production must use `ExistingOidcProviderArn=$SmokeOidcProviderArn` as shown above. This ownership rule means smoke-stack deletion cannot remove a provider later reused by production.
 
-Obtain the short-lived development token through Vercel without printing the token. The preview environment pull has been verified to provide the exact development subject `owner:florens-projects-aee3ca73:project:tambike:environment:development`; do not decode or echo it:
+Obtain the short-lived development token through Vercel without writing, decoding, or printing it. The splatted `vercel env run` invocation below has been verified to inject an unquoted `VERCEL_OIDC_TOKEN` with the exact development subject `owner:florens-projects-aee3ca73:project:tambike:environment:development`:
 
 ```powershell
-vercel env pull --environment=preview --scope $VercelTeamSlug .vercel/member-media-smoke.env
-$TokenLine = Get-Content .vercel/member-media-smoke.env | Where-Object { $_ -like "VERCEL_OIDC_TOKEN=*" } | Select-Object -First 1
-if (-not $TokenLine) { throw "SMOKE_REFUSED: VERCEL_OIDC_TOKEN was not supplied by Vercel" }
-$env:VERCEL_OIDC_TOKEN = $TokenLine.Substring("VERCEL_OIDC_TOKEN=".Length)
-Remove-Variable TokenLine
-
 $env:AWS_REGION = "ap-southeast-1"
 $env:MEMBER_MEDIA_SMOKE_BUCKET_NAME = $SmokeBucketName
 $env:MEMBER_MEDIA_SMOKE_ROLE_ARN = $SmokeRoleArn
 $env:MEMBER_MEDIA_SMOKE_PREFIX = "smoke/member-media"
 $env:MEMBER_MEDIA_SMOKE_RUN_ID = $SmokeRunId
 $env:MEMBER_MEDIA_SMOKE_CONFIRM = "I_UNDERSTAND_THIS_USES_A_TEST_BUCKET"
-npm run smoke:member-media-s3
+$VercelArgs = @('env', 'run', '--environment', 'preview', '--project', 'tambike', '--', 'npm', 'run', 'smoke:member-media-s3')
+& vercel @VercelArgs
 ```
 
-The smoke script accepts only the exact timestamp-plus-RFC-4122-UUID run namespace. Its test role has only `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for `smoke/<base>/<run>/tmp/*` and `smoke/<base>/<run>/media/*`; it has no bucket listing, production `tmp/*` or `media/*`, or other AWS action.
-
-Prove the bucket remains private by checking a raw S3 object URL without credentials; the response must be `403`, not a successful object response:
-
-```powershell
-$RawUrl = "https://$SmokeBucketName.s3.ap-southeast-1.amazonaws.com/smoke/member-media/$SmokeRunId/media/raw-access-proof"
-try {
-  Invoke-WebRequest -Uri $RawUrl -ErrorAction Stop
-  throw "SMOKE_REFUSED: raw S3 URL was unexpectedly accessible"
-} catch {
-  if ($_.Exception.Response.StatusCode.value__ -ne 403) { throw }
-}
-```
+The smoke script accepts only the exact timestamp-plus-RFC-4122-UUID run namespace. Its test role has only `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for `smoke/<base>/<run>/tmp/*` and `smoke/<base>/<run>/media/*`; it has no bucket listing, production `tmp/*` or `media/*`, or other AWS action. Before cleanup, the script sends a raw anonymous request against the exact finalized object it just stored and requires S3 to return `403`; a `200` or any other status fails the gate while exact-key cleanup still runs.
 
 After the smoke, delete only the disposable stack. The smoke bucket is retained because a versioned bucket can retain previous object versions and delete markers after the script has cleaned its exact current keys; CloudFormation cannot safely empty those versions. The retained smoke bucket is still dedicated and disposable. If it needs removal after the stack is gone, empty only this output-derived dedicated test bucket and delete that bucket explicitly. Never substitute a production bucket name:
 
 ```powershell
-aws cloudformation delete-stack --region ap-southeast-1 --stack-name tambike-member-media-nonprod
-aws cloudformation wait stack-delete-complete --region ap-southeast-1 --stack-name tambike-member-media-nonprod
+aws cloudformation delete-stack --region ap-southeast-1 --stack-name $SmokeStackName
+aws cloudformation wait stack-delete-complete --region ap-southeast-1 --stack-name $SmokeStackName
 
 # The retained smoke bucket cleanup below is allowed only after confirming
 # $SmokeBucketName came from SmokeBucketName above.
@@ -253,6 +237,31 @@ if ($DeleteVersions.Count -gt 0) {
   aws s3api delete-objects --bucket $SmokeBucketName --delete $DeletePayload
 }
 aws s3api delete-bucket --bucket $SmokeBucketName --region ap-southeast-1
+```
+
+## Repeat runs and output-less failed-create recovery
+
+The smoke bucket intentionally has no fixed `BucketName`. CloudFormation generates a unique physical name from the `tambike-member-media-nonprod` stack and `SmokeMemberMediaBucket` logical resource, so a completed stack deletion followed by a fresh `SmokeRunId` supports the next run without a global-name collision. Always use a new run ID and deploy the same `$SmokeStackName` only after the prior stack is deleted.
+
+If create fails before stack outputs are available, do not guess a bucket name or scan the account. This output-less failed-create recovery is bounded by the same stack-derived `SmokeMemberMediaBucket` physical ID and the exact `SmokeRunId` tag supplied to that failed deployment:
+
+```powershell
+$FailedBucketName = aws cloudformation describe-stack-resources `
+  --region ap-southeast-1 `
+  --stack-name $SmokeStackName `
+  --query "StackResources[?LogicalResourceId=='SmokeMemberMediaBucket'].PhysicalResourceId | [0]" `
+  --output text
+if ([string]::IsNullOrWhiteSpace($FailedBucketName) -or $FailedBucketName -eq "None") {
+  throw "SMOKE_REFUSED: no stack-derived smoke bucket is available for recovery"
+}
+$FailedBucketTags = (aws s3api get-bucket-tagging --bucket $FailedBucketName | ConvertFrom-Json).TagSet
+if (-not ($FailedBucketTags | Where-Object { $_.Key -eq "SmokeRunId" -and $_.Value -eq $SmokeRunId })) {
+  throw "SMOKE_REFUSED: recovered bucket does not have the exact failed smoke run tag"
+}
+$SmokeBucketName = $FailedBucketName
+
+# Only after both the logical resource and exact SmokeRunId tag checks above,
+# run the retained smoke bucket cleanup block from the previous section.
 ```
 
 Do not delete the retained Vercel OIDC provider with the smoke stack. Once production has adopted its exact ARN, treat it as shared team infrastructure and manage it only through an explicitly approved lifecycle change. The retained smoke bucket is not shared infrastructure: remove it only through the output-derived cleanup above.
