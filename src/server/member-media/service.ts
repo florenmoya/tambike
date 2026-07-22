@@ -60,9 +60,26 @@ export interface MemberMediaPersistence {
     limit: number;
     now: Date;
     claimExpiresAt: Date;
-  }): Promise<Array<{ id: string; storageKey: string; claimToken: string }>>;
+  }): Promise<Array<{
+    id: string;
+    storageKey: string;
+    claimToken: string;
+    attemptCount: number;
+  }>>;
   completeCleanup(id: string, claimToken: string): Promise<void>;
-  failCleanup(id: string, claimToken: string, attemptedAt: Date): Promise<void>;
+  failCleanup(
+    id: string,
+    claimToken: string,
+    attemptedAt: Date,
+    retryAt: Date,
+  ): Promise<void>;
+}
+
+export interface MemberMediaCleanupResult {
+  batches: number;
+  claimed: number;
+  deleted: number;
+  failed: number;
 }
 
 export interface AuthorizedMemberMediaDescriptor {
@@ -128,6 +145,19 @@ async function deleteIdempotently(store: MemberMediaStore, key: string) {
 const ABANDONED_FINALIZE_CLEANUP_DELAY_MS = 15 * 60 * 1_000;
 const CLEANUP_CLAIM_LEASE_MS = 60 * 1_000;
 const CLEANUP_BATCH_LIMIT = 10;
+const CLEANUP_MAX_BATCHES = 5;
+const CLEANUP_RETRY_BASE_DELAY_MS = 60 * 1_000;
+const CLEANUP_RETRY_MAX_DELAY_MS = 24 * 60 * 60 * 1_000;
+
+export function memberMediaCleanupRetryDelayMs(attemptNumber: number) {
+  if (!Number.isInteger(attemptNumber) || attemptNumber < 1) {
+    throw new Error("MEMBER_MEDIA_CLEANUP_ATTEMPT_INVALID");
+  }
+  return Math.min(
+    CLEANUP_RETRY_BASE_DELAY_MS * 2 ** Math.min(attemptNumber - 1, 30),
+    CLEANUP_RETRY_MAX_DELAY_MS,
+  );
+}
 
 export class MemberMediaLifecycleService {
   private readonly now: () => Date;
@@ -230,7 +260,10 @@ export class MemberMediaLifecycleService {
       throw error;
     }
 
-    await this.drainCleanup(persistence);
+    await this.drainPendingCleanup(persistence, {
+      now: record.finalizedAt,
+      maxBatches: 1,
+    }).catch(() => undefined);
 
     return {
       mediaId: persisted.mediaId,
@@ -243,7 +276,10 @@ export class MemberMediaLifecycleService {
   async delete(userId: string, mediaId: string, persistence: MemberMediaPersistence) {
     const cleanupAt = this.now();
     await persistence.remove(userId, mediaId, cleanupAt);
-    await this.drainCleanup(persistence);
+    await this.drainPendingCleanup(persistence, {
+      now: cleanupAt,
+      maxBatches: 1,
+    }).catch(() => undefined);
   }
 
   async reorder(userId: string, mediaIds: string[], persistence: MemberMediaPersistence) {
@@ -267,6 +303,63 @@ export class MemberMediaLifecycleService {
     }
   }
 
+  async drainPendingCleanup(
+    persistence: MemberMediaPersistence,
+    options: {
+      now?: Date;
+      maxBatches?: number;
+      batchSize?: number;
+    } = {},
+  ): Promise<MemberMediaCleanupResult> {
+    const now = options.now ?? this.now();
+    const maxBatches = options.maxBatches ?? CLEANUP_MAX_BATCHES;
+    const batchSize = options.batchSize ?? CLEANUP_BATCH_LIMIT;
+    if (
+      !Number.isInteger(maxBatches) || maxBatches < 1 || maxBatches > CLEANUP_MAX_BATCHES ||
+      !Number.isInteger(batchSize) || batchSize < 1 || batchSize > CLEANUP_BATCH_LIMIT
+    ) {
+      throw new Error("MEMBER_MEDIA_CLEANUP_BOUNDS_INVALID");
+    }
+
+    const result: MemberMediaCleanupResult = {
+      batches: 0,
+      claimed: 0,
+      deleted: 0,
+      failed: 0,
+    };
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      const claims = await persistence.claimCleanup({
+        limit: batchSize,
+        now,
+        claimExpiresAt: new Date(now.getTime() + CLEANUP_CLAIM_LEASE_MS),
+      });
+      if (claims.length === 0) break;
+      result.batches += 1;
+      result.claimed += claims.length;
+      for (const claim of claims) {
+        try {
+          await deleteIdempotently(this.store, claim.storageKey);
+          await persistence.completeCleanup(claim.id, claim.claimToken);
+          result.deleted += 1;
+        } catch {
+          const attemptNumber = claim.attemptCount + 1;
+          const retryAt = new Date(
+            now.getTime() + memberMediaCleanupRetryDelayMs(attemptNumber),
+          );
+          await persistence.failCleanup(
+            claim.id,
+            claim.claimToken,
+            now,
+            retryAt,
+          );
+          result.failed += 1;
+        }
+      }
+      if (claims.length < batchSize) break;
+    }
+    return result;
+  }
+
   private async activateAndDrainCleanup(
     storageKey: string,
     persistence: MemberMediaPersistence,
@@ -275,7 +368,10 @@ export class MemberMediaLifecycleService {
     const cleanupAt = this.now();
     try {
       await persistence.activateCleanup(storageKey, cleanupAt);
-      await this.drainCleanup(persistence, cleanupAt);
+      await this.drainPendingCleanup(persistence, {
+        now: cleanupAt,
+        maxBatches: 1,
+      });
     } catch (cleanupError) {
       throw new AggregateError(
         [operationError, cleanupError],
@@ -285,37 +381,4 @@ export class MemberMediaLifecycleService {
     }
   }
 
-  private async drainCleanup(
-    persistence: MemberMediaPersistence,
-    now: Date = this.now(),
-  ) {
-    const claims = await persistence.claimCleanup({
-      limit: CLEANUP_BATCH_LIMIT,
-      now,
-      claimExpiresAt: new Date(now.getTime() + CLEANUP_CLAIM_LEASE_MS),
-    });
-    const failures: unknown[] = [];
-    for (const claim of claims) {
-      try {
-        await deleteIdempotently(this.store, claim.storageKey);
-        await persistence.completeCleanup(claim.id, claim.claimToken);
-      } catch (error) {
-        try {
-          await persistence.failCleanup(claim.id, claim.claimToken, now);
-        } catch (persistenceError) {
-          failures.push(new AggregateError(
-            [error, persistenceError],
-            error instanceof Error ? error.message : "MEMBER_MEDIA_CLEANUP_FAILED",
-            { cause: error },
-          ));
-          continue;
-        }
-        failures.push(error);
-      }
-    }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "MEMBER_MEDIA_CLEANUP_FAILED");
-    }
-  }
 }

@@ -8,6 +8,66 @@ import { closePrismaIntegrationClientPair, createPrismaIntegrationClientPair, cr
 import { createPrismaEventFixture } from "./fixtures";
 
 describe("Prisma member media persistence", () => {
+  test("runs concurrent cleanup workers without claiming the same intent", async () => {
+    const suffix = randomUUID();
+    const now = new Date("2026-07-22T09:00:00.000Z");
+    const keys = Array.from(
+      { length: 25 },
+      (_, index) => `media/users/cleanup-worker-${suffix}/avatar/${index}.webp`,
+    );
+    const deleteCounts = new Map<string, number>();
+    const store: MemberMediaStore = {
+      createPresignedPost: vi.fn(),
+      getObject: vi.fn(),
+      putObject: vi.fn(),
+      deleteObject: vi.fn(async (key) => {
+        deleteCounts.set(key, (deleteCounts.get(key) ?? 0) + 1);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }),
+    };
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl, { memberMedia: { store } });
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+
+    try {
+      await rawClients.primary.memberMediaCleanupIntent.createMany({
+        data: keys.map((storageKey, index) => ({
+          id: `cleanup-worker-${suffix}-${index}`,
+          userId: `cleanup-worker-${suffix}`,
+          storageKey,
+          cleanupAfter: now,
+        })),
+      });
+      const primary = backendClients.primary.backend as unknown as {
+        drainMemberMediaCleanup(now: Date): Promise<{
+          batches: number; claimed: number; deleted: number; failed: number;
+        }>;
+      };
+      const secondary = backendClients.secondary.backend as typeof primary;
+
+      const results = await Promise.all([
+        primary.drainMemberMediaCleanup(now),
+        secondary.drainMemberMediaCleanup(now),
+      ]);
+
+      expect(results.reduce((total, result) => total + result.claimed, 0)).toBe(keys.length);
+      expect(results.reduce((total, result) => total + result.deleted, 0)).toBe(keys.length);
+      expect(results.reduce((total, result) => total + result.failed, 0)).toBe(0);
+      expect([...deleteCounts.values()]).toEqual(Array(keys.length).fill(1));
+      await expect(rawClients.secondary.memberMediaCleanupIntent.count({
+        where: { storageKey: { in: keys } },
+      })).resolves.toBe(0);
+    } finally {
+      await rawClients.primary.memberMediaCleanupIntent.deleteMany({
+        where: { storageKey: { in: keys } },
+      });
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
   test("persists cleanup intent transactionally and retries a failed final-object rollback", async () => {
     const objects = new Map<string, StoredMemberMediaObject>();
     const deleteFailures = new Map<string, number>();
@@ -95,7 +155,7 @@ describe("Prisma member media persistence", () => {
         purpose: "motorcycle-photo",
         tempKey: successfulTempKey,
         claimedMimeType: "image/jpeg",
-      })).rejects.toThrow(`S3_DELETE_FAILED:${successfulTempKey}`);
+      })).resolves.toMatchObject({ mediaId: expect.any(String) });
 
       await expect(rawClients.secondary.motorcyclePhoto.count({
         where: { motorcycle: { userId: owner.userId } },
@@ -103,16 +163,31 @@ describe("Prisma member media persistence", () => {
       const cleanupRows = await rawClients.secondary.$queryRaw<Array<{
         storageKey: string;
         attemptCount: number;
+        cleanupAfter: Date;
       }>>`
-        SELECT "storageKey", "attemptCount"
+        SELECT "storageKey", "attemptCount", "cleanupAfter"
         FROM "MemberMediaCleanupIntent"
         WHERE "storageKey" IN (${failedFinalKey}, ${successfulTempKey})
         ORDER BY "storageKey"
       `;
-      expect(cleanupRows).toEqual([{
-        storageKey: successfulTempKey,
-        attemptCount: 1,
-      }]);
+      expect(cleanupRows).toEqual([
+        {
+          storageKey: failedFinalKey,
+          attemptCount: 1,
+          cleanupAfter: expect.any(Date),
+        },
+        {
+          storageKey: successfulTempKey,
+          attemptCount: 1,
+          cleanupAfter: expect.any(Date),
+        },
+      ]);
+      const retryAt = new Date(Math.max(...cleanupRows.map((row) => row.cleanupAfter.getTime())));
+      await expect(backendClients.secondary.backend.drainMemberMediaCleanup(retryAt))
+        .resolves.toMatchObject({ deleted: 2, failed: 0 });
+      await expect(rawClients.secondary.memberMediaCleanupIntent.count({
+        where: { storageKey: { in: [failedFinalKey, successfulTempKey] } },
+      })).resolves.toBe(0);
     } finally {
       await closePrismaIntegrationClientPair(backendClients);
       await closePrismaIntegrationClientPair(rawClients);

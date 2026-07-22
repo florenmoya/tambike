@@ -207,6 +207,7 @@ function createSmokePersistence(): SmokePersistence {
     storageKey: string;
     cleanupAfter: Date;
     claimToken?: string;
+    attemptCount: number;
   }>();
   const queueCleanup = (userId: string, storageKey: string, cleanupAfter: Date) => {
     const existing = cleanup.get(storageKey);
@@ -215,7 +216,7 @@ function createSmokePersistence(): SmokePersistence {
       return;
     }
     cleanup.set(storageKey, {
-      id: randomUUID(), userId, storageKey, cleanupAfter,
+      id: randomUUID(), userId, storageKey, cleanupAfter, attemptCount: 0,
     });
   };
   const requireRecord = (userId: string, mediaId: string) => {
@@ -256,7 +257,12 @@ function createSmokePersistence(): SmokePersistence {
         .slice(0, limit)
         .map((intent) => {
           intent.claimToken = randomUUID();
-          return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+          return {
+            id: intent.id,
+            storageKey: intent.storageKey,
+            claimToken: intent.claimToken,
+            attemptCount: intent.attemptCount,
+          };
         });
     },
     async completeCleanup(id, claimToken) {
@@ -265,11 +271,15 @@ function createSmokePersistence(): SmokePersistence {
       );
       if (intent) cleanup.delete(intent.storageKey);
     },
-    async failCleanup(id, claimToken) {
+    async failCleanup(id, claimToken, _attemptedAt, retryAt) {
       const intent = Array.from(cleanup.values()).find(
         (candidate) => candidate.id === id && candidate.claimToken === claimToken,
       );
-      if (intent) intent.claimToken = undefined;
+      if (intent) {
+        intent.attemptCount += 1;
+        intent.cleanupAfter = retryAt;
+        intent.claimToken = undefined;
+      }
     },
     async authorizeRead(userId: string, mediaId: string) {
       return {

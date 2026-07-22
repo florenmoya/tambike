@@ -35,6 +35,7 @@ function memoryPersistence(options: { saveError?: Error } = {}): SmokePersistenc
     storageKey: string;
     cleanupAfter: Date;
     claimToken?: string;
+    attemptCount: number;
   }>();
   let intentSequence = 0;
   const queueCleanup = (userId: string, storageKey: string, cleanupAfter: Date) => {
@@ -44,7 +45,7 @@ function memoryPersistence(options: { saveError?: Error } = {}): SmokePersistenc
       return;
     }
     cleanup.set(storageKey, {
-      id: `intent-${++intentSequence}`, userId, storageKey, cleanupAfter,
+      id: `intent-${++intentSequence}`, userId, storageKey, cleanupAfter, attemptCount: 0,
     });
   };
   return {
@@ -79,7 +80,12 @@ function memoryPersistence(options: { saveError?: Error } = {}): SmokePersistenc
         .slice(0, limit)
         .map((intent) => {
           intent.claimToken = `claim-${intent.id}`;
-          return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+          return {
+            id: intent.id,
+            storageKey: intent.storageKey,
+            claimToken: intent.claimToken,
+            attemptCount: intent.attemptCount,
+          };
         });
     },
     async completeCleanup(id, claimToken) {
@@ -88,11 +94,15 @@ function memoryPersistence(options: { saveError?: Error } = {}): SmokePersistenc
       );
       if (intent) cleanup.delete(intent.storageKey);
     },
-    async failCleanup(id, claimToken) {
+    async failCleanup(id, claimToken, _attemptedAt, retryAt) {
       const intent = Array.from(cleanup.values()).find(
         (candidate) => candidate.id === id && candidate.claimToken === claimToken,
       );
-      if (intent) intent.claimToken = undefined;
+      if (intent) {
+        intent.attemptCount += 1;
+        intent.cleanupAfter = retryAt;
+        intent.claimToken = undefined;
+      }
     },
     async authorizeRead(_userId, mediaId) {
       if (!record || record.mediaId !== mediaId) throw new Error("record not found");
@@ -271,7 +281,7 @@ describe("member media real S3 smoke core", () => {
     );
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).message).toMatch(/cleanup failed/i);
-    expect((error as AggregateError).errors).toHaveLength(3);
+    expect((error as AggregateError).errors).toHaveLength(2);
 
     const prefix = "smoke/member-media/20260722050000-run-id/";
     expect(s3.deleteKeys).toContain(`${prefix}tmp/users/smoke-user-id/upload-id`);

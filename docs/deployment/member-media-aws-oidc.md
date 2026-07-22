@@ -107,7 +107,11 @@ The bucket is retained if the stack is deleted. It blocks public access, uses SS
 
 Final `media/` objects remain private and versioned. When the application deletes or replaces one, S3 retains its noncurrent version for 30 days, then expires it; expired delete markers are removed separately. This bounded recovery window prevents versioning from retaining removed member bytes indefinitely without weakening public-access controls.
 
-Application cleanup is backed by a durable cleanup intent. A final key is registered before its S3 write, and the metadata transaction atomically removes that provisional intent while enqueueing the temporary and replaced keys. Explicit removal also enqueues its key in the same transaction that clears metadata. Each later finalize or delete claims only a bounded batch of stored keys, treats `NoSuchKey` as success, and increments failed attempts for retry. Cleanup never lists S3 and never derives deletion targets from bucket contents.
+Application cleanup is backed by a durable cleanup intent. A final key is registered before its S3 write, and the metadata transaction atomically removes that provisional intent while enqueueing the temporary and replaced keys. Explicit removal also enqueues its key in the same transaction that clears metadata. Cleanup treats `NoSuchKey` as success and never lists S3 or derives deletion targets from bucket contents. Once a media mutation commits, an S3 cleanup failure remains queued and does not turn that successful user operation into an error.
+
+The root `vercel.json` invokes `/api/jobs/member-media-cleanup` once daily at `03:00` UTC. Configure `CRON_SECRET` in the production Vercel environment; Vercel Cron sends it as the exact `Authorization: Bearer $CRON_SECRET` header. The dynamic Node.js route has no query-secret fallback and returns only batch, claim, deletion, and failure counts with `Cache-Control: no-store`.
+
+Each worker invocation processes bounded batches: at most five batches of ten leased intents. Concurrent workers use claim tokens and `FOR UPDATE SKIP LOCKED`, while expired leases are reclaimable. A non-`NoSuchKey` failure increments the durable attempt count, releases its lease, and schedules deterministic exponential retry starting at one minute and capped at 24 hours. Moving failed rows forward prevents old poison entries from starving newer due cleanup. Provisional final-object intents become independently eligible after their 15-minute abandonment guard even if no rider performs another media mutation.
 
 ## Configure Vercel environments
 

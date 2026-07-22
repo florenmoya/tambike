@@ -1205,6 +1205,10 @@ export class TambikeBackend {
     }
   }
 
+  async drainMemberMediaCleanup(now: Date = new Date()) {
+    return this.memberMedia.drainPendingCleanup(this.memberMediaPersistence(), { now });
+  }
+
   async reorderMotorcyclePhotos(sessionToken: string, mediaIds: string[]) {
     const user = this.requireUser(sessionToken);
     try {
@@ -7738,13 +7742,14 @@ export class TambikeBackend {
         );
         if (intent) this.memberMediaCleanupIntents.delete(intent.storageKey);
       },
-      failCleanup: async (id, claimToken, attemptedAt) => {
+      failCleanup: async (id, claimToken, attemptedAt, retryAt) => {
         const intent = Array.from(this.memberMediaCleanupIntents.values()).find(
           (candidate) => candidate.id === id && candidate.claimToken === claimToken,
         );
         if (!intent) return;
         intent.attemptCount += 1;
         intent.lastAttemptAt = attemptedAt;
+        intent.cleanupAfter = retryAt;
         intent.claimToken = undefined;
         intent.claimExpiresAt = undefined;
       },
@@ -7786,7 +7791,12 @@ export class TambikeBackend {
       .map((intent) => {
         intent.claimToken = randomUUID();
         intent.claimExpiresAt = input.claimExpiresAt;
-        return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+        return {
+          id: intent.id,
+          storageKey: intent.storageKey,
+          claimToken: intent.claimToken,
+          attemptCount: intent.attemptCount,
+        };
       });
   }
 

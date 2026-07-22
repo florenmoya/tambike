@@ -175,8 +175,8 @@ describe("member media lifecycle service", () => {
         return { mediaId: record.mediaId };
       }),
       claimCleanup: vi.fn(async () => [
-        { id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp" },
-        { id: "old", storageKey: "media/users/user-1/avatar/old.webp", claimToken: "claim-old" },
+        { id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp", attemptCount: 0 },
+        { id: "old", storageKey: "media/users/user-1/avatar/old.webp", claimToken: "claim-old", attemptCount: 0 },
       ]),
     });
     const service = new MemberMediaLifecycleService(store, {
@@ -251,7 +251,7 @@ describe("member media lifecycle service", () => {
     });
     const failedFinalKey = "media/users/user-1/avatar/media-1.webp";
     const attempts = new Map([[failedFinalKey, 0]]);
-    let pending = [{ id: "intent-1", storageKey: failedFinalKey, claimToken: "claim-1" }];
+    let pending = [{ id: "intent-1", storageKey: failedFinalKey, claimToken: "claim-1", attemptCount: 0 }];
     first.store.deleteObject = vi.fn(async (key) => {
       if (key === failedFinalKey && attempts.get(key) === 0) {
         attempts.set(key, 1);
@@ -263,7 +263,7 @@ describe("member media lifecycle service", () => {
       saveFinalized: vi.fn(async () => { throw new Error("STATE_WRITE_FAILED"); }),
       claimCleanup: vi.fn(async () => pending.splice(0, 10)),
       failCleanup: vi.fn(async () => {
-        pending = [{ id: "intent-1", storageKey: failedFinalKey, claimToken: "claim-2" }];
+        pending = [{ id: "intent-1", storageKey: failedFinalKey, claimToken: "claim-2", attemptCount: 1 }];
       }),
       completeCleanup: vi.fn(async () => undefined),
     });
@@ -286,6 +286,7 @@ describe("member media lifecycle service", () => {
       "intent-1",
       "claim-1",
       new Date("2026-07-22T06:00:00.000Z"),
+      new Date("2026-07-22T06:01:00.000Z"),
     );
 
     state.saveFinalized = vi.fn(async () => ({ mediaId: "media-2" }));
@@ -316,13 +317,14 @@ describe("member media lifecycle service", () => {
         id: "intent-delete",
         storageKey: "media/users/user-1/avatar/old.webp",
         claimToken: "claim-delete",
+        attemptCount: 0,
       }]),
     });
     const service = new MemberMediaLifecycleService(store, {
       now: () => new Date("2026-07-22T06:00:00.000Z"),
     });
 
-    await expect(service.delete("user-1", "media-1", state)).rejects.toThrow("S3_DELETE_FAILED");
+    await expect(service.delete("user-1", "media-1", state)).resolves.toBeUndefined();
 
     expect(state.remove).toHaveBeenCalledWith(
       "user-1",
@@ -333,6 +335,7 @@ describe("member media lifecycle service", () => {
       "intent-delete",
       "claim-delete",
       new Date("2026-07-22T06:00:00.000Z"),
+      new Date("2026-07-22T06:01:00.000Z"),
     );
   });
 
@@ -350,6 +353,7 @@ describe("member media lifecycle service", () => {
         id: "final",
         storageKey: "media/users/user-1/avatar/media-1.webp",
         claimToken: "claim-final",
+        attemptCount: 0,
       }]),
     });
 
@@ -364,7 +368,7 @@ describe("member media lifecycle service", () => {
     expect(deleteObject).not.toHaveBeenCalledWith("tmp/users/user-1/nonce-1");
   });
 
-  test("treats NoSuchKey cleanup as idempotent but surfaces other cleanup failures", async () => {
+  test("treats NoSuchKey cleanup as idempotent and durably queues other cleanup failures", async () => {
     const idempotent = fakeStore({
       object: { body: Buffer.from("jpeg"), contentType: "image/jpeg", lastModified: new Date() },
     });
@@ -379,7 +383,7 @@ describe("member media lifecycle service", () => {
       claimedMimeType: "image/jpeg",
     }, persistence({
       claimCleanup: vi.fn(async () => [{
-        id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp",
+        id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp", attemptCount: 0,
       }]),
     }))).resolves.toMatchObject({ mediaId: "media-1" });
 
@@ -397,9 +401,9 @@ describe("member media lifecycle service", () => {
       claimedMimeType: "image/jpeg",
     }, persistence({
       claimCleanup: vi.fn(async () => [{
-        id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp",
+        id: "temp", storageKey: "tmp/users/user-1/nonce-1", claimToken: "claim-temp", attemptCount: 0,
       }]),
-    }))).rejects.toThrow("S3_DELETE_FAILED");
+    }))).resolves.toMatchObject({ mediaId: "media-1" });
   });
 
   test("deletes persisted media before its private object and delegates unique reorder", async () => {
@@ -407,7 +411,7 @@ describe("member media lifecycle service", () => {
     deleteObject.mockResolvedValue(undefined);
     const state = persistence({
       claimCleanup: vi.fn(async () => [{
-        id: "old", storageKey: "media/users/user-1/avatar/old.webp", claimToken: "claim-old",
+        id: "old", storageKey: "media/users/user-1/avatar/old.webp", claimToken: "claim-old", attemptCount: 0,
       }]),
     });
     const service = new MemberMediaLifecycleService(store);
@@ -606,7 +610,7 @@ describe("in-memory member media persistence and authorization", () => {
       .rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  test("retries failed temp, replacement, and explicit-delete cleanup from durable memory intents", async () => {
+  test("keeps committed finalize/delete successful while retrying failed cleanup with backoff", async () => {
     const { backend, actors, media, stage } = await setupBackend();
     const deleteFailures = new Map<string, number>();
     media.store.deleteObject = vi.fn(async (key) => {
@@ -618,8 +622,17 @@ describe("in-memory member media persistence and authorization", () => {
       if (!media.objects.delete(key)) throw noSuchKey();
     });
     const cleanupIntents = (backend as unknown as {
-      memberMediaCleanupIntents: Map<string, { attemptCount: number }>;
+      memberMediaCleanupIntents: Map<string, {
+        attemptCount: number;
+        cleanupAfter: Date;
+        lastAttemptAt?: Date;
+      }>;
     }).memberMediaCleanupIntents;
+    const worker = backend as unknown as {
+      drainMemberMediaCleanup(now: Date): Promise<{
+        claimed: number; deleted: number; failed: number; batches: number;
+      }>;
+    };
 
     const first = await backend.finalizeMemberMedia(actors.rider.sessionToken, {
       purpose: "avatar",
@@ -636,34 +649,96 @@ describe("in-memory member media persistence and authorization", () => {
       purpose: "avatar",
       tempKey: replacementTemp,
       claimedMimeType: "image/jpeg",
-    })).rejects.toThrow("MEMBER_MEDIA_CLEANUP_FAILED");
+    })).resolves.toMatchObject({ mediaId: expect.any(String) });
     expect(cleanupIntents.get(replacementTemp)?.attemptCount).toBe(1);
     expect(cleanupIntents.get(firstKey)?.attemptCount).toBe(1);
+    for (const key of [replacementTemp, firstKey]) {
+      const intent = cleanupIntents.get(key);
+      expect(intent?.lastAttemptAt).toBeInstanceOf(Date);
+      expect(intent && intent.cleanupAfter.getTime()).toBeGreaterThan(
+        intent?.lastAttemptAt?.getTime() ?? Number.MAX_SAFE_INTEGER,
+      );
+      expect(intent && intent.cleanupAfter.getTime()).toBeLessThanOrEqual(
+        (intent?.lastAttemptAt?.getTime() ?? 0) + 24 * 60 * 60 * 1_000,
+      );
+    }
 
-    const thirdTemp = await stage(actors.rider.user.id, "retry-avatar-three");
-    const third = await backend.finalizeMemberMedia(actors.rider.sessionToken, {
-      purpose: "avatar",
-      tempKey: thirdTemp,
-      claimedMimeType: "image/jpeg",
+    const retryAt = new Date(Math.max(
+      cleanupIntents.get(replacementTemp)!.cleanupAfter.getTime(),
+      cleanupIntents.get(firstKey)!.cleanupAfter.getTime(),
+    ));
+    await expect(worker.drainMemberMediaCleanup(retryAt)).resolves.toMatchObject({
+      deleted: 2,
+      failed: 0,
     });
     expect(cleanupIntents.has(replacementTemp)).toBe(false);
     expect(cleanupIntents.has(firstKey)).toBe(false);
 
-    const thirdKey = Array.from(media.objects.keys()).find((key) => key.includes(third.mediaId));
-    if (!thirdKey) throw new Error("THIRD_AVATAR_KEY_MISSING");
-    deleteFailures.set(thirdKey, 1);
-    await expect(backend.deleteMemberMedia(actors.rider.sessionToken, third.mediaId))
-      .rejects.toThrow(`S3_DELETE_FAILED:${thirdKey}`);
-    expect(cleanupIntents.get(thirdKey)?.attemptCount).toBe(1);
+    const editor = await backend.getMemberProfileEditor(actors.rider.sessionToken);
+    const currentId = editor.profilePhotoUrl?.split("/").at(-1);
+    const currentKey = Array.from(media.objects.keys()).find((key) => currentId && key.includes(currentId));
+    if (!currentId || !currentKey) throw new Error("CURRENT_AVATAR_KEY_MISSING");
+    deleteFailures.set(currentKey, 1);
+    await expect(backend.deleteMemberMedia(actors.rider.sessionToken, currentId)).resolves.toBeUndefined();
+    expect(cleanupIntents.get(currentKey)?.attemptCount).toBe(1);
+  });
 
-    const fourthTemp = await stage(actors.rider.user.id, "retry-avatar-four");
-    await backend.finalizeMemberMedia(actors.rider.sessionToken, {
-      purpose: "avatar",
-      tempKey: fourthTemp,
-      claimedMimeType: "image/jpeg",
+  test("autonomously reclaims expired leases and prevents poison intents from starving later work", async () => {
+    const { backend, media } = await setupBackend();
+    const now = new Date("2026-07-22T08:00:00.000Z");
+    const cleanupIntents = (backend as unknown as {
+      memberMediaCleanupIntents: Map<string, {
+        id: string;
+        userId: string;
+        storageKey: string;
+        cleanupAfter: Date;
+        claimToken?: string;
+        claimExpiresAt?: Date;
+        attemptCount: number;
+        lastAttemptAt?: Date;
+        createdAt: Date;
+      }>;
+      drainMemberMediaCleanup(now: Date): Promise<{
+        claimed: number; deleted: number; failed: number; batches: number;
+      }>;
     });
-    expect(cleanupIntents.has(thirdKey)).toBe(false);
-    expect(media.objects.has(thirdKey)).toBe(false);
+    const poisonKeys = Array.from({ length: 11 }, (_, index) => `media/users/user-1/avatar/poison-${index}.webp`);
+    const deletableKey = "media/users/user-1/avatar/deletable.webp";
+    const abandonedKey = "media/users/user-1/avatar/abandoned.webp";
+    for (const [index, storageKey] of [...poisonKeys, deletableKey, abandonedKey].entries()) {
+      cleanupIntents.memberMediaCleanupIntents.set(storageKey, {
+        id: `intent-${String(index).padStart(2, "0")}`,
+        userId: "user-1",
+        storageKey,
+        cleanupAfter: index === 12 ? new Date(now.getTime() + 15 * 60 * 1_000) : now,
+        ...(storageKey === deletableKey
+          ? { claimToken: "expired-claim", claimExpiresAt: new Date(now.getTime() - 1) }
+          : {}),
+        attemptCount: storageKey === poisonKeys[0] ? 30 : 0,
+        createdAt: new Date(now.getTime() + index),
+      });
+      media.objects.set(storageKey, { body: Buffer.from("webp"), contentType: "image/webp" });
+    }
+    media.store.deleteObject = vi.fn(async (key) => {
+      if (poisonKeys.includes(key)) throw new Error(`S3_DELETE_FAILED:${key}`);
+      if (!media.objects.delete(key)) throw noSuchKey();
+    });
+
+    await expect(cleanupIntents.drainMemberMediaCleanup(now)).resolves.toEqual({
+      batches: 2,
+      claimed: 12,
+      deleted: 1,
+      failed: 11,
+    });
+    expect(media.objects.has(deletableKey)).toBe(false);
+    expect(cleanupIntents.memberMediaCleanupIntents.get(poisonKeys[0]!)?.cleanupAfter)
+      .toEqual(new Date(now.getTime() + 24 * 60 * 60 * 1_000));
+    expect(media.objects.has(abandonedKey)).toBe(true);
+
+    await expect(cleanupIntents.drainMemberMediaCleanup(
+      new Date(now.getTime() + 15 * 60 * 1_000),
+    )).resolves.toMatchObject({ deleted: 1 });
+    expect(media.objects.has(abandonedKey)).toBe(false);
   });
 
   test("rejects expired rider, owner, and admin sessions on every media auth path", async () => {

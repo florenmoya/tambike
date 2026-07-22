@@ -715,6 +715,10 @@ export class PrismaTambikeBackend {
     }
   }
 
+  async drainMemberMediaCleanup(now: Date = new Date()) {
+    return this.memberMedia.drainPendingCleanup(this.memberMediaPersistence(), { now });
+  }
+
   async reorderMotorcyclePhotos(sessionToken: string, mediaIds: string[]) {
     const user = await this.requireUser(sessionToken);
     try {
@@ -9209,8 +9213,8 @@ export class PrismaTambikeBackend {
       reorder: (userId, mediaIds) => this.reorderMemberMediaRecords(userId, mediaIds),
       claimCleanup: (input) => this.claimMemberMediaCleanup(input),
       completeCleanup: (id, claimToken) => this.completeMemberMediaCleanup(id, claimToken),
-      failCleanup: (id, claimToken, attemptedAt) =>
-        this.failMemberMediaCleanup(id, claimToken, attemptedAt),
+      failCleanup: (id, claimToken, attemptedAt, retryAt) =>
+        this.failMemberMediaCleanup(id, claimToken, attemptedAt, retryAt),
     };
   }
 
@@ -9247,6 +9251,7 @@ export class PrismaTambikeBackend {
       id: string;
       storageKey: string;
       claimToken: string;
+      attemptCount: number;
     }>>`
       WITH candidates AS (
         SELECT "id"
@@ -9264,9 +9269,9 @@ export class PrismaTambikeBackend {
         FROM candidates
         WHERE intent."id" = candidates."id"
         RETURNING intent."id", intent."storageKey", intent."claimToken",
-          intent."cleanupAfter", intent."createdAt"
+          intent."attemptCount", intent."cleanupAfter", intent."createdAt"
       )
-      SELECT "id", "storageKey", "claimToken"
+      SELECT "id", "storageKey", "claimToken", "attemptCount"
       FROM claimed
       ORDER BY "cleanupAfter" ASC, "createdAt" ASC, "id" ASC
     `);
@@ -9276,12 +9281,18 @@ export class PrismaTambikeBackend {
     await this.prisma.memberMediaCleanupIntent.deleteMany({ where: { id, claimToken } });
   }
 
-  private async failMemberMediaCleanup(id: string, claimToken: string, attemptedAt: Date) {
+  private async failMemberMediaCleanup(
+    id: string,
+    claimToken: string,
+    attemptedAt: Date,
+    retryAt: Date,
+  ) {
     await this.prisma.memberMediaCleanupIntent.updateMany({
       where: { id, claimToken },
       data: {
         attemptCount: { increment: 1 },
         lastAttemptAt: attemptedAt,
+        cleanupAfter: retryAt,
         claimToken: null,
         claimExpiresAt: null,
       },
