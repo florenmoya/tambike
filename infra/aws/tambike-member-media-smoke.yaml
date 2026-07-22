@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Disposable non-production Tambike member media S3 smoke bucket and Vercel development OIDC role.
+
+Parameters:
+  VercelTeamSlug:
+    Type: String
+    Description: Exact Vercel team slug used by the team-mode OIDC issuer.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,99}$"
+  VercelProjectName:
+    Type: String
+    Description: Exact Vercel project name present in the development OIDC subject claim.
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: Existing exact team-mode Vercel OIDC provider ARN. Leave empty only to create and retain it.
+    AllowedPattern: '^$|^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:oidc-provider/oidc\.vercel\.com/[a-z0-9][a-z0-9-]{0,99}$'
+    ConstraintDescription: Must be empty or the exact team-mode oidc.vercel.com provider ARN.
+  SmokeBasePrefix:
+    Type: String
+    Description: Safe smoke base below smoke/, for example member-media.
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+  SmokeRunId:
+    Type: String
+    Description: Exact smoke run ID generated once before deployment.
+    AllowedPattern: "^[0-9]{14}-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ConstraintDescription: Must be a 14-digit timestamp plus an RFC 4122 UUID.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+
+Resources:
+  SmokeMemberMediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub tambike-nonprod-smoke-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireSmokeTemporaryUploads
+            Status: Enabled
+            Prefix: !Sub smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: ExpireSmokeNoncurrentVersions
+            Status: Enabled
+            Prefix: smoke/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: Environment
+          Value: nonprod-smoke
+        - Key: SmokeRunId
+          Value: !Ref SmokeRunId
+
+  VercelOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: !Sub https://oidc.vercel.com/${VercelTeamSlug}
+      ClientIdList:
+        - !Sub https://vercel.com/${VercelTeamSlug}
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: Lifecycle
+          Value: retained-team-oidc-provider
+
+  SmokeVercelMemberMediaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub tb-nonprod-${SmokeRunId}
+      Description: Short-lived Vercel development OIDC access for one disposable Tambike member-media smoke run.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${OidcProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "oidc.vercel.com/${VercelTeamSlug}:aud": "https://vercel.com/${VercelTeamSlug}",
+                      "oidc.vercel.com/${VercelTeamSlug}:sub": "owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:development"
+                    }
+                  }
+                }
+              ]
+            }
+          - OidcProviderArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/${VercelTeamSlug}
+      Policies:
+        - PolicyName: SmokeRunObjectsOnly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadWriteAndCleanExactSmokeRunObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub ${SmokeMemberMediaBucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*
+                  - !Sub ${SmokeMemberMediaBucket.Arn}/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: Environment
+          Value: nonprod-smoke
+        - Key: SmokeRunId
+          Value: !Ref SmokeRunId
+
+Outputs:
+  SmokeBucketName:
+    Description: Set as MEMBER_MEDIA_SMOKE_BUCKET_NAME for this disposable smoke run.
+    Value: !Ref SmokeMemberMediaBucket
+  SmokeRoleArn:
+    Description: Set as MEMBER_MEDIA_SMOKE_ROLE_ARN for this disposable smoke run.
+    Value: !GetAtt SmokeVercelMemberMediaRole.Arn
+  SmokeOidcProviderArn:
+    Description: Exact retained team OIDC provider ARN; pass as ExistingOidcProviderArn to the production stack.
+    Value: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/${VercelTeamSlug}

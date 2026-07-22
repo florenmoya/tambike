@@ -12,6 +12,83 @@ function source(path: string) {
 }
 
 describe("private member media infrastructure contract", () => {
+  test("ships a disposable non-production smoke stack with exact development OIDC and run-bounded access", () => {
+    const template = source("infra/aws/tambike-member-media-smoke.yaml");
+    const productionTemplate = source("infra/aws/tambike-member-media.yaml");
+    const guide = source("docs/deployment/member-media-aws-oidc.md");
+
+    expect(template).toMatch(/SmokeMemberMediaBucket:[\s\S]*DeletionPolicy: Retain[\s\S]*UpdateReplacePolicy: Retain/);
+    expect(template).toContain("VercelTeamSlug:");
+    expect(template).toContain("VercelProjectName:");
+    expect(template).toContain("ExistingOidcProviderArn:");
+    expect(template).toContain("SmokeBasePrefix:");
+    expect(template).toContain("SmokeRunId:");
+    expect(template).toContain("^[0-9]{14}-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+    expect(template).toContain("owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:development");
+    expect(template).not.toContain("environment:production");
+    expect(template).not.toContain("environment:preview");
+    expect(template).not.toContain("project:*");
+    expect(template).toContain("tambike-nonprod-smoke");
+    expect(template).toContain("tb-nonprod-${SmokeRunId}");
+    expect(template).toMatch(/VercelOidcProvider:[\s\S]*DeletionPolicy: Retain[\s\S]*UpdateReplacePolicy: Retain/);
+    expect(template).toContain("s3:PutObject");
+    expect(template).toContain("s3:GetObject");
+    expect(template).toContain("s3:DeleteObject");
+    expect(template).not.toContain("s3:ListBucket");
+    const smokeActions = [...template.matchAll(/^\s+- (s3:[A-Za-z*]+)\s*$/gm)].map((match) => match[1]);
+    expect(new Set(smokeActions)).toEqual(new Set([
+      "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
+    ]));
+    expect(template).not.toMatch(/^\s*- s3:\*\s*$/m);
+    expect(template).not.toMatch(/^\s*Action:\s*["']?\*["']?\s*$/m);
+    expect(template).toContain("/smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/*");
+    expect(template).toContain("/smoke/${SmokeBasePrefix}/${SmokeRunId}/media/*");
+    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/tmp/*");
+    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/media/*");
+    expect(template).not.toContain("${SmokeMemberMediaBucket.Arn}/*");
+    expect(template).toMatch(/Outputs:[\s\S]*SmokeBucketName:[\s\S]*Value: !Ref SmokeMemberMediaBucket/);
+    expect(template).toMatch(/SmokeRoleArn:[\s\S]*Value: !GetAtt SmokeVercelMemberMediaRole\.Arn/);
+    for (const setting of [
+      "BlockPublicAcls: true",
+      "IgnorePublicAcls: true",
+      "BlockPublicPolicy: true",
+      "RestrictPublicBuckets: true",
+      "ObjectOwnership: BucketOwnerEnforced",
+      "SSEAlgorithm: AES256",
+      "Status: Enabled",
+      "NoncurrentVersionExpiration:",
+    ]) {
+      expect(template).toContain(setting);
+    }
+    expect(template).toContain("Prefix: !Sub smoke/${SmokeBasePrefix}/${SmokeRunId}/tmp/");
+    expect(template).toContain("Prefix: smoke/");
+    const smokeTrust = template.slice(
+      template.indexOf("AssumeRolePolicyDocument:"),
+      template.indexOf("      Policies:"),
+    );
+    expect(smokeTrust).toContain("oidc.vercel.com/${VercelTeamSlug}:aud");
+    expect(smokeTrust).not.toContain("!Ref ExistingOidcProviderArn");
+    expect(guide).toContain("tambike-member-media-nonprod");
+    expect(guide).toContain("vercel env pull --environment=preview");
+    expect(guide).toContain("VERCEL_OIDC_TOKEN");
+    expect(guide).toContain("MEMBER_MEDIA_SMOKE_BUCKET_NAME");
+    expect(guide).toContain("MEMBER_MEDIA_SMOKE_ROLE_ARN");
+    expect(guide).toContain("smoke/member-media");
+    expect(guide).toContain("I_UNDERSTAND_THIS_USES_A_TEST_BUCKET");
+    expect(guide).toContain("https://$SmokeBucketName.s3.ap-southeast-1.amazonaws.com/");
+    expect(guide).toContain("aws cloudformation delete-stack");
+    expect(guide).toContain("aws s3 rm \"s3://$SmokeBucketName\" --recursive");
+    expect(guide).toContain("retained Vercel OIDC provider");
+    expect(guide).toContain("retained smoke bucket");
+    expect(guide).toContain("ExistingOidcProviderArn=$SmokeOidcProviderArn");
+    expect(productionTemplate).not.toContain("environment:development");
+    expect(productionTemplate).not.toContain("nonprod");
+    expect(productionTemplate).toContain("!Sub ${MemberMediaBucket.Arn}/tmp/*");
+    expect(productionTemplate).toContain("!Sub ${MemberMediaBucket.Arn}/media/*");
+  });
+
   test("defines a region-independent, private, encrypted, versioned bucket", () => {
     const template = source("infra/aws/tambike-member-media.yaml");
 

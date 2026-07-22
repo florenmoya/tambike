@@ -72,7 +72,7 @@ aws iam get-open-id-connect-provider --open-id-connect-provider-arn $ExpectedOid
 
 The final command must report the URL `oidc.vercel.com/<exact-team-slug>` and audience `https://vercel.com/<exact-team-slug>`. A mismatched parameter cannot change the stack's derived IAM principal; deployment fails safely if the exact provider does not exist.
 
-Create or update the stack with exact values:
+Create or update the production stack with exact values. After the non-production gate below has created the provider, always pass its retained exact ARN; this prevents a duplicate provider from being created:
 
 ```powershell
 aws cloudformation deploy `
@@ -84,11 +84,12 @@ aws cloudformation deploy `
     VercelTeamSlug=<exact-team-slug> `
     VercelProjectName=<exact-project-name> `
     AllowedOrigin=https://<exact-tambike-origin> `
+    ExistingOidcProviderArn=<retained-exact-provider-arn> `
     EnablePreviewAccess=false `
   --no-fail-on-empty-changeset
 ```
 
-That command leaves `ExistingOidcProviderArn` at its empty default and creates the provider. If the exact team issuer already exists, add `ExistingOidcProviderArn=<verified-provider-arn>` to `--parameter-overrides` instead.
+Do not leave `ExistingOidcProviderArn` empty after the non-production gate. The retained provider is team-owned infrastructure, while the disposable smoke stack owns only its test bucket and per-run role.
 
 `EnablePreviewAccess=false` is the default and authorizes production only. Set it to `true` only after approving preview access for this exact project; the template adds only the exact `environment:preview` subject and never uses a project wildcard.
 
@@ -146,42 +147,112 @@ aws cloudformation rollback-stack `
 
 Do not delete the retained bucket as part of stack recovery. Re-run `describe-stack-events`, verify the exact team/project trust conditions, then deploy the corrected template normally.
 
-## Real S3 smoke gate
+## Deploy and run the disposable non-production S3 smoke gate
 
-The smoke command is intentionally unavailable through ambient production variables. It requires a dedicated bucket and role whose names identify them as `test`, `smoke`, or `nonprod`, plus a non-production prefix beginning with `smoke/`:
+This is the required gate before production. It deploys only `tambike-member-media-nonprod` in `ap-southeast-1`, creates a bucket and role whose names identify them as non-production, and binds that role to the exact Vercel development subject. Do not reuse a production bucket, role, prefix, or run ID.
+
+Run this from the verified Tambike project context described above. Generate the run ID once, then use that same value for both the CloudFormation policy and the smoke process:
 
 ```powershell
+$VercelTeamSlug = "florens-projects-aee3ca73"
+$VercelProjectName = "tambike"
+$SmokeBasePrefix = "member-media"
+$SmokeRunId = "$(Get-Date -Format yyyyMMddHHmmss)-$([guid]::NewGuid().ToString())"
+$Caller = aws sts get-caller-identity | ConvertFrom-Json
+$Partition = ($Caller.Arn -split ":")[1]
+$SmokeOidcProviderArn = "arn:${Partition}:iam::$($Caller.Account):oidc-provider/oidc.vercel.com/$VercelTeamSlug"
+
+aws cloudformation validate-template `
+  --region ap-southeast-1 `
+  --template-body file://infra/aws/tambike-member-media-smoke.yaml
+
+$ExistingOidcProviderArn = ""
+aws iam get-open-id-connect-provider --open-id-connect-provider-arn $SmokeOidcProviderArn 2>$null
+if ($LASTEXITCODE -eq 0) {
+  $ExistingOidcProviderArn = $SmokeOidcProviderArn
+  $Provider = aws iam get-open-id-connect-provider --open-id-connect-provider-arn $SmokeOidcProviderArn | ConvertFrom-Json
+  if ($Provider.Url -ne "oidc.vercel.com/$VercelTeamSlug" -or $Provider.ClientIDList -notcontains "https://vercel.com/$VercelTeamSlug") {
+    throw "SMOKE_REFUSED: existing provider is not the exact Tambike team OIDC provider"
+  }
+}
+
+aws cloudformation deploy `
+  --region ap-southeast-1 `
+  --stack-name tambike-member-media-nonprod `
+  --template-file infra/aws/tambike-member-media-smoke.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides `
+    VercelTeamSlug=$VercelTeamSlug `
+    VercelProjectName=$VercelProjectName `
+    ExistingOidcProviderArn=$ExistingOidcProviderArn `
+    SmokeBasePrefix=$SmokeBasePrefix `
+    SmokeRunId=$SmokeRunId `
+  --no-fail-on-empty-changeset
+
+$SmokeOutputs = aws cloudformation describe-stacks `
+  --region ap-southeast-1 `
+  --stack-name tambike-member-media-nonprod `
+  --query "Stacks[0].Outputs" | ConvertFrom-Json
+$SmokeBucketName = ($SmokeOutputs | Where-Object OutputKey -eq "SmokeBucketName").OutputValue
+$SmokeRoleArn = ($SmokeOutputs | Where-Object OutputKey -eq "SmokeRoleArn").OutputValue
+$SmokeOidcProviderArn = ($SmokeOutputs | Where-Object OutputKey -eq "SmokeOidcProviderArn").OutputValue
+if (-not $SmokeBucketName -or -not $SmokeRoleArn -or -not $SmokeOidcProviderArn) {
+  throw "SMOKE_REFUSED: non-production stack did not return all smoke outputs"
+}
+```
+
+When no provider exists, the smoke stack creates it with `DeletionPolicy: Retain`. The retained Vercel OIDC provider survives deletion of the disposable stack, and production must use `ExistingOidcProviderArn=$SmokeOidcProviderArn` as shown above. This ownership rule means smoke-stack deletion cannot remove a provider later reused by production.
+
+Obtain the short-lived development token through Vercel without printing the token. The preview environment pull has been verified to provide the exact development subject `owner:florens-projects-aee3ca73:project:tambike:environment:development`; do not decode or echo it:
+
+```powershell
+vercel env pull --environment=preview --scope $VercelTeamSlug .vercel/member-media-smoke.env
+$TokenLine = Get-Content .vercel/member-media-smoke.env | Where-Object { $_ -like "VERCEL_OIDC_TOKEN=*" } | Select-Object -First 1
+if (-not $TokenLine) { throw "SMOKE_REFUSED: VERCEL_OIDC_TOKEN was not supplied by Vercel" }
+$env:VERCEL_OIDC_TOKEN = $TokenLine.Substring("VERCEL_OIDC_TOKEN=".Length)
+Remove-Variable TokenLine
+
 $env:AWS_REGION = "ap-southeast-1"
-$env:MEMBER_MEDIA_SMOKE_BUCKET_NAME = "<dedicated-test-bucket>"
-$env:MEMBER_MEDIA_SMOKE_ROLE_ARN = "<dedicated-test-role-arn>"
+$env:MEMBER_MEDIA_SMOKE_BUCKET_NAME = $SmokeBucketName
+$env:MEMBER_MEDIA_SMOKE_ROLE_ARN = $SmokeRoleArn
 $env:MEMBER_MEDIA_SMOKE_PREFIX = "smoke/member-media"
-$env:MEMBER_MEDIA_SMOKE_RUN_ID = "$(Get-Date -Format yyyyMMddHHmmss)-$([guid]::NewGuid())"
+$env:MEMBER_MEDIA_SMOKE_RUN_ID = $SmokeRunId
 $env:MEMBER_MEDIA_SMOKE_CONFIRM = "I_UNDERSTAND_THIS_USES_A_TEST_BUCKET"
 npm run smoke:member-media-s3
 ```
 
-The role must be assumable by the current test OIDC token. Run from an explicitly linked, verified test Vercel context (for example, through `vercel env run` only after the identity/link checks above), or supply a short-lived `VERCEL_OIDC_TOKEN` through an approved test workflow. `MEMBER_MEDIA_SMOKE_RUN_ID` predeclares the unique run namespace so the role policy can be bounded before execution; the command rejects any value that is not a 14-digit timestamp plus UUID. The script creates exact keys under the supplied `smoke/` prefix and run ID, exercises the real presigned POST and application normalization/read path, and deletes only those run-owned keys. It refuses production-looking buckets, roles, prefixes, and run IDs.
+The smoke script accepts only the exact timestamp-plus-RFC-4122-UUID run namespace. Its test role has only `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for `smoke/<base>/<run>/tmp/*` and `smoke/<base>/<run>/media/*`; it has no bucket listing, production `tmp/*` or `media/*`, or other AWS action.
 
-The dedicated test role must not reuse the production role policy. Give it only these object permissions, replacing the bucket, base, and run placeholders for the bounded smoke execution:
+Prove the bucket remains private by checking a raw S3 object URL without credentials; the response must be `403`, not a successful object response:
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::<dedicated-test-bucket>/smoke/<base>/<run>/tmp/*",
-        "arn:aws:s3:::<dedicated-test-bucket>/smoke/<base>/<run>/media/*"
-      ]
-    }
-  ]
+```powershell
+$RawUrl = "https://$SmokeBucketName.s3.ap-southeast-1.amazonaws.com/smoke/member-media/$SmokeRunId/media/raw-access-proof"
+try {
+  Invoke-WebRequest -Uri $RawUrl -ErrorAction Stop
+  throw "SMOKE_REFUSED: raw S3 URL was unexpectedly accessible"
+} catch {
+  if ($_.Exception.Response.StatusCode.value__ -ne 403) { throw }
 }
 ```
 
-Replace `<run>` with the exact `MEMBER_MEDIA_SMOKE_RUN_ID` value before attaching the policy. Do not add `s3:ListBucket`, a bucket-wide object wildcard, another prefix, or any other S3 action. Prepare the bounded test policy for that exact run through the approved test workflow; never broaden it to production `tmp/*` or `media/*`.
+After the smoke, delete only the disposable stack. The smoke bucket is retained because a versioned bucket can retain previous object versions and delete markers after the script has cleaned its exact current keys; CloudFormation cannot safely empty those versions. The retained smoke bucket is still dedicated and disposable. If it needs removal after the stack is gone, empty only this output-derived dedicated test bucket and delete that bucket explicitly. Never substitute a production bucket name:
+
+```powershell
+aws cloudformation delete-stack --region ap-southeast-1 --stack-name tambike-member-media-nonprod
+aws cloudformation wait stack-delete-complete --region ap-southeast-1 --stack-name tambike-member-media-nonprod
+
+# The retained smoke bucket cleanup below is allowed only after confirming
+# $SmokeBucketName came from SmokeBucketName above.
+aws s3 rm "s3://$SmokeBucketName" --recursive
+$VersionedObjects = aws s3api list-object-versions --bucket $SmokeBucketName | ConvertFrom-Json
+$DeleteVersions = @($VersionedObjects.Versions) + @($VersionedObjects.DeleteMarkers) | ForEach-Object {
+  @{ Key = $_.Key; VersionId = $_.VersionId }
+}
+if ($DeleteVersions.Count -gt 0) {
+  $DeletePayload = @{ Objects = $DeleteVersions; Quiet = $true } | ConvertTo-Json -Compress
+  aws s3api delete-objects --bucket $SmokeBucketName --delete $DeletePayload
+}
+aws s3api delete-bucket --bucket $SmokeBucketName --region ap-southeast-1
+```
+
+Do not delete the retained Vercel OIDC provider with the smoke stack. Once production has adopted its exact ARN, treat it as shared team infrastructure and manage it only through an explicitly approved lifecycle change. The retained smoke bucket is not shared infrastructure: remove it only through the output-derived cleanup above.
