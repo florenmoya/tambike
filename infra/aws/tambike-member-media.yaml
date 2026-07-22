@@ -68,8 +68,7 @@ Resources:
           - Id: RemoveExpiredMemberMediaDeleteMarkers
             Status: Enabled
             Prefix: media/
-            Expiration:
-              ExpiredObjectDeleteMarker: true
+            ExpiredObjectDeleteMarker: true
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders:

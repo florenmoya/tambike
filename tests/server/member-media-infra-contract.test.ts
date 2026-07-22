@@ -160,6 +160,20 @@ describe("private member media infrastructure contract", () => {
     expect(template).not.toMatch(/AllowedMethods:[\s\S]{0,120}- (?:GET|PUT|DELETE)/);
   });
 
+  test("places expired delete-marker cleanup directly on its dedicated lifecycle rule", () => {
+    const template = source("infra/aws/tambike-member-media.yaml");
+    const ruleStart = template.indexOf("          - Id: RemoveExpiredMemberMediaDeleteMarkers");
+    const ruleEnd = template.indexOf("      CorsConfiguration:", ruleStart);
+    const rule = template.slice(ruleStart, ruleEnd);
+
+    expect(ruleStart).toBeGreaterThanOrEqual(0);
+    expect(ruleEnd).toBeGreaterThan(ruleStart);
+    expect(rule).toMatch(/^\s{12}Status: Enabled$/m);
+    expect(rule).toMatch(/^\s{12}Prefix: media\/$/m);
+    expect(rule).toMatch(/^\s{12}ExpiredObjectDeleteMarker: true$/m);
+    expect(rule).not.toMatch(/^\s{12}Expiration:\s*$/m);
+  });
+
   test("uses a Java-compatible exact HTTPS origin pattern", () => {
     const template = source("infra/aws/tambike-member-media.yaml");
     const allowedOrigin = template.match(
