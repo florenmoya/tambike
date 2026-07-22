@@ -29,17 +29,71 @@ function uuids() {
 
 function memoryPersistence(options: { saveError?: Error } = {}): SmokePersistence {
   let record: { mediaId: string; storageKey: string } | undefined;
+  const cleanup = new Map<string, {
+    id: string;
+    userId: string;
+    storageKey: string;
+    cleanupAfter: Date;
+    claimToken?: string;
+  }>();
+  let intentSequence = 0;
+  const queueCleanup = (userId: string, storageKey: string, cleanupAfter: Date) => {
+    const existing = cleanup.get(storageKey);
+    if (existing) {
+      if (cleanupAfter < existing.cleanupAfter) existing.cleanupAfter = cleanupAfter;
+      return;
+    }
+    cleanup.set(storageKey, {
+      id: `intent-${++intentSequence}`, userId, storageKey, cleanupAfter,
+    });
+  };
   return {
-    async saveFinalized(_userId, next) {
+    async registerCleanup(userId, storageKey, cleanupAfter) {
+      queueCleanup(userId, storageKey, cleanupAfter);
+    },
+    async activateCleanup(storageKey, cleanupAfter) {
+      const intent = cleanup.get(storageKey);
+      if (!intent) throw new Error("cleanup intent not found");
+      intent.cleanupAfter = cleanupAfter;
+    },
+    async saveFinalized(userId, next, tempKey, cleanupAfter) {
       if (options.saveError) throw options.saveError;
       record = { mediaId: next.mediaId, storageKey: next.storageKey };
-      return { mediaId: next.mediaId, replacedStorageKeys: [] };
+      queueCleanup(userId, tempKey, cleanupAfter);
+      cleanup.delete(next.storageKey);
+      return { mediaId: next.mediaId };
     },
-    async remove(_userId, mediaId) {
+    async remove(userId, mediaId, cleanupAfter) {
       if (!record || record.mediaId !== mediaId) throw new Error("record not found");
-      return { storageKey: record.storageKey };
+      queueCleanup(userId, record.storageKey, cleanupAfter);
+      record = undefined;
     },
     async reorder() {},
+    async claimCleanup({ limit, now }) {
+      return Array.from(cleanup.values())
+        .filter((intent) => intent.cleanupAfter <= now && !intent.claimToken)
+        .sort((left, right) =>
+          left.cleanupAfter.getTime() - right.cleanupAfter.getTime() ||
+          left.id.localeCompare(right.id)
+        )
+        .slice(0, limit)
+        .map((intent) => {
+          intent.claimToken = `claim-${intent.id}`;
+          return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+        });
+    },
+    async completeCleanup(id, claimToken) {
+      const intent = Array.from(cleanup.values()).find(
+        (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+      );
+      if (intent) cleanup.delete(intent.storageKey);
+    },
+    async failCleanup(id, claimToken) {
+      const intent = Array.from(cleanup.values()).find(
+        (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+      );
+      if (intent) intent.claimToken = undefined;
+    },
     async authorizeRead(_userId, mediaId) {
       if (!record || record.mediaId !== mediaId) throw new Error("record not found");
       return { storageKey: record.storageKey, mimeType: "image/webp" };

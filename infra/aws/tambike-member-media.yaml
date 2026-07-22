@@ -60,6 +60,16 @@ Resources:
             ExpirationInDays: 1
             NoncurrentVersionExpiration:
               NoncurrentDays: 1
+          - Id: ExpireNoncurrentMemberMedia
+            Status: Enabled
+            Prefix: media/
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: RemoveExpiredMemberMediaDeleteMarkers
+            Status: Enabled
+            Prefix: media/
+            Expiration:
+              ExpiredObjectDeleteMarker: true
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders:

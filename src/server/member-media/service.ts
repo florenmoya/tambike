@@ -46,12 +46,23 @@ export interface FinalizedMemberMediaRecord {
 }
 
 export interface MemberMediaPersistence {
+  registerCleanup(userId: string, storageKey: string, cleanupAfter: Date): Promise<void>;
+  activateCleanup(storageKey: string, cleanupAfter: Date): Promise<void>;
   saveFinalized(
     userId: string,
     record: FinalizedMemberMediaRecord,
-  ): Promise<{ mediaId: string; replacedStorageKeys: string[] }>;
-  remove(userId: string, mediaId: string): Promise<{ storageKey: string }>;
+    tempKey: string,
+    cleanupAfter: Date,
+  ): Promise<{ mediaId: string }>;
+  remove(userId: string, mediaId: string, cleanupAfter: Date): Promise<void>;
   reorder(userId: string, mediaIds: string[]): Promise<void>;
+  claimCleanup(input: {
+    limit: number;
+    now: Date;
+    claimExpiresAt: Date;
+  }): Promise<Array<{ id: string; storageKey: string; claimToken: string }>>;
+  completeCleanup(id: string, claimToken: string): Promise<void>;
+  failCleanup(id: string, claimToken: string, attemptedAt: Date): Promise<void>;
 }
 
 export interface AuthorizedMemberMediaDescriptor {
@@ -113,6 +124,10 @@ async function deleteIdempotently(store: MemberMediaStore, key: string) {
     if (!isNoSuchKey(error)) throw error;
   }
 }
+
+const ABANDONED_FINALIZE_CLEANUP_DELAY_MS = 15 * 60 * 1_000;
+const CLEANUP_CLAIM_LEASE_MS = 60 * 1_000;
+const CLEANUP_BATCH_LIMIT = 10;
 
 export class MemberMediaLifecycleService {
   private readonly now: () => Date;
@@ -185,26 +200,37 @@ export class MemberMediaLifecycleService {
       motorcyclePhotoPosition: input.motorcyclePhotoPosition,
     };
 
-    await this.store.putObject({
-      key: storageKey,
-      body: normalized.bytes,
-      mimeType: normalized.mimeType,
-    });
+    await persistence.registerCleanup(
+      userId,
+      storageKey,
+      new Date(record.finalizedAt.getTime() + ABANDONED_FINALIZE_CLEANUP_DELAY_MS),
+    );
 
-    let persisted;
     try {
-      persisted = await persistence.saveFinalized(userId, record);
+      await this.store.putObject({
+        key: storageKey,
+        body: normalized.bytes,
+        mimeType: normalized.mimeType,
+      });
     } catch (error) {
-      await deleteIdempotently(this.store, storageKey);
+      await this.activateAndDrainCleanup(storageKey, persistence, error);
       throw error;
     }
 
-    await deleteIdempotently(this.store, input.tempKey);
-    for (const replacedStorageKey of new Set(persisted.replacedStorageKeys)) {
-      if (replacedStorageKey !== storageKey) {
-        await deleteIdempotently(this.store, replacedStorageKey);
-      }
+    let persisted;
+    try {
+      persisted = await persistence.saveFinalized(
+        userId,
+        record,
+        input.tempKey,
+        record.finalizedAt,
+      );
+    } catch (error) {
+      await this.activateAndDrainCleanup(storageKey, persistence, error);
+      throw error;
     }
+
+    await this.drainCleanup(persistence);
 
     return {
       mediaId: persisted.mediaId,
@@ -215,8 +241,9 @@ export class MemberMediaLifecycleService {
   }
 
   async delete(userId: string, mediaId: string, persistence: MemberMediaPersistence) {
-    const removed = await persistence.remove(userId, mediaId);
-    await deleteIdempotently(this.store, removed.storageKey);
+    const cleanupAt = this.now();
+    await persistence.remove(userId, mediaId, cleanupAt);
+    await this.drainCleanup(persistence);
   }
 
   async reorder(userId: string, mediaIds: string[], persistence: MemberMediaPersistence) {
@@ -237,6 +264,58 @@ export class MemberMediaLifecycleService {
     } catch (error) {
       if (isNoSuchKey(error)) throw new MemberMediaLifecycleError("MEDIA_UNAVAILABLE");
       throw error;
+    }
+  }
+
+  private async activateAndDrainCleanup(
+    storageKey: string,
+    persistence: MemberMediaPersistence,
+    operationError: unknown,
+  ) {
+    const cleanupAt = this.now();
+    try {
+      await persistence.activateCleanup(storageKey, cleanupAt);
+      await this.drainCleanup(persistence, cleanupAt);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        operationError instanceof Error ? operationError.message : "MEMBER_MEDIA_OPERATION_FAILED",
+        { cause: operationError },
+      );
+    }
+  }
+
+  private async drainCleanup(
+    persistence: MemberMediaPersistence,
+    now: Date = this.now(),
+  ) {
+    const claims = await persistence.claimCleanup({
+      limit: CLEANUP_BATCH_LIMIT,
+      now,
+      claimExpiresAt: new Date(now.getTime() + CLEANUP_CLAIM_LEASE_MS),
+    });
+    const failures: unknown[] = [];
+    for (const claim of claims) {
+      try {
+        await deleteIdempotently(this.store, claim.storageKey);
+        await persistence.completeCleanup(claim.id, claim.claimToken);
+      } catch (error) {
+        try {
+          await persistence.failCleanup(claim.id, claim.claimToken, now);
+        } catch (persistenceError) {
+          failures.push(new AggregateError(
+            [error, persistenceError],
+            error instanceof Error ? error.message : "MEMBER_MEDIA_CLEANUP_FAILED",
+            { cause: error },
+          ));
+          continue;
+        }
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "MEMBER_MEDIA_CLEANUP_FAILED");
     }
   }
 }

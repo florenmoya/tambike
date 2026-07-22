@@ -125,7 +125,11 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).toContain("allocateDirectGiveawayAwards");
     expect(prismaBackendSource).toContain("voidIneligibleDirectGiveawayAwards");
     expect(prismaBackendSource).toContain("reallocateImmediateGiveawayAwards");
-    expect(prismaBackendSource).not.toContain("SKIP LOCKED");
+    const giveawayCampaignLockSource = prismaBackendSource.slice(
+      prismaBackendSource.indexOf("private async lockGiveawayCampaign("),
+      prismaBackendSource.indexOf("private async requireGiveawayCampaign("),
+    );
+    expect(giveawayCampaignLockSource).not.toContain("SKIP LOCKED");
   });
 
   test("persists locked snapshots and fair draw lifecycle operations", () => {

@@ -105,6 +105,10 @@ aws iam get-role --role-name <role-name-from-stack-resources>
 
 The bucket is retained if the stack is deleted. It blocks public access, uses SSE-S3, enables versioning, expires `tmp/` objects after one day, and allows browser CORS POSTs only from `AllowedOrigin`.
 
+Final `media/` objects remain private and versioned. When the application deletes or replaces one, S3 retains its noncurrent version for 30 days, then expires it; expired delete markers are removed separately. This bounded recovery window prevents versioning from retaining removed member bytes indefinitely without weakening public-access controls.
+
+Application cleanup is backed by a durable cleanup intent. A final key is registered before its S3 write, and the metadata transaction atomically removes that provisional intent while enqueueing the temporary and replaced keys. Explicit removal also enqueues its key in the same transaction that clears metadata. Each later finalize or delete claims only a bounded batch of stored keys, treats `NoSuchKey` as success, and increments failed attempts for retry. Cleanup never lists S3 and never derives deletion targets from bucket contents.
+
 ## Configure Vercel environments
 
 Use only the CloudFormation outputs and the pinned region:

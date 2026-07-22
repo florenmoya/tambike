@@ -8,6 +8,117 @@ import { closePrismaIntegrationClientPair, createPrismaIntegrationClientPair, cr
 import { createPrismaEventFixture } from "./fixtures";
 
 describe("Prisma member media persistence", () => {
+  test("persists cleanup intent transactionally and retries a failed final-object rollback", async () => {
+    const objects = new Map<string, StoredMemberMediaObject>();
+    const deleteFailures = new Map<string, number>();
+    const suffix = randomUUID();
+    let generated = 0;
+    const store: MemberMediaStore = {
+      createPresignedPost: vi.fn(),
+      getObject: vi.fn(async (key) => {
+        const value = objects.get(key);
+        if (!value) throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+        return value;
+      }),
+      putObject: vi.fn(async (input) => {
+        objects.set(input.key, { body: input.body, contentType: input.mimeType });
+      }),
+      deleteObject: vi.fn(async (key) => {
+        const remainingFailures = deleteFailures.get(key) ?? 0;
+        if (remainingFailures > 0) {
+          deleteFailures.set(key, remainingFailures - 1);
+          throw new Error(`S3_DELETE_FAILED:${key}`);
+        }
+        if (!objects.delete(key)) {
+          throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+        }
+      }),
+    };
+    const memberMedia = {
+      store,
+      createUuid: () => `cleanup-media-${suffix}-${++generated}`,
+      normalize: vi.fn(async () => ({
+        bytes: Buffer.from("normalized-webp"),
+        mimeType: "image/webp" as const,
+        width: 1200,
+        height: 800,
+      })),
+    };
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl, { memberMedia });
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, { suffix });
+      const owner = fixture.riders[0];
+      if (!owner) throw new Error("CLEANUP_MEDIA_OWNER_MISSING");
+      const stage = (nonce: string) => {
+        const key = `tmp/users/${owner.userId}/${nonce}`;
+        objects.set(key, {
+          body: Buffer.from("jpeg"), contentType: "image/jpeg", lastModified: new Date(),
+        });
+        return key;
+      };
+      const failedMediaId = `cleanup-media-${suffix}-1`;
+      const failedFinalKey = `media/users/${owner.userId}/motorcycles/${failedMediaId}.webp`;
+      deleteFailures.set(failedFinalKey, 1);
+
+      await expect(backendClients.primary.backend.finalizeMemberMedia(owner.sessionToken, {
+        purpose: "motorcycle-photo",
+        tempKey: stage("invalid-with-durable-final"),
+        claimedMimeType: "image/jpeg",
+      })).rejects.toThrow("INVALID_INPUT");
+
+      const failedRows = await rawClients.secondary.$queryRaw<Array<{
+        storageKey: string;
+        attemptCount: number;
+        claimToken: string | null;
+      }>>`
+        SELECT "storageKey", "attemptCount", "claimToken"
+        FROM "MemberMediaCleanupIntent"
+        WHERE "storageKey" = ${failedFinalKey}
+      `;
+      expect(failedRows).toEqual([{
+        storageKey: failedFinalKey,
+        attemptCount: 1,
+        claimToken: null,
+      }]);
+
+      await backendClients.primary.backend.upsertMotorcycle(owner.sessionToken, {
+        make: "Honda", model: "CB650R",
+      });
+      const successfulTempKey = stage("successful-with-temp-outbox");
+      deleteFailures.set(successfulTempKey, 1);
+      await expect(backendClients.primary.backend.finalizeMemberMedia(owner.sessionToken, {
+        purpose: "motorcycle-photo",
+        tempKey: successfulTempKey,
+        claimedMimeType: "image/jpeg",
+      })).rejects.toThrow(`S3_DELETE_FAILED:${successfulTempKey}`);
+
+      await expect(rawClients.secondary.motorcyclePhoto.count({
+        where: { motorcycle: { userId: owner.userId } },
+      })).resolves.toBe(1);
+      const cleanupRows = await rawClients.secondary.$queryRaw<Array<{
+        storageKey: string;
+        attemptCount: number;
+      }>>`
+        SELECT "storageKey", "attemptCount"
+        FROM "MemberMediaCleanupIntent"
+        WHERE "storageKey" IN (${failedFinalKey}, ${successfulTempKey})
+        ORDER BY "storageKey"
+      `;
+      expect(cleanupRows).toEqual([{
+        storageKey: successfulTempKey,
+        attemptCount: 1,
+      }]);
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
   test("atomically persists replacement, limit, reorder, deletion, and private authorization", async () => {
     const objects = new Map<string, StoredMemberMediaObject>();
     const store: MemberMediaStore = {

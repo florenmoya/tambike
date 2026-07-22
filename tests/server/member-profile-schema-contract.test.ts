@@ -9,6 +9,13 @@ const migrationPath = resolve(
 );
 const migrationSql = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
+const cleanupMigrationPath = resolve(
+  process.cwd(),
+  "prisma/migrations/20260722020000_member_media_cleanup_intents/migration.sql",
+);
+const cleanupMigrationSql = existsSync(cleanupMigrationPath)
+  ? readFileSync(cleanupMigrationPath, "utf8")
+  : "";
 const memberProfileTypesPath = resolve(process.cwd(), "src/features/member-profiles/types.ts");
 const memberProfileTypes = existsSync(memberProfileTypesPath)
   ? readFileSync(memberProfileTypesPath, "utf8")
@@ -72,6 +79,19 @@ describe("member profile, motorcycle, roster, and media schema contract", () => 
     expect(migrationSql).toContain('CREATE TABLE "Motorcycle"');
     expect(migrationSql).toContain('CREATE TABLE "MotorcyclePhoto"');
     expect(migrationSql).toContain('CREATE TABLE "EventRosterSettings"');
+  });
+
+  test("adds a durable indexed cleanup-intent outbox in an additive migration", () => {
+    expect(prismaSchema).toMatch(/model MemberMediaCleanupIntent\s+\{/);
+    expect(prismaSchema).toMatch(/storageKey\s+String\s+@unique/);
+    expect(prismaSchema).toMatch(/attemptCount\s+Int\s+@default\(0\)/);
+    expect(prismaSchema).toContain("@@index([cleanupAfter, createdAt, id])");
+    expect(prismaSchema).toContain("@@index([claimExpiresAt])");
+    expect(cleanupMigrationSql).toContain('CREATE TABLE "MemberMediaCleanupIntent"');
+    expect(cleanupMigrationSql).toContain('"storageKey" TEXT NOT NULL');
+    expect(cleanupMigrationSql).toContain('"attemptCount" INTEGER NOT NULL DEFAULT 0');
+    expect(cleanupMigrationSql).toContain('CREATE UNIQUE INDEX "MemberMediaCleanupIntent_storageKey_key"');
+    expect(cleanupMigrationSql).toContain('CREATE INDEX "MemberMediaCleanupIntent_cleanupAfter_createdAt_id_idx"');
   });
 
   test("exposes only sanitized profile and roster DTO shapes", () => {

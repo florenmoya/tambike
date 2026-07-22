@@ -468,6 +468,22 @@ model MotorcyclePhoto {
   @@unique([motorcycleId, position])
 }
 
+model MemberMediaCleanupIntent {
+  id             String   @id @default(cuid())
+  userId         String
+  storageKey     String   @unique
+  cleanupAfter   DateTime
+  claimToken     String?
+  claimExpiresAt DateTime?
+  attemptCount   Int      @default(0)
+  lastAttemptAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([cleanupAfter, createdAt, id])
+  @@index([claimExpiresAt])
+}
+
 model EventRosterSettings {
   eventId   String   @id
   enabled   Boolean  @default(false)

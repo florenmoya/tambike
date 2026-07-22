@@ -314,6 +314,18 @@ type BackendMotorcycle = {
   }>;
 };
 
+type BackendMemberMediaCleanupIntent = {
+  id: string;
+  userId: string;
+  storageKey: string;
+  cleanupAfter: Date;
+  claimToken?: string;
+  claimExpiresAt?: Date;
+  attemptCount: number;
+  lastAttemptAt?: Date;
+  createdAt: Date;
+};
+
 type SessionRecord = {
   token: string;
   userId: string;
@@ -905,6 +917,7 @@ export class TambikeBackend {
   private readonly rosterSettings = new Map<string, boolean>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
   private readonly motorcycles = new Map<string, BackendMotorcycle>();
+  private readonly memberMediaCleanupIntents = new Map<string, BackendMemberMediaCleanupIntent>();
   private readonly checkIns = new Map<string, CheckInRecord>();
   private readonly checkInSettings = new Map<string, CheckInSettings>();
   private readonly selfCheckInSessions = new Map<string, SelfCheckInSession>();
@@ -7705,15 +7718,89 @@ export class TambikeBackend {
 
   private memberMediaPersistence(): MemberMediaPersistence {
     return {
-      saveFinalized: async (userId, record) => this.saveFinalizedMemberMedia(userId, record),
-      remove: async (userId, mediaId) => this.removeMemberMediaRecord(userId, mediaId),
+      registerCleanup: async (userId, storageKey, cleanupAfter) => {
+        this.queueMemberMediaCleanup(userId, storageKey, cleanupAfter);
+      },
+      activateCleanup: async (storageKey, cleanupAfter) => {
+        const intent = this.memberMediaCleanupIntents.get(storageKey);
+        if (!intent) throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+        intent.cleanupAfter = cleanupAfter;
+      },
+      saveFinalized: async (userId, record, tempKey, cleanupAfter) =>
+        this.saveFinalizedMemberMedia(userId, record, tempKey, cleanupAfter),
+      remove: async (userId, mediaId, cleanupAfter) =>
+        this.removeMemberMediaRecord(userId, mediaId, cleanupAfter),
       reorder: async (userId, mediaIds) => this.reorderMemberMediaRecords(userId, mediaIds),
+      claimCleanup: async (input) => this.claimMemberMediaCleanup(input),
+      completeCleanup: async (id, claimToken) => {
+        const intent = Array.from(this.memberMediaCleanupIntents.values()).find(
+          (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+        );
+        if (intent) this.memberMediaCleanupIntents.delete(intent.storageKey);
+      },
+      failCleanup: async (id, claimToken, attemptedAt) => {
+        const intent = Array.from(this.memberMediaCleanupIntents.values()).find(
+          (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+        );
+        if (!intent) return;
+        intent.attemptCount += 1;
+        intent.lastAttemptAt = attemptedAt;
+        intent.claimToken = undefined;
+        intent.claimExpiresAt = undefined;
+      },
     };
   }
 
-  private saveFinalizedMemberMedia(userId: string, record: FinalizedMemberMediaRecord) {
+  private queueMemberMediaCleanup(userId: string, storageKey: string, cleanupAfter: Date) {
+    const existing = this.memberMediaCleanupIntents.get(storageKey);
+    if (existing) {
+      if (cleanupAfter < existing.cleanupAfter) existing.cleanupAfter = cleanupAfter;
+      return;
+    }
+    this.memberMediaCleanupIntents.set(storageKey, {
+      id: `member-media-cleanup-${randomUUID()}`,
+      userId,
+      storageKey,
+      cleanupAfter,
+      attemptCount: 0,
+      createdAt: new Date(),
+    });
+  }
+
+  private claimMemberMediaCleanup(input: {
+    limit: number;
+    now: Date;
+    claimExpiresAt: Date;
+  }) {
+    return Array.from(this.memberMediaCleanupIntents.values())
+      .filter((intent) =>
+        intent.cleanupAfter <= input.now &&
+        (!intent.claimExpiresAt || intent.claimExpiresAt <= input.now)
+      )
+      .sort((left, right) =>
+        left.cleanupAfter.getTime() - right.cleanupAfter.getTime() ||
+        left.createdAt.getTime() - right.createdAt.getTime() ||
+        left.id.localeCompare(right.id)
+      )
+      .slice(0, input.limit)
+      .map((intent) => {
+        intent.claimToken = randomUUID();
+        intent.claimExpiresAt = input.claimExpiresAt;
+        return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+      });
+  }
+
+  private saveFinalizedMemberMedia(
+    userId: string,
+    record: FinalizedMemberMediaRecord,
+    tempKey: string,
+    cleanupAfter: Date,
+  ) {
     const user = this.users.get(userId);
     if (!user) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+    if (!this.memberMediaCleanupIntents.has(record.storageKey)) {
+      throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+    }
 
     if (record.purpose === "avatar") {
       const replacedStorageKeys = user.profilePhotoStorageKey
@@ -7727,7 +7814,12 @@ export class TambikeBackend {
         profilePhotoHeight: record.height,
         profilePhotoFinalizedAt: record.finalizedAt,
       });
-      return Promise.resolve({ mediaId: record.mediaId, replacedStorageKeys });
+      this.queueMemberMediaCleanup(userId, tempKey, cleanupAfter);
+      for (const storageKey of replacedStorageKeys) {
+        this.queueMemberMediaCleanup(userId, storageKey, cleanupAfter);
+      }
+      this.memberMediaCleanupIntents.delete(record.storageKey);
+      return Promise.resolve({ mediaId: record.mediaId });
     }
 
     const motorcycle = this.motorcycles.get(userId);
@@ -7761,13 +7853,13 @@ export class TambikeBackend {
       ...motorcycle.photos.filter((photo) => photo.position !== position),
       nextPhoto,
     ].sort((left, right) => left.position - right.position);
-    return Promise.resolve({
-      mediaId: record.mediaId,
-      replacedStorageKeys: existing ? [existing.storageKey] : [],
-    });
+    this.queueMemberMediaCleanup(userId, tempKey, cleanupAfter);
+    if (existing) this.queueMemberMediaCleanup(userId, existing.storageKey, cleanupAfter);
+    this.memberMediaCleanupIntents.delete(record.storageKey);
+    return Promise.resolve({ mediaId: record.mediaId });
   }
 
-  private removeMemberMediaRecord(userId: string, mediaId: string) {
+  private removeMemberMediaRecord(userId: string, mediaId: string, cleanupAfter: Date) {
     const user = this.users.get(userId);
     if (!user) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     if (user.profilePhotoMediaId === mediaId && user.profilePhotoStorageKey) {
@@ -7778,7 +7870,8 @@ export class TambikeBackend {
       user.profilePhotoWidth = undefined;
       user.profilePhotoHeight = undefined;
       user.profilePhotoFinalizedAt = undefined;
-      return Promise.resolve({ storageKey });
+      this.queueMemberMediaCleanup(userId, storageKey, cleanupAfter);
+      return Promise.resolve();
     }
 
     const motorcycle = this.motorcycles.get(userId);
@@ -7788,7 +7881,8 @@ export class TambikeBackend {
     motorcycle.photos
       .sort((left, right) => left.position - right.position)
       .forEach((photo, position) => { photo.position = position; });
-    return Promise.resolve({ storageKey: removed.storageKey });
+    this.queueMemberMediaCleanup(userId, removed.storageKey, cleanupAfter);
+    return Promise.resolve();
   }
 
   private reorderMemberMediaRecords(userId: string, mediaIds: string[]) {

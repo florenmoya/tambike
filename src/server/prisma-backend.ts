@@ -9198,10 +9198,94 @@ export class PrismaTambikeBackend {
 
   private memberMediaPersistence(): MemberMediaPersistence {
     return {
-      saveFinalized: (userId, record) => this.saveFinalizedMemberMedia(userId, record),
-      remove: (userId, mediaId) => this.removeMemberMediaRecord(userId, mediaId),
+      registerCleanup: (userId, storageKey, cleanupAfter) =>
+        this.registerMemberMediaCleanup(userId, storageKey, cleanupAfter),
+      activateCleanup: (storageKey, cleanupAfter) =>
+        this.activateMemberMediaCleanup(storageKey, cleanupAfter),
+      saveFinalized: (userId, record, tempKey, cleanupAfter) =>
+        this.saveFinalizedMemberMedia(userId, record, tempKey, cleanupAfter),
+      remove: (userId, mediaId, cleanupAfter) =>
+        this.removeMemberMediaRecord(userId, mediaId, cleanupAfter),
       reorder: (userId, mediaIds) => this.reorderMemberMediaRecords(userId, mediaIds),
+      claimCleanup: (input) => this.claimMemberMediaCleanup(input),
+      completeCleanup: (id, claimToken) => this.completeMemberMediaCleanup(id, claimToken),
+      failCleanup: (id, claimToken, attemptedAt) =>
+        this.failMemberMediaCleanup(id, claimToken, attemptedAt),
     };
+  }
+
+  private async registerMemberMediaCleanup(
+    userId: string,
+    storageKey: string,
+    cleanupAfter: Date,
+  ) {
+    await this.prisma.memberMediaCleanupIntent.upsert({
+      where: { storageKey },
+      create: { userId, storageKey, cleanupAfter },
+      update: { cleanupAfter },
+    });
+  }
+
+  private async activateMemberMediaCleanup(storageKey: string, cleanupAfter: Date) {
+    const activated = await this.prisma.memberMediaCleanupIntent.updateMany({
+      where: { storageKey },
+      data: { cleanupAfter },
+    });
+    if (activated.count !== 1) throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+  }
+
+  private async claimMemberMediaCleanup(input: {
+    limit: number;
+    now: Date;
+    claimExpiresAt: Date;
+  }) {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 10) {
+      throw new Error("MEMBER_MEDIA_CLEANUP_CLAIM_LIMIT_INVALID");
+    }
+    const claimToken = randomUUID();
+    return this.prisma.$transaction(async (tx) => tx.$queryRaw<Array<{
+      id: string;
+      storageKey: string;
+      claimToken: string;
+    }>>`
+      WITH candidates AS (
+        SELECT "id"
+        FROM "MemberMediaCleanupIntent"
+        WHERE "cleanupAfter" <= ${input.now}
+          AND ("claimExpiresAt" IS NULL OR "claimExpiresAt" <= ${input.now})
+        ORDER BY "cleanupAfter" ASC, "createdAt" ASC, "id" ASC
+        LIMIT ${input.limit}
+        FOR UPDATE SKIP LOCKED
+      ), claimed AS (
+        UPDATE "MemberMediaCleanupIntent" AS intent
+        SET "claimToken" = ${claimToken},
+            "claimExpiresAt" = ${input.claimExpiresAt},
+            "updatedAt" = ${input.now}
+        FROM candidates
+        WHERE intent."id" = candidates."id"
+        RETURNING intent."id", intent."storageKey", intent."claimToken",
+          intent."cleanupAfter", intent."createdAt"
+      )
+      SELECT "id", "storageKey", "claimToken"
+      FROM claimed
+      ORDER BY "cleanupAfter" ASC, "createdAt" ASC, "id" ASC
+    `);
+  }
+
+  private async completeMemberMediaCleanup(id: string, claimToken: string) {
+    await this.prisma.memberMediaCleanupIntent.deleteMany({ where: { id, claimToken } });
+  }
+
+  private async failMemberMediaCleanup(id: string, claimToken: string, attemptedAt: Date) {
+    await this.prisma.memberMediaCleanupIntent.updateMany({
+      where: { id, claimToken },
+      data: {
+        attemptCount: { increment: 1 },
+        lastAttemptAt: attemptedAt,
+        claimToken: null,
+        claimExpiresAt: null,
+      },
+    });
   }
 
   private async lockMemberMediaOwner(tx: Prisma.TransactionClient, userId: string) {
@@ -9209,9 +9293,19 @@ export class PrismaTambikeBackend {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
   }
 
-  private saveFinalizedMemberMedia(userId: string, record: FinalizedMemberMediaRecord) {
+  private saveFinalizedMemberMedia(
+    userId: string,
+    record: FinalizedMemberMediaRecord,
+    tempKey: string,
+    cleanupAfter: Date,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       await this.lockMemberMediaOwner(tx, userId);
+      const finalCleanupIntent = await tx.memberMediaCleanupIntent.findUnique({
+        where: { storageKey: record.storageKey },
+        select: { id: true },
+      });
+      if (!finalCleanupIntent) throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
       if (record.purpose === "avatar") {
         const owner = await tx.user.findUniqueOrThrow({
           where: { id: userId },
@@ -9228,12 +9322,22 @@ export class PrismaTambikeBackend {
             profilePhotoFinalizedAt: record.finalizedAt,
           },
         });
-        return {
-          mediaId: record.mediaId,
-          replacedStorageKeys: owner.profilePhotoStorageKey
-            ? [owner.profilePhotoStorageKey]
-            : [],
-        };
+        await tx.memberMediaCleanupIntent.upsert({
+          where: { storageKey: tempKey },
+          create: { userId, storageKey: tempKey, cleanupAfter },
+          update: { cleanupAfter },
+        });
+        if (owner.profilePhotoStorageKey) {
+          await tx.memberMediaCleanupIntent.upsert({
+            where: { storageKey: owner.profilePhotoStorageKey },
+            create: { userId, storageKey: owner.profilePhotoStorageKey, cleanupAfter },
+            update: { cleanupAfter },
+          });
+        }
+        await tx.memberMediaCleanupIntent.delete({
+          where: { id: finalCleanupIntent.id },
+        });
+        return { mediaId: record.mediaId };
       }
 
       const motorcycle = await tx.motorcycle.findUnique({
@@ -9282,14 +9386,26 @@ export class PrismaTambikeBackend {
           },
         });
       }
-      return {
-        mediaId: record.mediaId,
-        replacedStorageKeys: existing ? [existing.storageKey] : [],
-      };
+      await tx.memberMediaCleanupIntent.upsert({
+        where: { storageKey: tempKey },
+        create: { userId, storageKey: tempKey, cleanupAfter },
+        update: { cleanupAfter },
+      });
+      if (existing) {
+        await tx.memberMediaCleanupIntent.upsert({
+          where: { storageKey: existing.storageKey },
+          create: { userId, storageKey: existing.storageKey, cleanupAfter },
+          update: { cleanupAfter },
+        });
+      }
+      await tx.memberMediaCleanupIntent.delete({
+        where: { id: finalCleanupIntent.id },
+      });
+      return { mediaId: record.mediaId };
     });
   }
 
-  private removeMemberMediaRecord(userId: string, mediaId: string) {
+  private removeMemberMediaRecord(userId: string, mediaId: string, cleanupAfter: Date) {
     return this.prisma.$transaction(async (tx) => {
       await this.lockMemberMediaOwner(tx, userId);
       const owner = await tx.user.findUniqueOrThrow({
@@ -9308,7 +9424,12 @@ export class PrismaTambikeBackend {
             profilePhotoFinalizedAt: null,
           },
         });
-        return { storageKey: owner.profilePhotoStorageKey };
+        await tx.memberMediaCleanupIntent.upsert({
+          where: { storageKey: owner.profilePhotoStorageKey },
+          create: { userId, storageKey: owner.profilePhotoStorageKey, cleanupAfter },
+          update: { cleanupAfter },
+        });
+        return;
       }
 
       const photo = await tx.motorcyclePhoto.findUnique({
@@ -9324,7 +9445,11 @@ export class PrismaTambikeBackend {
         orderBy: { position: "asc" },
       });
       await this.replaceMotorcyclePhotoOrder(tx, photo.motorcycle.id, remaining);
-      return { storageKey: photo.storageKey };
+      await tx.memberMediaCleanupIntent.upsert({
+        where: { storageKey: photo.storageKey },
+        create: { userId, storageKey: photo.storageKey, cleanupAfter },
+        update: { cleanupAfter },
+      });
     });
   }
 

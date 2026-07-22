@@ -149,6 +149,12 @@ describe("private member media infrastructure contract", () => {
       expect(template).toContain(setting);
     }
     expect(template).toMatch(/LifecycleConfiguration:[\s\S]*Prefix: tmp\/[\s\S]*ExpirationInDays: 1/);
+    expect(template).toMatch(
+      /Id: ExpireNoncurrentMemberMedia[\s\S]*Prefix: media\/[\s\S]*NoncurrentVersionExpiration:[\s\S]*NoncurrentDays: 30/,
+    );
+    expect(template).toMatch(
+      /Id: RemoveExpiredMemberMediaDeleteMarkers[\s\S]*Prefix: media\/[\s\S]*ExpiredObjectDeleteMarker: true/,
+    );
     expect(template).toMatch(/CorsConfiguration:[\s\S]*AllowedOrigins:[\s\S]*!Ref AllowedOrigin/);
     expect(template).toMatch(/AllowedMethods:\s*\r?\n\s*- POST/);
     expect(template).not.toMatch(/AllowedMethods:[\s\S]{0,120}- (?:GET|PUT|DELETE)/);
@@ -269,6 +275,9 @@ describe("private member media infrastructure contract", () => {
       expect(guide).toContain(action);
     }
     expect(guide).not.toMatch(/AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY/);
+    expect(guide).toContain("30 days");
+    expect(guide).toContain("durable cleanup intent");
+    expect(guide).toContain("bounded batch");
   });
 
   test("ships a destructive-safe real-flow smoke command", () => {

@@ -201,6 +201,23 @@ async function submitPresignedPost(
 function createSmokePersistence(): SmokePersistence {
   let ownerId: string | undefined;
   let finalized: { mediaId: string; storageKey: string } | undefined;
+  const cleanup = new Map<string, {
+    id: string;
+    userId: string;
+    storageKey: string;
+    cleanupAfter: Date;
+    claimToken?: string;
+  }>();
+  const queueCleanup = (userId: string, storageKey: string, cleanupAfter: Date) => {
+    const existing = cleanup.get(storageKey);
+    if (existing) {
+      if (cleanupAfter < existing.cleanupAfter) existing.cleanupAfter = cleanupAfter;
+      return;
+    }
+    cleanup.set(storageKey, {
+      id: randomUUID(), userId, storageKey, cleanupAfter,
+    });
+  };
   const requireRecord = (userId: string, mediaId: string) => {
     if (!finalized || ownerId !== userId || finalized.mediaId !== mediaId) {
       throw new Error("smoke media record not found");
@@ -208,15 +225,52 @@ function createSmokePersistence(): SmokePersistence {
     return finalized;
   };
   return {
-    async saveFinalized(userId: string, record: FinalizedMemberMediaRecord) {
+    async registerCleanup(userId, storageKey, cleanupAfter) {
+      queueCleanup(userId, storageKey, cleanupAfter);
+    },
+    async activateCleanup(storageKey, cleanupAfter) {
+      const intent = cleanup.get(storageKey);
+      if (!intent) throw new Error("smoke cleanup intent not found");
+      intent.cleanupAfter = cleanupAfter;
+    },
+    async saveFinalized(userId: string, record: FinalizedMemberMediaRecord, tempKey, cleanupAfter) {
       ownerId = userId;
       finalized = { mediaId: record.mediaId, storageKey: record.storageKey };
-      return { mediaId: record.mediaId, replacedStorageKeys: [] };
+      queueCleanup(userId, tempKey, cleanupAfter);
+      cleanup.delete(record.storageKey);
+      return { mediaId: record.mediaId };
     },
-    async remove(userId: string, mediaId: string) {
-      return { storageKey: requireRecord(userId, mediaId).storageKey };
+    async remove(userId: string, mediaId: string, cleanupAfter) {
+      const record = requireRecord(userId, mediaId);
+      queueCleanup(userId, record.storageKey, cleanupAfter);
+      finalized = undefined;
     },
     async reorder() {},
+    async claimCleanup({ limit, now }) {
+      return Array.from(cleanup.values())
+        .filter((intent) => intent.cleanupAfter <= now && !intent.claimToken)
+        .sort((left, right) =>
+          left.cleanupAfter.getTime() - right.cleanupAfter.getTime() ||
+          left.id.localeCompare(right.id)
+        )
+        .slice(0, limit)
+        .map((intent) => {
+          intent.claimToken = randomUUID();
+          return { id: intent.id, storageKey: intent.storageKey, claimToken: intent.claimToken };
+        });
+    },
+    async completeCleanup(id, claimToken) {
+      const intent = Array.from(cleanup.values()).find(
+        (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+      );
+      if (intent) cleanup.delete(intent.storageKey);
+    },
+    async failCleanup(id, claimToken) {
+      const intent = Array.from(cleanup.values()).find(
+        (candidate) => candidate.id === id && candidate.claimToken === claimToken,
+      );
+      if (intent) intent.claimToken = undefined;
+    },
     async authorizeRead(userId: string, mediaId: string) {
       return {
         storageKey: requireRecord(userId, mediaId).storageKey,
