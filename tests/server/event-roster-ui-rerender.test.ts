@@ -186,6 +186,9 @@ describe("interactive roster state transitions", () => {
       storedIdentity: "VISIBLE",
       saveIdentity,
     })));
+    const changeButton = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Change for this event"));
+    await act(async () => changeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const saveButton = [...container.querySelectorAll("button")]
       .find((button) => button.textContent?.includes("Save event privacy"));
     await act(async () => saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
@@ -199,5 +202,31 @@ describe("interactive roster state transitions", () => {
     })));
     const anonymous = container.querySelector<HTMLInputElement>('input[value="ANONYMOUS"]');
     expect(anonymous?.checked).toBe(true);
+  });
+
+  test("keeps an existing RSVP privacy editor collapsed until the rider requests it", async () => {
+    const profile = {
+      visibility: "PUBLIC",
+      isPublished: true,
+      defaultRosterIdentity: "VISIBLE",
+    } as Pick<MemberProfileEditorView, "visibility" | "isPublished" | "defaultRosterIdentity">;
+
+    await act(async () => root.render(createElement(ExistingRsvpIdentityForm, {
+      eventId: "ride-2",
+      profile,
+      storedIdentity: "ANONYMOUS",
+      saveIdentity: async (_eventId, identity) => identity,
+    })));
+
+    expect(container.textContent).toContain("Profile default");
+    expect(container.textContent).toContain("Change for this event");
+    expect(container.querySelector('a[href="/profile#attendance-privacy"]')).not.toBeNull();
+    expect(container.querySelector(".roster-identity-field")).toBeNull();
+
+    const changeButton = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Change for this event"));
+    await act(async () => changeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    expect(container.querySelector(".roster-identity-field")).not.toBeNull();
   });
 });

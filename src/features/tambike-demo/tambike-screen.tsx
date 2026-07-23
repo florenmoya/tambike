@@ -1296,6 +1296,7 @@ export function ExistingRsvpIdentityForm({
 }) {
   const [rosterIdentity, setRosterIdentity] = useState<RosterIdentity>(() =>
     normalizeExistingRosterIdentity(profile, storedIdentity));
+  const [editing, setEditing] = useState(false);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState("");
 
@@ -1318,19 +1319,39 @@ export function ExistingRsvpIdentityForm({
 
   return (
     <>
-      <RosterIdentityField
-        idPrefix={`existing-rsvp-${eventId}`}
-        value={rosterIdentity}
-        onChange={setRosterIdentity}
-        defaultIdentity={profile.defaultRosterIdentity}
-        visibility={profile.visibility}
-        isPublished={profile.isPublished}
-        context="existing-rsvp"
-        disabled={pending}
-      />
-      <button className="buy-secondary" type="button" disabled={pending} onClick={() => void save()}>
-        {pending ? "Saving…" : "Save event privacy"}
-      </button>
+      <div className="existing-rsvp-identity__summary">
+        <div>
+          <span>Event roster</span>
+          <strong>{normalizeExistingRosterIdentity(profile, rosterIdentity) === "VISIBLE" ? "Visible" : "Anonymous"}</strong>
+        </div>
+        <div className="existing-rsvp-identity__actions">
+          <Link href="/profile#attendance-privacy">Profile default</Link>
+          <button
+            type="button"
+            aria-expanded={editing}
+            onClick={() => setEditing((current) => !current)}
+          >
+            {editing ? "Close" : "Change for this event"}
+          </button>
+        </div>
+      </div>
+      {editing ? (
+        <>
+          <RosterIdentityField
+            idPrefix={`existing-rsvp-${eventId}`}
+            value={rosterIdentity}
+            onChange={setRosterIdentity}
+            defaultIdentity={profile.defaultRosterIdentity}
+            visibility={profile.visibility}
+            isPublished={profile.isPublished}
+            context="existing-rsvp"
+            disabled={pending}
+          />
+          <button className="buy-secondary" type="button" disabled={pending} onClick={() => void save()}>
+            {pending ? "Saving…" : "Save event privacy"}
+          </button>
+        </>
+      ) : null}
       <p className="inline-feedback" aria-live="polite">{status}</p>
     </>
   );

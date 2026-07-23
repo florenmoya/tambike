@@ -320,7 +320,7 @@ function LoadedProfileSettings({
           </CardContent>
         </Card>
 
-        <Card className="profile-settings__section">
+        <Card id="attendance-privacy" className="profile-settings__section">
           <CardHeader>
             <CardTitle>Attendance privacy</CardTitle>
             <CardDescription>This default applies to future event registrations only.</CardDescription>

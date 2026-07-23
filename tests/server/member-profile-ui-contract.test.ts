@@ -90,6 +90,7 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toContain('id="profile-visibility"');
     expect(settings).toContain('htmlFor="default-roster-identity"');
     expect(settings).toContain('id="default-roster-identity"');
+    expect(settings).toMatch(/<Card id="attendance-privacy"[\s\S]*?<CardTitle>Attendance privacy<\/CardTitle>/);
     expect(settings).toMatch(/Publish profile|Save profile changes/);
     expect(settings).toMatch(/Identity/);
     expect(settings).toMatch(/Attendance privacy/);
