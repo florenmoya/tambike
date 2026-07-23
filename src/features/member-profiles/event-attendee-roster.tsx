@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { EyeOff, MapPin, Motorbike, Users } from "lucide-react";
+import { MapPin, Motorbike, Users } from "lucide-react";
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -205,14 +205,6 @@ function StatefulEventAttendeeRoster({
         <>
           <div className="event-roster__grid">
             {attendees.map((attendee) => <RiderExcerpt key={attendee.slug} attendee={attendee} />)}
-            {summary.anonymousCount > 0 ? (
-              <article className="roster-anonymous-card">
-                <EyeOff aria-hidden="true" />
-                <span>Privacy respected</span>
-                <strong>{summary.anonymousCount} riders chose privacy</strong>
-                <p>Anonymous RSVPs and private or unpublished profiles are counted here once.</p>
-              </article>
-            ) : null}
           </div>
           {nextCursor ? (
             <div className="event-roster__more">

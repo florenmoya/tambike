@@ -146,11 +146,12 @@ describe("event attendee route and roster presentation", () => {
     expect(guestMarkup).not.toContain("Mika Santos");
   });
 
-  test("renders one anonymous aggregate, an honest empty direction, and cursor loading", () => {
+  test("keeps anonymous attendance in totals without a separate roster card", () => {
     const markup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, { initialPage: enabledPage, signedIn: true }),
     );
-    expect(markup.match(/3 riders chose privacy/g)).toHaveLength(1);
+    expect(markup).toContain("Anonymous riders");
+    expect(markup).not.toMatch(/Privacy respected|riders chose privacy/i);
     expect(markup).toContain("Load more riders");
 
     const emptyMarkup = renderToStaticMarkup(

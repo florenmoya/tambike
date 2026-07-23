@@ -2834,7 +2834,6 @@ svg {
 }
 
 .event-roster__eyebrow,
-.roster-anonymous-card > span,
 .roster-rider-card__motorcycle > span {
   font: 750 0.7rem/1.2 var(--font-geist-mono), monospace;
   letter-spacing: 0.12em;
@@ -2893,8 +2892,7 @@ svg {
   margin-top: 18px;
 }
 
-.roster-rider-card,
-.roster-anonymous-card {
+.roster-rider-card {
   overflow: hidden;
   border: 1px solid rgba(23, 19, 15, 0.16);
   border-radius: 10px;
@@ -3002,28 +3000,6 @@ svg {
   border-top: 1px solid rgba(23, 19, 15, 0.1);
   color: #625c54;
   font-size: 0.82rem;
-}
-
-.roster-anonymous-card {
-  display: grid;
-  min-height: 260px;
-  align-content: end;
-  gap: 8px;
-  padding: 24px;
-  border-style: dashed;
-  background: repeating-linear-gradient(-45deg, #f1ede6, #f1ede6 9px, #f7f4ef 9px, #f7f4ef 18px);
-}
-
-.roster-anonymous-card svg {
-  width: 32px;
-  height: 32px;
-  color: #e63b2e;
-}
-
-.roster-anonymous-card p {
-  margin: 0;
-  color: #625c54;
-  font-size: 0.84rem;
 }
 
 .event-roster__more {
