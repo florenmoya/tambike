@@ -31,6 +31,7 @@ import type {
   MemberProfileEditorView,
   ProfileVisibility,
   RosterIdentity,
+  UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "./types";
 import { MemberMediaUploader } from "./member-media-uploader";
@@ -54,6 +55,18 @@ function mediaIdFromUrl(url: string) {
 function optionalNumber(value: FormDataEntryValue | null) {
   const text = String(value ?? "").trim();
   return text ? Number(text) : undefined;
+}
+
+export function profileInputFromFormData(formData: FormData): UpdateMemberProfileInput {
+  return {
+    displayName: String(formData.get("displayName") ?? ""),
+    area: String(formData.get("area") ?? ""),
+    bio: String(formData.get("bio") ?? ""),
+    visibility: String(formData.get("visibility") ?? "") as ProfileVisibility,
+    defaultRosterIdentity: String(
+      formData.get("defaultRosterIdentity") ?? "",
+    ) as RosterIdentity,
+  };
 }
 
 interface ProfileDraft {
@@ -182,17 +195,11 @@ function LoadedProfileSettings({
     }));
   };
 
-  const handleProfileSave = async () => {
+  const handleProfileSave = async (formData: FormData) => {
     setProfilePending(true);
     setProfileStatus("");
     try {
-      const saved = await updateMemberProfile({
-        displayName: profileDraft.displayName,
-        area: profileDraft.area,
-        bio: profileDraft.bio,
-        visibility: profileDraft.visibility,
-        defaultRosterIdentity: profileDraft.defaultRosterIdentity,
-      });
+      const saved = await updateMemberProfile(profileInputFromFormData(formData));
       setProfileEditorState({
         editor: saved,
         draft: profileDraftFromEditor(saved),
@@ -308,6 +315,7 @@ function LoadedProfileSettings({
             </div>
             <div className="profile-field">
               <Label htmlFor="profile-visibility">Profile visibility</Label>
+              <input type="hidden" name="visibility" value={profileDraft.visibility} />
               <Select value={profileDraft.visibility} onValueChange={(value) => updateProfileDraft({ visibility: value as ProfileVisibility })}>
                 <SelectTrigger id="profile-visibility" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -328,6 +336,7 @@ function LoadedProfileSettings({
           <CardContent className="profile-fields">
             <div className="profile-field profile-field--wide">
               <Label htmlFor="default-roster-identity">Default event roster identity</Label>
+              <input type="hidden" name="defaultRosterIdentity" value={profileDraft.defaultRosterIdentity} />
               <Select
                 value={profileDraft.defaultRosterIdentity}
                 onValueChange={(value) => updateProfileDraft({ defaultRosterIdentity: value as RosterIdentity })}

@@ -97,6 +97,34 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toMatch(/Motorcycle photos/);
   });
 
+  test("submits the current profile privacy values from the form", async () => {
+    const settings = await import("../../src/features/member-profiles/profile-settings");
+    const profileInputFromFormData = (settings as unknown as {
+      profileInputFromFormData?: (formData: FormData) => Record<string, unknown>;
+    }).profileInputFromFormData;
+    expect(profileInputFromFormData).toBeTypeOf("function");
+
+    const formData = new FormData();
+    formData.set("displayName", "Paolo Reyes");
+    formData.set("area", "Quezon City");
+    formData.set("bio", "Weekend rider.");
+    formData.set("visibility", "PUBLIC");
+    formData.set("defaultRosterIdentity", "VISIBLE");
+
+    expect(profileInputFromFormData!(formData)).toEqual({
+      displayName: "Paolo Reyes",
+      area: "Quezon City",
+      bio: "Weekend rider.",
+      visibility: "PUBLIC",
+      defaultRosterIdentity: "VISIBLE",
+    });
+
+    const profileSettingsSource = source("src/features/member-profiles/profile-settings.tsx");
+    expect(profileSettingsSource).toContain('name="visibility"');
+    expect(profileSettingsSource).toContain('name="defaultRosterIdentity"');
+    expect(profileSettingsSource).toMatch(/handleProfileSave = async \(formData: FormData\)/);
+  });
+
   test("uploads directly with browser FormData and reports progress accessibly", () => {
     const uploader = source("src/features/member-profiles/member-media-uploader.tsx");
 
