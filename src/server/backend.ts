@@ -211,7 +211,6 @@ export type RegistrationInput = {
   status: "interested" | "going";
   attendanceType: AttendanceType;
   clubName?: string;
-  rosterIdentity?: RosterIdentity;
 };
 
 export type SignupWithPasswordInput = SignupInput & {
@@ -4146,13 +4145,6 @@ export class TambikeBackend {
 
     const rsvpKey = `${event.id}:${user.id}`;
     const previousRsvp = this.rsvps.get(rsvpKey);
-    if (
-      input.rosterIdentity !== undefined &&
-      input.rosterIdentity !== "VISIBLE" &&
-      input.rosterIdentity !== "ANONYMOUS"
-    ) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
     const now = new Date().toISOString();
     const rsvp: RSVP & { userId: string; goingAt?: string; id: string } = {
       id: previousRsvp?.id ?? `rsvp-${randomUUID()}`,
@@ -4162,7 +4154,6 @@ export class TambikeBackend {
       attendanceType: input.attendanceType,
       clubName: input.clubName?.trim() || user.clubName,
       rosterIdentity:
-        input.rosterIdentity ??
         previousRsvp?.rosterIdentity ??
         user.defaultRosterIdentity ??
         "ANONYMOUS",
@@ -4251,7 +4242,7 @@ export class TambikeBackend {
           Boolean(entry.user) &&
           classifyRosterEntry({
             enabled,
-            rosterIdentity: entry.rsvp.rosterIdentity ?? "ANONYMOUS",
+            rosterIdentity: entry.user.defaultRosterIdentity ?? "ANONYMOUS",
             profileSlug: entry.user?.profileSlug,
             profileVisibility: entry.user?.profileVisibility ?? "PRIVATE",
           }) === "VISIBLE",
@@ -7704,7 +7695,7 @@ export class TambikeBackend {
           const user = this.users.get(rsvp.userId);
           return Boolean(rsvp.goingAt) && Boolean(user) && classifyRosterEntry({
             enabled,
-            rosterIdentity: rsvp.rosterIdentity ?? "ANONYMOUS",
+            rosterIdentity: user.defaultRosterIdentity ?? "ANONYMOUS",
             profileSlug: user?.profileSlug,
             profileVisibility: user?.profileVisibility ?? "PRIVATE",
           }) === "VISIBLE";
