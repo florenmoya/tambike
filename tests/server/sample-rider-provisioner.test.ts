@@ -124,7 +124,11 @@ function createStatefulDependencies() {
       state.photos.set(position, asset.fingerprint);
     }),
     registerForEvent: vi.fn(async (_context, eventId, input) => {
-      state.rsvp = { eventId, status: input.status, rosterIdentity: input.rosterIdentity };
+      state.rsvp = {
+        eventId,
+        status: input.status,
+        rosterIdentity: state.user?.defaultRosterIdentity ?? "ANONYMOUS",
+      };
       state.pass = { eventId, status: "active" };
     }),
     ensureActivePass: vi.fn(async () => {
@@ -253,7 +257,7 @@ describe("sample rider provisioner domain flow", () => {
     expect(dependencies.registerForEvent).toHaveBeenCalledWith(
       expect.anything(),
       "tambike-cafe-classico",
-      { status: "going", attendanceType: "direct", rosterIdentity: "VISIBLE" },
+      { status: "going", attendanceType: "direct" },
     );
   });
 

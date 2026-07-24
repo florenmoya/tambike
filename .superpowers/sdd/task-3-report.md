@@ -146,3 +146,75 @@ Exit code: 1
 - The repository-level Vitest discovery includes the stale `.codex/worktrees/rider-profile-showcase` checkout even when exact root test paths are provided. The task explicitly marks that checkout out of scope, so it was not edited.
 - The exact stale-symbol command cannot return zero matches because the updated UI contract intentionally contains the searched symbols in negative assertions.
 - Full TypeScript remains blocked by two unrelated pre-existing nullability errors in `src/server/backend.ts`; Task 3 introduced no remaining TypeScript error.
+
+## Fix Review
+
+### Review fixes
+
+- Changed the production sample-rider `registerForEvent` dependency input to the canonical `RegistrationInput`.
+- Removed `rosterIdentity: "VISIBLE"` from the sample-rider registration call; roster identity continues to come from the sample rider's saved `defaultRosterIdentity`.
+- Updated the focused sample-rider test double and call assertion to model the canonical registration contract.
+- Restored the deleted attendee-roster behavioral rerender coverage as `tests/server/event-attendee-roster-rerender.test.ts`.
+- Preserved pagination, equivalent-rerender state, load-failure recovery, refreshed rider data, and roster disable/re-enable transition coverage.
+- Did not restore or reference the removed event-level privacy form or controls.
+
+### Fix Review RED
+
+```powershell
+npx vitest run tests/server/sample-rider-provisioner.test.ts tests/server/event-attendee-roster-rerender.test.ts --exclude ".codex/worktrees/**"
+```
+
+```text
+Test Files  1 failed | 1 passed (2)
+Tests  1 failed | 16 passed (17)
+```
+
+The new sample-rider expectation failed because the production call still supplied `rosterIdentity: "VISIBLE"`. The migrated attendee-roster rerender test passed independently.
+
+### Fix Review GREEN
+
+```powershell
+npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-roster-domain.test.ts tests/server/event-attendee-roster-rerender.test.ts tests/server/sample-rider-provisioner.test.ts --exclude ".codex/worktrees/**"
+```
+
+```text
+Test Files  4 passed (4)
+Tests  34 passed (34)
+Exit code: 0
+```
+
+```powershell
+npx eslint src/server/member-profiles/sample-rider.ts tests/server/sample-rider-provisioner.test.ts tests/server/event-attendee-roster-rerender.test.ts
+```
+
+```text
+Exit code: 0
+```
+
+```powershell
+git diff --check
+```
+
+```text
+Exit code: 0
+```
+
+```powershell
+npx tsc --noEmit
+```
+
+```text
+src/server/backend.ts(4245,29): error TS18048: 'entry.user' is possibly 'undefined'.
+src/server/backend.ts(7669,29): error TS18048: 'user' is possibly 'undefined'.
+Exit code: 1
+```
+
+The TypeScript result is unchanged from the original Task 3 verification: only the two unrelated pre-existing backend nullability errors remain.
+
+### Fix Review self-review and concerns
+
+- The sample-rider dependency now cannot drift from `RegistrationInput` without a TypeScript failure.
+- The sample-rider focused test proves the runtime call contains only `status` and `attendanceType`, while the verification state remains visible through the saved profile default.
+- The migrated rerender file contains no privacy-editor symbols or obsolete privacy expectations.
+- The stale `.codex/worktrees/rider-profile-showcase` checkout was excluded from Vitest and remains untouched.
+- No new concern was introduced; full TypeScript remains blocked only by the same two unrelated backend nullability errors.

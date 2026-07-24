@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import { Client as PgClient } from "pg";
 
 import type { UpdateMemberProfileInput, UpsertMotorcycleInput } from "@/features/member-profiles/types";
+import type { RegistrationInput } from "@/server/backend";
 import { PrismaTambikeBackend } from "@/server/prisma-backend";
 import { loadMemberMediaConfig } from "@/server/member-media/config";
 import { normalizeMemberImage } from "@/server/member-media/image-normalizer";
@@ -239,7 +240,7 @@ export interface SampleRiderDependencies {
   registerForEvent(
     context: SampleRiderContext,
     eventId: string,
-    input: { status: "going"; attendanceType: "direct"; rosterIdentity: "VISIBLE" },
+    input: RegistrationInput,
   ): Promise<void>;
   ensureActivePass(context: SampleRiderContext, eventId: string): Promise<void>;
   inspectResult(
@@ -375,7 +376,6 @@ export async function provisionSampleRider(
     await dependencies.registerForEvent(context, SAMPLE_RIDER_EVENT_ID, {
       status: "going",
       attendanceType: "direct",
-      rosterIdentity: "VISIBLE",
     });
     await dependencies.ensureActivePass(context, SAMPLE_RIDER_EVENT_ID);
     const verification = await dependencies.inspectResult(
