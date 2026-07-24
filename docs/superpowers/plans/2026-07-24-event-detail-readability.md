@@ -133,7 +133,7 @@ The compatibility column remains populated when an RSVP is first created. It doe
   })
   ```
 
-- [ ] Delete the in-memory `updateEventRosterIdentity()` and `getEventRosterIdentity()` methods. They are obsolete once Profile is the only preference surface.
+- [ ] Leave the in-memory `updateEventRosterIdentity()` and `getEventRosterIdentity()` methods temporarily in place so the branch remains type-safe while the unchanged action/provider callers still exist. Task 3 removes both methods atomically with those callers.
 
 - [ ] Rerun the focused test.
 
@@ -274,7 +274,7 @@ user: {
   }
   ```
 
-- [ ] Delete Prisma `updateEventRosterIdentity()` and `getEventRosterIdentity()`.
+- [ ] Leave Prisma `updateEventRosterIdentity()` and `getEventRosterIdentity()` temporarily in place so the branch remains type-safe while the unchanged action/provider callers still exist. Task 3 removes both methods atomically with those callers.
 
 - [ ] Rerun the focused integration.
 
@@ -301,6 +301,8 @@ user: {
 - Delete: `tests/server/event-roster-ui-rerender.test.ts`
 - Delete: `src/features/member-profiles/roster-identity-field.tsx`
 - Modify: `src/server/actions.ts:1-165`
+- Modify: `src/server/backend.ts:4307-4335`
+- Modify: `src/server/prisma-backend.ts:4830-4870`
 - Modify: `src/features/tambike-demo/demo-provider.tsx:1-410`
 - Modify: `src/features/tambike-demo/tambike-screen.tsx:1-1365`
 - Modify: `src/app/globals.css:3070-3126`
@@ -360,6 +362,8 @@ There will be no event-specific `getEventRosterIdentity` or `updateEventRosterId
   ```
 
 - [ ] Remove `rosterIdentity` from `registerForEventAction()` and delete the two event-specific privacy actions from `src/server/actions.ts`. Remove the `RosterIdentity` import if no longer used.
+
+- [ ] Delete `updateEventRosterIdentity()` and `getEventRosterIdentity()` from both backend implementations in the same change as their action/provider callers.
 
 - [ ] Remove the optional identity argument and the two event-specific methods from `DemoContextValue`, callback implementations, memo dependencies, and provider value in `demo-provider.tsx`.
 
