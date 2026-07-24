@@ -926,7 +926,6 @@ function EventDetail({ eventId }: { eventId?: string }) {
   const poster = resolveEventPoster(event.poster);
   const detailStyle = {
     "--event-accent": visual.accent,
-    "--event-poster-tone": visual.poster,
   } as CSSProperties;
   const openRegistration = () => {
     setActionError("");
@@ -950,23 +949,17 @@ function EventDetail({ eventId }: { eventId?: string }) {
     <section className="event-detail-view" style={detailStyle}>
       <div className="event-detail-shell">
         <section className="event-detail-stage">
-          <div className="event-detail-poster-stack">
-            <span className="event-detail-route-line" />
-            <figure className="event-detail-poster">
-              <Image
-                src={poster}
-                alt={`${event.title} poster`}
-                fill
-                placeholder={typeof poster === "string" ? "empty" : "blur"}
-                sizes="(max-width: 900px) 78vw, 420px"
-                preload
-              />
-            </figure>
-          </div>
           <div className="event-detail-copy">
             <span className="event-detail-type">{event.type}</span>
             <h1>{event.title}</h1>
             <p>{event.shortDescription}</p>
+
+            <div className="event-detail-brief" aria-label="Event schedule and location">
+              <Detail label="Date" value={event.date} />
+              <Detail label="Time" value={event.time} />
+              <Detail label="Location" value={event.locationName} />
+            </div>
+
             <div className="event-detail-actions">
               {cta.canRegister ? (
                 <>
@@ -998,112 +991,98 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 Share
               </button>
             </div>
-            {shareFeedback && <p className="inline-feedback" aria-live="polite">{shareFeedback}</p>}
-            {actionError && <p className="inline-error" aria-live="polite">{actionError}</p>}
-            <div className="event-detail-facts" aria-label="Event highlights">
-              <div>
-                <span>Date</span>
-                <strong>{event.date}</strong>
-              </div>
-              <div>
-                <span>Time</span>
-                <strong>{event.time}</strong>
-              </div>
-              <div>
-                <span>Location</span>
-                <strong>{event.locationName}</strong>
-              </div>
-            </div>
+            {shareFeedback ? (
+              <p className="inline-feedback" aria-live="polite">{shareFeedback}</p>
+            ) : null}
+            {actionError ? (
+              <p className="inline-error" aria-live="polite">{actionError}</p>
+            ) : null}
+          </div>
+
+          <div className="event-detail-poster-wrap">
+            <figure className="event-detail-poster">
+              <Image
+                src={poster}
+                alt={`${event.title} poster`}
+                fill
+                placeholder={typeof poster === "string" ? "empty" : "blur"}
+                sizes="(max-width: 640px) 280px, (max-width: 1024px) 34vw, 360px"
+                preload
+              />
+            </figure>
+            <a
+              className="event-detail-poster-link"
+              href={event.poster}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View full poster <span className="sr-only">(opens in a new tab)</span>
+            </a>
           </div>
         </section>
-        <div className="event-detail-layout">
-          <div className="event-detail-main">
-            <div className="event-detail-tags" aria-label="Event tags">
-              {event.tags.map((tag) => (
-                <span key={tag}>{tag}</span>
+
+        <div className="event-detail-sections">
+          <InfoPanel eyebrow="What to expect" title="A relaxed rider meetup">
+            <p>{event.whatHappens}</p>
+          </InfoPanel>
+
+          {event.rideOut ? (
+            <InfoPanel eyebrow="Ride / meetup" title={event.rideOut.meetup}>
+              <div className="detail-grid">
+                <Detail label="Call time" value={event.rideOut.callTime} />
+                <Detail label="Departure" value={event.rideOut.departure} />
+                <Detail label="Destination" value={event.rideOut.destination} />
+                <Detail label="Note" value={event.rideOut.notes} />
+              </div>
+            </InfoPanel>
+          ) : null}
+
+          <div className="event-detail-essentials">
+            <InfoPanel eyebrow="Venue" title={event.locationName}>
+              <p>{event.locationAddress}</p>
+              <strong>{event.area}</strong>
+              {event.locationMapLink ? (
+                <Link
+                  className="primary-action event-detail-map-link"
+                  href={event.locationMapLink}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open map
+                </Link>
+              ) : null}
+            </InfoPanel>
+
+            <InfoPanel eyebrow="Perk and attendance" title={event.perkPreview}>
+              <div className="event-detail-pass-stats">
+                <Detail label="Going" value={String(event.going)} />
+                <Detail label="Interested" value={String(event.interested)} />
+                <Detail label="Expected" value={String(event.expectedRiders)} />
+              </div>
+              <Link className="ghost-action as-link" href={`/events/${event.id}/attendees`}>
+                View attendee roster
+              </Link>
+            </InfoPanel>
+          </div>
+
+          <InfoPanel eyebrow="Rules" title="Safety and venue notes">
+            <div className="chip-list">
+              {event.rules.map((rule) => (
+                <span key={rule}>{rule}</span>
               ))}
             </div>
-            <InfoPanel eyebrow="What's happening" title="Reason to go">
-              <p>{event.whatHappens}</p>
-            </InfoPanel>
-            {event.rideOut && (
-              <InfoPanel eyebrow="Ride / meetup" title={event.rideOut.meetup}>
-                <div className="detail-grid">
-                  <Detail label="Call time" value={event.rideOut.callTime} />
-                  <Detail label="Departure" value={event.rideOut.departure} />
-                  <Detail label="Destination" value={event.rideOut.destination} />
-                  <Detail label="Note" value={event.rideOut.notes} />
-                </div>
-              </InfoPanel>
-            )}
-            <InfoPanel eyebrow="Host" title={organizer.displayName}>
-              <p>
-                Verified organizer · {organizer.pastEvents} previous events · {organizer.fbLink}
-              </p>
-            </InfoPanel>
-            <InfoPanel eyebrow="Rules" title="Safety and location notes">
-              <div className="chip-list">
-                {event.rules.map((rule) => (
-                  <span key={rule}>{rule}</span>
-                ))}
-              </div>
-            </InfoPanel>
-            <PublicGiveawayPanel eventId={event.id} viewerRole={currentUser?.role ?? "guest"} />
-          </div>
-          <aside className="event-detail-pass-panel" aria-label="Event summary">
-            <div className="event-detail-pass-heading">
-              <Ticket aria-hidden="true" />
-              <div>
-                <span>Tambike Pass</span>
-                <h2>{event.perkPreview}</h2>
-              </div>
-            </div>
+          </InfoPanel>
+
+          <InfoPanel eyebrow="Organizer" title={organizer.displayName}>
             <p>
-              {cta.canRegister
-                ? "QR check-in unlocks the event perk and keeps the organizer headcount clean."
-                : cta.body}
+              Verified organizer · {organizer.pastEvents} previous events · {organizer.fbLink}
             </p>
-            <div className="event-detail-pass-stats">
-              <div>
-                <span>Going</span>
-                <strong>{event.going}</strong>
-              </div>
-              <div>
-                <span>Interested</span>
-                <strong>{event.interested}</strong>
-              </div>
-              <div>
-                <span>Expected</span>
-                <strong>{event.expectedRiders}</strong>
-              </div>
-            </div>
-            <Link className="ghost-action as-link" href={`/events/${event.id}/attendees`}>
-              View attendee roster
-            </Link>
-            <div className="event-detail-location-card">
-              <Building2 aria-hidden="true" />
-              <div>
-                <span>{event.locationName}</span>
-                <strong>{event.area}</strong>
-                <p>{event.locationAddress}</p>
-              </div>
-            </div>
-            {event.rideOut && (
-              <div className="event-detail-location-card">
-                <Route aria-hidden="true" />
-                <div>
-                  <span>Route</span>
-                  <strong>{event.rideOut.destination}</strong>
-                  <p>{event.rideOut.notes}</p>
-                </div>
-              </div>
-            )}
-            {event.locationMapLink ? (
-              <Link className="primary-action event-detail-map-link" href={event.locationMapLink} target="_blank" rel="noreferrer">
-                Open map
-              </Link>
-            ) : null}
-          </aside>
+          </InfoPanel>
+
+          <PublicGiveawayPanel
+            eventId={event.id}
+            viewerRole={currentUser?.role ?? "guest"}
+          />
         </div>
       </div>
       {isModalOpen && <RsvpModal event={event} onClose={() => setIsModalOpen(false)} />}
