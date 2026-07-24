@@ -48,6 +48,7 @@ import {
   getEventCtaState,
   type EventQueryInput,
 } from "./event-state";
+import { resolveEventPoster } from "./event-poster-assets";
 import type {
   AttendanceType,
   Event,
@@ -878,6 +879,7 @@ function FeatureCard({
 function EventCard({ event, priority = false }: { event: Event; priority?: boolean }) {
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const cta = getEventCtaState(event);
+  const poster = resolveEventPoster(event.poster);
   const cardStyle = {
     "--accent": visual.accent,
     "--poster": visual.poster,
@@ -887,12 +889,13 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
     <Link className="event-card" href={`/events/${event.id}`} style={cardStyle}>
       <div className="poster">
         <Image
-          src={event.poster}
+          src={poster}
           alt={`${event.title} poster`}
           fill
+          placeholder={typeof poster === "string" ? "empty" : "blur"}
           loading={priority ? "eager" : "lazy"}
           fetchPriority={priority ? "high" : "auto"}
-          sizes="260px"
+          sizes="(max-width: 560px) calc(100vw - 40px), 260px"
         />
         <span className="special-offer">{event.perkPreview}</span>
         <span className="bookmark" aria-hidden="true" />
@@ -920,6 +923,7 @@ function EventDetail({ eventId }: { eventId?: string }) {
   const [actionError, setActionError] = useState("");
   const cta = getEventCtaState(event);
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
+  const poster = resolveEventPoster(event.poster);
   const detailStyle = {
     "--event-accent": visual.accent,
     "--event-poster-tone": visual.poster,
@@ -950,9 +954,10 @@ function EventDetail({ eventId }: { eventId?: string }) {
             <span className="event-detail-route-line" />
             <figure className="event-detail-poster">
               <Image
-                src={event.poster}
+                src={poster}
                 alt={`${event.title} poster`}
                 fill
+                placeholder={typeof poster === "string" ? "empty" : "blur"}
                 sizes="(max-width: 900px) 78vw, 420px"
                 preload
               />
