@@ -4238,14 +4238,15 @@ export class TambikeBackend {
       .filter((rsvp) => rsvp.eventId === event.id && rsvp.status === "going" && rsvp.goingAt)
       .map((rsvp) => ({ rsvp, user: this.users.get(rsvp.userId) }))
       .filter(
-        (entry): entry is typeof entry & { user: BackendUser } =>
-          Boolean(entry.user) &&
-          classifyRosterEntry({
+        (entry): entry is typeof entry & { user: BackendUser } => {
+          if (!entry.user) return false;
+          return classifyRosterEntry({
             enabled,
             rosterIdentity: entry.user.defaultRosterIdentity ?? "ANONYMOUS",
-            profileSlug: entry.user?.profileSlug,
-            profileVisibility: entry.user?.profileVisibility ?? "PRIVATE",
-          }) === "VISIBLE",
+            profileSlug: entry.user.profileSlug,
+            profileVisibility: entry.user.profileVisibility ?? "PRIVATE",
+          }) === "VISIBLE";
+        },
       )
       .sort(
         (left, right) =>
@@ -7664,11 +7665,12 @@ export class TambikeBackend {
     const visibleCount = enabled
       ? going.filter((rsvp) => {
           const user = this.users.get(rsvp.userId);
-          return Boolean(rsvp.goingAt) && Boolean(user) && classifyRosterEntry({
+          if (!user) return false;
+          return Boolean(rsvp.goingAt) && classifyRosterEntry({
             enabled,
             rosterIdentity: user.defaultRosterIdentity ?? "ANONYMOUS",
-            profileSlug: user?.profileSlug,
-            profileVisibility: user?.profileVisibility ?? "PRIVATE",
+            profileSlug: user.profileSlug,
+            profileVisibility: user.profileVisibility ?? "PRIVATE",
           }) === "VISIBLE";
         }).length
       : 0;
