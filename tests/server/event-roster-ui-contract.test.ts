@@ -170,15 +170,37 @@ describe("roster identity controls", () => {
     const provider = source("src/features/tambike-demo/demo-provider.tsx");
     const actions = source("src/server/actions.ts");
 
+    const removedScreenSymbols = [
+      ["ExistingRsvp", "IdentityEditor"].join(""),
+      ["RosterIdentity", "Field"].join(""),
+      ["registrationRoster", "Identity"].join(""),
+    ];
+    const removedScreenCopy = [
+      ["Change for this ", "event"].join(""),
+      "Profile default",
+      "Event roster privacy",
+    ];
+    const removedActionSymbols = [
+      ["updateEvent", "RosterIdentityAction"].join(""),
+      ["getEvent", "RosterIdentityAction"].join(""),
+    ];
+
+    expect(
+      [...removedScreenSymbols, ...removedScreenCopy].filter((removedContract) =>
+        screen.includes(removedContract),
+      ),
+    ).toEqual([]);
     expect(screen).not.toContain("RosterIdentity");
-    expect(screen).not.toContain("Profile default");
-    expect(screen).not.toContain("Event roster privacy");
     expect(screen).toMatch(
       /registerForEvent\(event\.id,\s*attendance,\s*"going"\)/,
     );
 
     expect(provider).not.toContain("RosterIdentity");
     expect(actions).not.toContain("RosterIdentity");
+    for (const removedSymbol of removedActionSymbols) {
+      expect(provider).not.toContain(removedSymbol);
+      expect(actions).not.toContain(removedSymbol);
+    }
 
     expect(screen).toContain("View attendee roster");
     expect(provider).toContain("configureEventRoster");

@@ -104,6 +104,9 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toContain("Anonymous — count me without my card");
     expect(settings).toContain("Visible — show my eligible rider card");
     expect(settings).not.toContain("future event registrations only");
+    expect(settings).not.toContain(
+      ["Existing RSVPs keep ", "their own choice"].join(""),
+    );
   });
 
   test("submits the current profile privacy values from the form", async () => {
