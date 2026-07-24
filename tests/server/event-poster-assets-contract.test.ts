@@ -1,11 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import sharp from "sharp";
 import { describe, expect, test } from "vitest";
 
 const data = readFileSync(
   join(process.cwd(), "src/features/tambike-demo/data.ts"),
   "utf8",
 );
+const packageJson = JSON.parse(
+  readFileSync(join(process.cwd(), "package.json"), "utf8"),
+) as { dependencies?: Record<string, string> };
 const resolver = readFileSync(
   join(process.cwd(), "src/features/tambike-demo/event-poster-assets.ts"),
   "utf8",
@@ -71,5 +75,23 @@ describe("event poster asset contract", () => {
     expect(card).toContain(
       'fetchPriority={priority ? "high" : "auto"}',
     );
+  });
+
+  test("keeps the Cafe Classico poster lightweight and free of embedded profiles", async () => {
+    const posterPath = join(
+      process.cwd(),
+      "public/demo/poster-tambike-cafe-classico.jpg",
+    );
+    const metadata = await sharp(posterPath).metadata();
+
+    expect(statSync(posterPath).size).toBeLessThan(200_000);
+    expect(metadata.format).toBe("jpeg");
+    expect(metadata.width).toBe(1080);
+    expect(metadata.height).toBe(1080);
+    expect(metadata.hasProfile).toBe(false);
+  });
+
+  test("pins Sharp to the version supported by this Next.js release", () => {
+    expect(packageJson.dependencies?.sharp).toBe("0.34.5");
   });
 });
