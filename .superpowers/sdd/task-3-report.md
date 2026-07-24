@@ -1,121 +1,148 @@
-# Task 3: In-memory giveaway lifecycle and automatic eligibility report
+# Task 3: Remove Event-Level Privacy APIs and Controls
 
-## Scope
+## Implementation
 
-Implemented only the memory runtime layer in `src/server/backend.ts` and the focused domain suite in `tests/server/giveaway-domain.test.ts`.
+- Replaced the event-specific roster privacy UI contract with absence assertions for the editor, field, copy, server actions, and four-argument registration call.
+- Preserved positive contracts for `View attendee roster`, `configureEventRoster`, and `listEventAttendees`.
+- Removed `rosterIdentity` from `registerForEventAction()` and the demo provider registration method/callback.
+- Deleted `updateEventRosterIdentityAction()` and `getEventRosterIdentityAction()`.
+- Deleted `updateEventRosterIdentity()` and `getEventRosterIdentity()` from the in-memory and Prisma backends.
+- Simplified `RsvpModal` to attendance selection, submit/error state, and pass navigation only.
+- Removed the existing-RSVP privacy editor/form/helper types and normalization logic from the event detail screen.
+- Removed the obsolete `.existing-rsvp-identity*` CSS.
+- Removed the unused `passes` binding left in `EventDetail`.
+- Removed the obsolete `rosterIdentity` parameter/import from the shared `registerTestPass()` helper so it conforms to the current `RegistrationInput`.
 
-- Added an isolated in-memory giveaway aggregate and seed collections for giveaways and perk redemptions. `getSnapshot()` and the global demo state remain unchanged.
-- Added organizer/admin lifecycle methods, narrow public/rider DTO reads, mechanics versioning, request-ID-to-persistent-ID mapping, generic audit mirrors, and hash-chained aggregate audit records.
-- Added post-commit automatic eligibility reconciliation for RSVP/pass changes and confirmed self/staff check-ins.
-- Added `lockGiveaway()` as approved by the parent task: it freezes entry status and creates only an in-memory snapshot marker. Full encrypted snapshot and draw creation remain for the later draw task.
-- Did not change Prisma backend, actions/routes, UI, migrations, or seed/reset behavior outside the in-memory seed shape.
+## Deleted files
+
+- `src/features/member-profiles/roster-identity-field.tsx`
+- `tests/server/event-roster-ui-rerender.test.ts`
 
 ## RED evidence
 
-Before production implementation:
+Command run before production edits:
 
-```text
-npx vitest run tests/server/giveaway-domain.test.ts
-Test Files  1 failed (1)
-Tests  8 failed (8)
-TypeError: backend.createGiveaway is not a function
+```powershell
+npx vitest run tests/server/event-roster-ui-contract.test.ts
 ```
 
-All failures were the intended missing backend API failure; no pre-existing behavior was used as a false-green substitute.
-
-## GREEN and final verification
+Relevant active-checkout output:
 
 ```text
-npx vitest run tests/server/giveaway-domain.test.ts
-Test Files  1 passed (1)
-Tests  9 passed (9)
+tests/server/event-roster-ui-contract.test.ts (8 tests | 1 failed)
+× removes event-specific privacy APIs and controls while preserving roster access
+AssertionError: expected source not to contain "ExistingRsvpIdentityEditor"
+```
 
-npm run test:server
-Test Files  7 passed (7)
-Tests  85 passed (85)
+The command exited `1`, proving the new absence contract failed for the intended missing removal. Vitest also discovered the explicitly out-of-scope `.codex/worktrees/rider-profile-showcase` copy and reported three unrelated failures there (one stale route contract and two duplicate-React hook failures).
 
+## GREEN evidence
+
+The exact brief command was run after implementation:
+
+```powershell
+npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-roster-domain.test.ts
+```
+
+Output summary:
+
+```text
+Test Files  1 failed | 3 passed (4)
+Tests  4 failed | 33 passed (37)
+```
+
+All active-checkout UI/domain files passed. The overall exit remained `1` only because Vitest additionally collected `.codex/worktrees/rider-profile-showcase/tests/server/event-roster-ui-contract.test.ts`; that stale test expects the controls this task removes and also has two duplicate-React hook failures. The stale checkout was preserved as required.
+
+Clean scoped proof:
+
+```powershell
+npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-roster-domain.test.ts --exclude ".codex/worktrees/**"
+```
+
+```text
+Test Files  2 passed (2)
+Tests  17 passed (17)
+Exit code: 0
+```
+
+Final scoped ESLint:
+
+```powershell
+npx eslint src/server/actions.ts src/server/backend.ts src/server/prisma-backend.ts src/features/tambike-demo/demo-provider.tsx src/features/tambike-demo/tambike-screen.tsx tests/server/event-roster-ui-contract.test.ts tests/server/support/tambike-fixtures.ts
+```
+
+```text
+Exit code: 0
+```
+
+TypeScript:
+
+```powershell
 npx tsc --noEmit
-Exit code: 0
+```
 
-npm run lint
-Exit code: 0
+```text
+src/server/backend.ts(4245,29): error TS18048: 'entry.user' is possibly 'undefined'.
+src/server/backend.ts(7669,29): error TS18048: 'user' is possibly 'undefined'.
+Exit code: 1
+```
 
+The Task 3 fixture error from the first TypeScript run was fixed. These two remaining errors are pre-existing nullability issues in unrelated, untouched backend logic.
+
+Diff validation:
+
+```powershell
 git diff --check
+```
+
+```text
 Exit code: 0
 ```
 
-## Behavior covered
+## Stale-symbol searches
 
-- Event-owner/admin creation and wrong-organizer, rider, and venue denial.
-- Required compliance review before opening; constrained pause/cancel/suspend lifecycle.
-- Automatic active-RSVP/pass entry creation, weighted entry counts, and withdrawal after RSVP becomes `interested`.
-- Non-automatic campaign-code/manual conditions never create automatic entries.
-- Pending self-review check-ins remain ineligible; a staff confirmation satisfies staff-confirmed eligibility.
-- Self-instant `rider_qr` satisfies confirmed check-in but not staff-confirmed check-in.
-- A locked campaign ignores later RSVP and staff scan activity and rejects configuration edits.
-- Public/rider DTOs omit emails, phones, source snapshots, audit data, claim secrets, ciphertext, user/rider identifiers, and other-rider data.
+The exact requested command was run:
+
+```powershell
+rg -n "ExistingRsvpIdentity|RosterIdentityField|registrationRosterIdentity|updateEventRosterIdentity|getEventRosterIdentity|Change for this event|Profile default" src tests
+```
+
+It matched only the required negative assertions in `tests/server/event-roster-ui-contract.test.ts` (lines 173-185). This is unavoidable because the brief requires those exact strings in that test.
+
+The production-source search is clean:
+
+```powershell
+rg -n "ExistingRsvpIdentity|RosterIdentityField|registrationRosterIdentity|updateEventRosterIdentity|getEventRosterIdentity|Change for this event|Profile default" src
+```
+
+```text
+No matches
+Exit code: 1
+```
+
+The removed registration field/caller search is also clean:
+
+```powershell
+rg -n "rosterIdentity" src/server/actions.ts src/features/tambike-demo/demo-provider.tsx src/features/tambike-demo/tambike-screen.tsx
+```
+
+```text
+No matches
+Exit code: 1
+```
 
 ## Self-review
 
-- Lifecycle authorization reuses event ownership logic; venue users retain scanner access only and cannot configure giveaways.
-- Reconciliation only runs after the source state has committed and only mutates `open` automatic campaigns.
-- Withdrawn entries retain their last positive stored weight rather than writing a zero-weight entry.
-- Entry events and audit events are immutable records; audit hashes use the approved canonical JSON helper. Free-text reasons are retained internally but only their SHA-256 digest is placed in the append-only audit payload.
-- No giveaway candidate, audit, delivery, or claim data is returned from snapshot/public/rider reads.
+- Confirmed organizer roster enablement and attendee roster links remain present.
+- Confirmed the provider interface has exactly three registration parameters and the server action input has only status, attendance type, and optional club name.
+- Confirmed both backend implementations no longer expose event-specific privacy mutations/reads.
+- Confirmed the RSVP modal retains all three attendance radio choices, error output, cancel action, submit pending state, and pass navigation.
+- Confirmed both dedicated component/test files are deleted and their event-detail/CSS callers are gone.
+- Confirmed no unrelated checkout or generated file was changed.
+- Confirmed all edited source/test files pass scoped ESLint and `git diff --check`.
 
-## Deferred concerns
+## Concerns
 
-- Perk redemption is evaluated from the isolated in-memory redemption collection, but no redemption mutation API belongs to this task.
-- The snapshot marker intentionally lacks draw seed/encryption/digest records; the later draw task owns those cryptographic fields and transactions.
-
-## Review follow-up: entry caps, source fingerprints, and boundary validation
-
-The review found four root causes: the campaign contract had no entry cap, `entryMode` could change after entry history existed, reconciliation compared only total weight, and lifecycle methods dereferenced unvalidated values. The existing giveaway migration had not been deployed, so its initial table definition was safely amended rather than creating a divergent follow-up migration.
-
-### RED evidence
-
-Before the fix:
-
-```text
-npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-draw-engine.test.ts tests/server/giveaway-schema-contract.test.ts
-Test Files  3 failed (3)
-Tests  6 failed | 56 passed (62)
-```
-
-The failures demonstrated strict rejection of the missing cap, no persisted cap/fingerprint fields, entry-mode mutation resolving after entry creation, no equal-weight source revalidation, and a `TypeError` from `null` review input.
-
-### Changes
-
-- Added required `maxEntriesPerRider` to create/update contracts, Zod validation (`1..10000`), `EventGiveaway`, the un-deployed migration, and a database CHECK constraint.
-- Added persisted `qualifiedSourceFingerprint` to `GiveawayEntry` and the migration.
-- Automatic reconciliation now uses `min(sumOfQualifiedGroupWeights, maxEntriesPerRider)`.
-- Reconciliation hashes canonical qualified group/source facts and appends a `source_revalidated` entry event even when the effective weight is unchanged.
-- Entry mode changes now fail with `GIVEAWAY_ENTRY_MODE_LOCKED` once any entry or entry event exists.
-- Compliance review, cancellation, and suspension validate malformed/empty reasons and malformed review payloads at the backend boundary with `BackendError("INVALID_INPUT")`.
-
-### GREEN and final verification
-
-```text
-npx vitest run tests/server/giveaway-domain.test.ts tests/server/giveaway-draw-engine.test.ts tests/server/giveaway-schema-contract.test.ts
-Test Files  3 passed (3)
-Tests  62 passed (62)
-
-npx prisma validate
-Exit code: 0
-
-npm run db:generate
-Exit code: 0
-
-npm run test:server
-Test Files  7 passed (7)
-Tests  91 passed (91)
-
-npx tsc --noEmit
-Exit code: 0
-
-npm run lint
-Exit code: 0
-
-git diff --check
-Exit code: 0
-```
+- The repository-level Vitest discovery includes the stale `.codex/worktrees/rider-profile-showcase` checkout even when exact root test paths are provided. The task explicitly marks that checkout out of scope, so it was not edited.
+- The exact stale-symbol command cannot return zero matches because the updated UI contract intentionally contains the searched symbols in negative assertions.
+- Full TypeScript remains blocked by two unrelated pre-existing nullability errors in `src/server/backend.ts`; Task 3 introduced no remaining TypeScript error.

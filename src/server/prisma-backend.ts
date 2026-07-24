@@ -89,7 +89,6 @@ import type {
   MotorcycleShowcase,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
-  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -4814,41 +4813,6 @@ export class PrismaTambikeBackend {
       event.title,
       event.rosterSettings?.enabled ?? false,
     );
-  }
-
-  async updateEventRosterIdentity(
-    sessionToken: string,
-    eventId: string,
-    input: { rosterIdentity: RosterIdentity },
-  ) {
-    const user = await this.requireUser(sessionToken);
-    await this.requireEvent(eventId);
-    if (input?.rosterIdentity !== "VISIBLE" && input?.rosterIdentity !== "ANONYMOUS") {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-    const existing = await this.prisma.rSVP.findUnique({
-      where: { eventId_userId: { eventId, userId: user.id } },
-      select: { id: true },
-    });
-    if (!existing) throw new BackendError("NOT_FOUND", "NOT_FOUND");
-    const updated = await this.prisma.rSVP.update({
-      where: { id: existing.id },
-      data: { rosterIdentity: input.rosterIdentity },
-      select: { rosterIdentity: true },
-    });
-    await this.audit("RSVP_UPDATED", user.id, "Event", eventId);
-    return { rosterIdentity: updated.rosterIdentity as RosterIdentity };
-  }
-
-  async getEventRosterIdentity(sessionToken: string, eventId: string) {
-    const user = await this.requireUser(sessionToken);
-    await this.requireEvent(eventId);
-    const rsvp = await this.prisma.rSVP.findUnique({
-      where: { eventId_userId: { eventId, userId: user.id } },
-      select: { rosterIdentity: true },
-    });
-    if (!rsvp) throw new BackendError("NOT_FOUND", "NOT_FOUND");
-    return { rosterIdentity: rsvp.rosterIdentity as RosterIdentity };
   }
 
   async configureCheckIn(

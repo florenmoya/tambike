@@ -3067,67 +3067,6 @@ svg {
   background: rgba(230, 59, 46, 0.08);
 }
 
-.existing-rsvp-identity {
-  display: grid;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.existing-rsvp-identity__summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.existing-rsvp-identity__summary > div:first-child {
-  display: grid;
-  gap: 2px;
-}
-
-.existing-rsvp-identity__summary span {
-  color: var(--muted-foreground);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.existing-rsvp-identity__summary strong {
-  font-size: 0.95rem;
-}
-
-.existing-rsvp-identity__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.existing-rsvp-identity__actions a,
-.existing-rsvp-identity__actions button {
-  color: inherit;
-  font: inherit;
-  font-size: 0.78rem;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.existing-rsvp-identity__actions button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.existing-rsvp-identity__actions a:focus-visible,
-.existing-rsvp-identity__actions button:focus-visible {
-  outline: 2px solid #ffbe45;
-  outline-offset: 3px;
-}
-
 .organizer-roster-panel {
   display: grid;
   gap: 16px;

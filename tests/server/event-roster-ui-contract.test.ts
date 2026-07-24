@@ -7,20 +7,8 @@ import { describe, expect, test } from "vitest";
 
 import { EventAttendeeRoster } from "../../src/features/member-profiles/event-attendee-roster";
 import { OrganizerRosterPanelSurface } from "../../src/features/member-profiles/organizer-roster-panel";
-import {
-  RosterIdentityField,
-  registrationRosterIdentity,
-} from "../../src/features/member-profiles/roster-identity-field";
-import type {
-  EventAttendeeRosterPage,
-  MemberProfileEditorView,
-} from "../../src/features/member-profiles/types";
-import { createTambikeTestBackend } from "../../src/server/testing";
+import type { EventAttendeeRosterPage } from "../../src/features/member-profiles/types";
 import { BackendError } from "../../src/server/backend";
-import {
-  createPublishedTestEvent,
-  createTestActors,
-} from "./support/tambike-fixtures";
 
 function source(path: string) {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -177,92 +165,28 @@ describe("event attendee route and roster presentation", () => {
 });
 
 describe("roster identity controls", () => {
-  test("reads only the signed-in rider's stored per-event identity", async () => {
-    const backend = await createTambikeTestBackend();
-    const actors = await createTestActors(backend, "roster-self-read");
-    const event = await createPublishedTestEvent(backend, actors);
-
-    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
-      status: "going",
-      attendanceType: "direct",
-      rosterIdentity: "VISIBLE",
-    });
-    await backend.configureEventRoster(actors.organizer.sessionToken, event.id, { enabled: true });
-
-    await expect(backend.getEventAttendeeSummary(event.id)).resolves.toMatchObject({
-      eventId: event.id,
-      rosterEnabled: true,
-      goingCount: 1,
-      visibleCount: 0,
-      anonymousCount: 1,
-    });
-
-    await expect(backend.getEventRosterIdentity(actors.rider.sessionToken, event.id)).resolves.toEqual({
-      rosterIdentity: "VISIBLE",
-    });
-    await expect(backend.getEventRosterIdentity(actors.outsider.sessionToken, event.id)).rejects.toMatchObject({
-      code: "NOT_FOUND",
-    });
-  });
-
-  test("initializes a new registration from the saved default and forces hidden profiles anonymous", () => {
-    const editor = {
-      defaultRosterIdentity: "VISIBLE",
-      visibility: "PUBLIC",
-      isPublished: true,
-    } as Pick<MemberProfileEditorView, "defaultRosterIdentity" | "visibility" | "isPublished">;
-
-    expect(registrationRosterIdentity(editor)).toBe("VISIBLE");
-    expect(registrationRosterIdentity({ ...editor, visibility: "PRIVATE" })).toBe("ANONYMOUS");
-    expect(registrationRosterIdentity({ ...editor, isPublished: false })).toBe("ANONYMOUS");
-  });
-
-  test("uses required labeled native radios with saved-default and forced-anonymous guidance", () => {
-    const publicMarkup = renderToStaticMarkup(
-      createElement(RosterIdentityField, {
-        idPrefix: "registration",
-        value: "VISIBLE",
-        onChange: () => undefined,
-        defaultIdentity: "VISIBLE",
-        visibility: "PUBLIC",
-        isPublished: true,
-        context: "registration",
-      }),
-    );
-    expect(publicMarkup).toContain("How should you appear on this event roster?");
-    expect(publicMarkup).toContain('type="radio"');
-    expect(publicMarkup).toContain('name="registration-roster-identity"');
-    expect(publicMarkup).toContain("required");
-    expect(publicMarkup).toMatch(/saved default.*future registration/i);
-    expect(publicMarkup).toMatch(/Visible[\s\S]*Anonymous/);
-
-    const privateMarkup = renderToStaticMarkup(
-      createElement(RosterIdentityField, {
-        idPrefix: "existing-rsvp",
-        value: "ANONYMOUS",
-        onChange: () => undefined,
-        defaultIdentity: "VISIBLE",
-        visibility: "PRIVATE",
-        isPublished: true,
-        context: "existing-rsvp",
-      }),
-    );
-    expect(privateMarkup).toMatch(/private profile.*always anonymous/i);
-    expect(privateMarkup).toMatch(/<input[^>]*(?:value="VISIBLE"[^>]*disabled|disabled[^>]*value="VISIBLE")/);
-    expect(privateMarkup).toMatch(/existing RSVP.*separate/i);
-  });
-
-  test("wires registration and the existing RSVP editor as separate mutations", () => {
+  test("removes event-specific privacy APIs and controls while preserving roster access", () => {
     const screen = source("src/features/tambike-demo/tambike-screen.tsx");
     const provider = source("src/features/tambike-demo/demo-provider.tsx");
+    const actions = source("src/server/actions.ts");
 
-    expect(screen).toContain("RosterIdentityField");
-    expect(screen).toMatch(/registerForEvent\(event\.id,\s*attendance,\s*"going",\s*rosterIdentity\)/);
-    expect(screen).toContain("ExistingRsvpIdentityEditor");
-    expect(provider).toContain("updateEventRosterIdentityAction");
-    expect(provider).toContain("getEventRosterIdentityAction");
-    expect(provider).toContain("getMemberProfileEditorAction");
-    expect(provider).not.toMatch(/updateMemberProfileAction\([\s\S]{0,120}updateEventRosterIdentityAction/);
+    expect(screen).not.toContain("ExistingRsvpIdentityEditor");
+    expect(screen).not.toContain("RosterIdentityField");
+    expect(screen).not.toContain("Change for this event");
+    expect(screen).not.toContain("Profile default");
+    expect(screen).not.toContain("Event roster privacy");
+    expect(screen).toMatch(
+      /registerForEvent\(event\.id,\s*attendance,\s*"going"\)/,
+    );
+
+    expect(provider).not.toContain("updateEventRosterIdentityAction");
+    expect(provider).not.toContain("getEventRosterIdentityAction");
+    expect(actions).not.toContain("updateEventRosterIdentityAction");
+    expect(actions).not.toContain("getEventRosterIdentityAction");
+
+    expect(screen).toContain("View attendee roster");
+    expect(provider).toContain("configureEventRoster");
+    expect(provider).toContain("listEventAttendees");
   });
 });
 

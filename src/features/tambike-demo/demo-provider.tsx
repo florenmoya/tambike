@@ -16,7 +16,6 @@ import {
   deleteMemberMediaAction,
   getMemberProfileAction,
   getMemberProfileEditorAction,
-  getEventRosterIdentityAction,
   issueSelfCheckInQrAction,
   listEventAttendeesAction,
   loginWithPasswordAction,
@@ -27,7 +26,6 @@ import {
   signUpRiderAction,
   updateProfileAction,
   updateMemberProfileAction,
-  updateEventRosterIdentityAction,
   upsertMotorcycleAction,
 } from "@/server/actions";
 import type {
@@ -36,7 +34,6 @@ import type {
   MotorcycleShowcase,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
-  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -86,18 +83,12 @@ interface DemoContextValue {
     eventId: string,
     attendanceType: AttendanceType,
     status?: "interested" | "going",
-    rosterIdentity?: RosterIdentity,
   ) => Promise<string | null>;
   configureEventRoster: (eventId: string, enabled: boolean) => Promise<EventAttendeeSummary>;
   listEventAttendees: (
     eventId: string,
     options?: { cursor?: string; limit?: number },
   ) => Promise<EventAttendeeRosterPage>;
-  updateEventRosterIdentity: (
-    eventId: string,
-    rosterIdentity: RosterIdentity,
-  ) => Promise<RosterIdentity>;
-  getEventRosterIdentity: (eventId: string) => Promise<RosterIdentity>;
   scannerOutcome: ScannerOutcome;
   setScannerOutcome: (outcome: ScannerOutcome) => void;
   scanPass: (eventId: string, qrToken: string, method: ScanMethod) => Promise<ScanPassResult>;
@@ -243,7 +234,6 @@ export function DemoProvider({
       eventId: string,
       nextAttendanceType: AttendanceType,
       status: "interested" | "going" = "going",
-      rosterIdentity?: RosterIdentity,
     ) => {
       if (!currentUser) {
         setAuthNotice("Log in to get your Tambike Pass.");
@@ -254,7 +244,6 @@ export function DemoProvider({
         status,
         attendanceType: nextAttendanceType,
         clubName: currentUser.clubName,
-        rosterIdentity,
       });
       applyState(result.state);
       setAttendanceType(nextAttendanceType);
@@ -272,17 +261,6 @@ export function DemoProvider({
       listEventAttendeesAction(eventId, options),
     [],
   );
-  const updateEventRosterIdentity = useCallback(
-    async (eventId: string, rosterIdentity: RosterIdentity) =>
-      (await updateEventRosterIdentityAction(eventId, { rosterIdentity })).rosterIdentity,
-    [],
-  );
-  const getEventRosterIdentity = useCallback(
-    async (eventId: string) =>
-      (await getEventRosterIdentityAction(eventId)).rosterIdentity,
-    [],
-  );
-
   const createEventDraft = useCallback(
     async (input: CreateEventInput) => {
       if (currentUser?.role !== "organizer" || currentUser.verificationStatus !== "APPROVED") {
@@ -359,8 +337,6 @@ export function DemoProvider({
       registerForEvent,
       configureEventRoster,
       listEventAttendees,
-      updateEventRosterIdentity,
-      getEventRosterIdentity,
       scannerOutcome,
       setScannerOutcome,
       scanPass,
@@ -390,8 +366,6 @@ export function DemoProvider({
       registerForEvent,
       configureEventRoster,
       listEventAttendees,
-      updateEventRosterIdentity,
-      getEventRosterIdentity,
       requireLogin,
       role,
       scannerOutcome,
