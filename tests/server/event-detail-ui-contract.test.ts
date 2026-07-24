@@ -23,11 +23,41 @@ function componentSource(componentName: string) {
   );
 }
 
-describe("event detail decision-first UI contract", () => {
-  test("puts the event brief before actions and removes poster-led decoration", () => {
-    const screen = componentSource("EventDetail");
+function cssRule(selector: string, fromIndex = 0) {
+  const start = css.indexOf(`${selector} {`, fromIndex);
 
-    expect(screen).toContain('className="event-detail-brief"');
+  expect(start, `CSS rule not found: ${selector}`).toBeGreaterThanOrEqual(0);
+
+  const openingBrace = css.indexOf("{", start + selector.length);
+  let depth = 0;
+
+  for (let index = openingBrace; index < css.length; index += 1) {
+    if (css[index] === "{") depth += 1;
+    if (css[index] === "}") depth -= 1;
+    if (depth === 0) return css.slice(start, index + 1);
+  }
+
+  throw new Error(`CSS rule is not closed: ${selector}`);
+}
+
+function sourceIndex(source: string, token: string, fromIndex = 0) {
+  const index = source.indexOf(token, fromIndex);
+
+  expect(index, `Source token not found: ${token}`).toBeGreaterThanOrEqual(0);
+
+  return index;
+}
+
+describe("event detail decision-first UI contract", () => {
+  test("renders one decision-first heading and an accessible full-poster link", () => {
+    const screen = componentSource("EventDetail");
+    const eventType = sourceIndex(screen, 'className="event-detail-type"');
+    const heading = sourceIndex(screen, "<h1>");
+    const description = sourceIndex(screen, "{event.shortDescription}");
+    const brief = sourceIndex(screen, 'className="event-detail-brief"');
+    const actions = sourceIndex(screen, 'className="event-detail-actions"');
+    const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
+
     expect(screen).toContain('className="event-detail-poster-link"');
     expect(screen).toContain('target="_blank"');
     expect(screen).toContain('rel="noreferrer"');
@@ -39,56 +69,89 @@ describe("event detail decision-first UI contract", () => {
     );
     expect(screen).toContain("preload");
     expect(screen).toContain("View full poster");
+    expect(screen).toContain(
+      '<span className="sr-only">(opens in a new tab)</span>',
+    );
     expect(screen).not.toContain("event-detail-poster-stack");
     expect(screen).not.toContain("event-detail-route-line");
+    expect(screen.match(/<h1(?:\s|>)/g)).toHaveLength(1);
 
-    expect(screen.indexOf('className="event-detail-type"')).toBeLessThan(
-      screen.indexOf("<h1>"),
-    );
-    expect(screen.indexOf("<h1>")).toBeLessThan(
-      screen.indexOf("{event.shortDescription}"),
-    );
-    expect(screen.indexOf('className="event-detail-brief"')).toBeLessThan(
-      screen.indexOf('className="event-detail-actions"'),
-    );
+    expect(eventType).toBeLessThan(heading);
+    expect(heading).toBeLessThan(description);
+    expect(description).toBeLessThan(brief);
+    expect(brief).toBeLessThan(actions);
+    expect(actions).toBeLessThan(poster);
   });
 
-  test("keeps venue and attendance decisions ahead of rules and organizer", () => {
+  test("keeps explanatory sections in the approved decision order", () => {
     const screen = componentSource("EventDetail");
-    const venue = screen.indexOf('eyebrow="Venue"');
-    const attendance = screen.indexOf('eyebrow="Perk and attendance"');
-    const rules = screen.indexOf('eyebrow="Rules"');
-    const organizer = screen.indexOf('eyebrow="Organizer"');
+    const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
+    const whatToExpect = sourceIndex(screen, 'eyebrow="What to expect"');
+    const rideMeetup = sourceIndex(screen, 'eyebrow="Ride / meetup"');
+    const venue = sourceIndex(screen, 'eyebrow="Venue"');
+    const attendance = sourceIndex(screen, 'eyebrow="Perk and attendance"');
+    const rules = sourceIndex(screen, 'eyebrow="Rules"');
+    const organizer = sourceIndex(screen, 'eyebrow="Organizer"');
+    const giveaways = sourceIndex(screen, "<PublicGiveawayPanel");
 
-    expect(screen.indexOf('eyebrow="What to expect"')).toBeGreaterThanOrEqual(
-      0,
-    );
     expect(screen).not.toContain('className="event-detail-tags"');
-    expect(venue).toBeGreaterThanOrEqual(0);
-    expect(attendance).toBeGreaterThanOrEqual(0);
-    expect(rules).toBeGreaterThanOrEqual(0);
-    expect(organizer).toBeGreaterThanOrEqual(0);
+    expect(poster).toBeLessThan(whatToExpect);
+    expect(whatToExpect).toBeLessThan(rideMeetup);
+    expect(whatToExpect).toBeLessThan(venue);
+    expect(rideMeetup).toBeLessThan(venue);
+    expect(venue).toBeLessThan(attendance);
     expect(venue).toBeLessThan(rules);
-    expect(venue).toBeLessThan(organizer);
     expect(attendance).toBeLessThan(rules);
-    expect(attendance).toBeLessThan(organizer);
+    expect(rules).toBeLessThan(organizer);
+    expect(organizer).toBeLessThan(giveaways);
     expect(screen).toContain("View attendee roster");
   });
 
   test("uses a compact responsive poster and readable title system", () => {
-    expect(css).toMatch(
-      /\.event-detail-stage\s*\{[\s\S]*grid-template-areas:/,
+    const stage = cssRule(".event-detail-stage");
+    const poster = cssRule(".event-detail-poster");
+    const posterImage = cssRule(".event-detail-poster img");
+    const heading = cssRule(".event-detail-copy h1");
+    const eventDetailStyles = sourceIndex(css, ".event-detail-stage");
+    const mobile = sourceIndex(
+      css,
+      "@media (max-width: 640px)",
+      eventDetailStyles,
     );
-    expect(css).toMatch(
-      /\.event-detail-poster\s*\{[\s\S]*aspect-ratio:\s*1/,
+    const mobilePoster = cssRule(".event-detail-poster-wrap", mobile);
+
+    expect(stage).toContain('grid-template-areas: "poster copy"');
+    expect(poster).toContain("aspect-ratio: 1");
+    expect(posterImage).toContain("object-fit: contain");
+    expect(heading).toContain("font-size: clamp(2rem, 5vw, 3.5rem)");
+    expect(mobilePoster).toContain("max-width: 280px");
+  });
+
+  test("keeps every event action target at least 44px tall", () => {
+    const targetRule = cssRule(
+      [
+        ".event-detail-actions button,",
+        ".event-detail-actions a,",
+        ".event-detail-map-link,",
+        ".event-detail-poster-link,",
+        ".event-detail-essentials .as-link",
+      ].join("\n"),
     );
-    expect(css).toMatch(
-      /\.event-detail-poster img\s*\{[\s\S]*object-fit:\s*contain/,
+
+    expect(targetRule).toContain("min-height: 44px");
+  });
+
+  test("provides event-detail-scoped keyboard focus outlines", () => {
+    const focusRule = cssRule(
+      [
+        ".event-detail-actions .primary-action:focus-visible,",
+        ".event-detail-actions .ghost-action:focus-visible,",
+        ".event-detail-map-link:focus-visible,",
+        ".event-detail-essentials .as-link:focus-visible",
+      ].join("\n"),
     );
-    expect(css).toMatch(
-      /\.event-detail-copy h1\s*\{[\s\S]*clamp\(2rem,/,
-    );
-    expect(css).toContain("max-width: 280px");
-    expect(css).toContain("min-height: 44px");
+
+    expect(focusRule).toContain("outline: 2px solid");
+    expect(focusRule).toContain("outline-offset: 2px");
   });
 });

@@ -3686,8 +3686,17 @@ svg {
 .event-detail-actions button,
 .event-detail-actions a,
 .event-detail-map-link,
-.event-detail-poster-link {
+.event-detail-poster-link,
+.event-detail-essentials .as-link {
   min-height: 44px;
+}
+
+.event-detail-actions .primary-action:focus-visible,
+.event-detail-actions .ghost-action:focus-visible,
+.event-detail-map-link:focus-visible,
+.event-detail-essentials .as-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--event-accent) 56%, #fff);
+  outline-offset: 2px;
 }
 
 .event-detail-poster-link {
