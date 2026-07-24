@@ -4623,19 +4623,11 @@ export class PrismaTambikeBackend {
     if (!cta.canRegister && !cta.canShowInterest) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    if (
-      input.rosterIdentity !== undefined &&
-      input.rosterIdentity !== "VISIBLE" &&
-      input.rosterIdentity !== "ANONYMOUS"
-    ) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-
     const result = await this.prisma.$transaction(async (tx) => {
       await this.lockGiveawayEvent(tx, event.id);
       const previousRsvp = await tx.rSVP.findUnique({
         where: { eventId_userId: { eventId: event.id, userId: user.id } },
-        select: { status: true, goingAt: true, rosterIdentity: true },
+        select: { status: true, goingAt: true },
       });
       const now = new Date();
       const goingAt =
@@ -4653,16 +4645,13 @@ export class PrismaTambikeBackend {
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
-          rosterIdentity: input.rosterIdentity ?? user.defaultRosterIdentity,
+          rosterIdentity: user.defaultRosterIdentity,
         },
         update: {
           status: input.status,
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
-          ...(input.rosterIdentity === undefined
-            ? {}
-            : { rosterIdentity: input.rosterIdentity }),
         },
       });
       const pass =
@@ -4764,8 +4753,8 @@ export class PrismaTambikeBackend {
       eventId,
       status: "going" as const,
       goingAt: { not: null },
-      rosterIdentity: "VISIBLE" as const,
       user: {
+        defaultRosterIdentity: "VISIBLE" as const,
         profileSlug: { not: null },
         profileVisibility: { not: "PRIVATE" as const },
       },
@@ -8835,8 +8824,8 @@ export class PrismaTambikeBackend {
               eventId,
               status: "going",
               goingAt: { not: null },
-              rosterIdentity: "VISIBLE",
               user: {
+                defaultRosterIdentity: "VISIBLE",
                 profileSlug: { not: null },
                 profileVisibility: { not: "PRIVATE" },
               },
