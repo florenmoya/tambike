@@ -824,6 +824,7 @@ function FeatureCard({
   const isVisible = distance <= 2;
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const titleParts = splitFeatureTitleEndPhrase(event.title);
+  const poster = resolveEventPoster(event.poster);
   const featureStyle = {
     "--x": `calc(${offset} * (var(--feature-card-width) + var(--feature-gap)))`,
     "--scale": isFeatured ? "1.08" : distance === 1 ? "0.9" : distance === 2 ? "0.82" : "0.74",
@@ -848,9 +849,10 @@ function FeatureCard({
     >
       <div className="feature-cover">
         <Image
-          src={event.poster}
+          src={poster}
           alt={`${event.title} poster`}
           fill
+          placeholder={typeof poster === "string" ? "empty" : "blur"}
           draggable={false}
           loading={isFeatured ? "eager" : "lazy"}
           fetchPriority={isFeatured ? "high" : "auto"}
@@ -1006,7 +1008,7 @@ function EventDetail({ eventId }: { eventId?: string }) {
                 alt={`${event.title} poster`}
                 fill
                 placeholder={typeof poster === "string" ? "empty" : "blur"}
-                sizes="(max-width: 640px) 280px, (max-width: 1024px) 34vw, 360px"
+                sizes="(max-width: 640px) 280px, 360px"
                 preload
               />
             </figure>

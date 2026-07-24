@@ -48,13 +48,20 @@ describe("event poster asset contract", () => {
     );
   });
 
-  test("resolves card and detail posters with component-local blur placeholders", () => {
+  test("resolves every discovery and detail poster with component-local blur placeholders", () => {
+    const feature = componentSource("FeatureCard");
     const card = componentSource("EventCard");
     const detail = componentSource("EventDetail");
 
+    expect(feature).toContain(
+      "const poster = resolveEventPoster(event.poster);",
+    );
     expect(card).toContain("const poster = resolveEventPoster(event.poster);");
     expect(detail).toContain(
       "const poster = resolveEventPoster(event.poster);",
+    );
+    expect(feature).toContain(
+      'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
     expect(card).toContain(
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
@@ -75,6 +82,9 @@ describe("event poster asset contract", () => {
     expect(card).toContain(
       'fetchPriority={priority ? "high" : "auto"}',
     );
+    expect(detail).toContain(
+      'sizes="(max-width: 640px) 280px, 360px"',
+    );
   });
 
   test("keeps the Cafe Classico poster lightweight and free of embedded profiles", async () => {
@@ -91,7 +101,10 @@ describe("event poster asset contract", () => {
     expect(metadata.hasProfile).toBe(false);
   });
 
-  test("pins Sharp to the version supported by this Next.js release", () => {
-    expect(packageJson.dependencies?.sharp).toBe("0.34.5");
+  test("uses one patched Sharp runtime for the app and Next image pipeline", () => {
+    expect(packageJson.dependencies?.sharp).toBe("0.35.3");
+    expect(
+      (packageJson as { overrides?: Record<string, string> }).overrides?.sharp,
+    ).toBe("0.35.3");
   });
 });

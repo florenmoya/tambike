@@ -65,7 +65,7 @@ describe("event detail decision-first UI contract", () => {
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
     expect(screen).toContain(
-      'sizes="(max-width: 640px) 280px, (max-width: 1024px) 34vw, 360px"',
+      'sizes="(max-width: 640px) 280px, 360px"',
     );
     expect(screen).toContain("preload");
     expect(screen).toContain("View full poster");
