@@ -8,6 +8,10 @@ export default defineConfig({
     },
   },
   test: {
-    exclude: [...configDefaults.exclude, "tests/prisma-integration/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      ".codex/worktrees/**",
+      "tests/prisma-integration/**",
+    ],
   },
 });

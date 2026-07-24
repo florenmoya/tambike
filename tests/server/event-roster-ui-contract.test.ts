@@ -170,19 +170,15 @@ describe("roster identity controls", () => {
     const provider = source("src/features/tambike-demo/demo-provider.tsx");
     const actions = source("src/server/actions.ts");
 
-    expect(screen).not.toContain("ExistingRsvpIdentityEditor");
-    expect(screen).not.toContain("RosterIdentityField");
-    expect(screen).not.toContain("Change for this event");
+    expect(screen).not.toContain("RosterIdentity");
     expect(screen).not.toContain("Profile default");
     expect(screen).not.toContain("Event roster privacy");
     expect(screen).toMatch(
       /registerForEvent\(event\.id,\s*attendance,\s*"going"\)/,
     );
 
-    expect(provider).not.toContain("updateEventRosterIdentityAction");
-    expect(provider).not.toContain("getEventRosterIdentityAction");
-    expect(actions).not.toContain("updateEventRosterIdentityAction");
-    expect(actions).not.toContain("getEventRosterIdentityAction");
+    expect(provider).not.toContain("RosterIdentity");
+    expect(actions).not.toContain("RosterIdentity");
 
     expect(screen).toContain("View attendee roster");
     expect(provider).toContain("configureEventRoster");
