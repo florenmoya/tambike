@@ -331,7 +331,9 @@ function LoadedProfileSettings({
         <Card id="attendance-privacy" className="profile-settings__section">
           <CardHeader>
             <CardTitle>Attendance privacy</CardTitle>
-            <CardDescription>This default applies to future event registrations only.</CardDescription>
+            <CardDescription>
+              This setting applies to all current and future event rosters.
+            </CardDescription>
           </CardHeader>
           <CardContent className="profile-fields">
             <div className="profile-field profile-field--wide">
@@ -347,7 +349,9 @@ function LoadedProfileSettings({
                   <SelectItem value="VISIBLE">Visible — show my eligible rider card</SelectItem>
                 </SelectContent>
               </Select>
-              <span>Private or unpublished profiles always appear anonymously. Existing RSVPs keep their own choice.</span>
+              <span>
+                Private or unpublished profiles always appear anonymously.
+              </span>
             </div>
           </CardContent>
         </Card>

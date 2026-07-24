@@ -95,6 +95,16 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toMatch(/Identity/);
     expect(settings).toMatch(/Attendance privacy/);
     expect(settings).toMatch(/Motorcycle photos/);
+    expect(settings).toContain(
+      "This setting applies to all current and future event rosters.",
+    );
+    expect(settings).toContain(
+      "Private or unpublished profiles always appear anonymously.",
+    );
+    expect(settings).toContain("Anonymous — count me without my card");
+    expect(settings).toContain("Visible — show my eligible rider card");
+    expect(settings).not.toContain("future event registrations only");
+    expect(settings).not.toContain("Existing RSVPs keep their own choice");
   });
 
   test("submits the current profile privacy values from the form", async () => {
