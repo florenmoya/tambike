@@ -195,7 +195,10 @@ describe("in-memory organizer-controlled event rosters", () => {
     });
 
     await backend.updateMemberProfile(actors.rider.sessionToken, { ...visibleProfile, defaultRosterIdentity: "ANONYMOUS" });
-    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({ summary: { visibleCount: 0, anonymousCount: 1 } });
+    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
+      summary: { visibleCount: 0, anonymousCount: 1 },
+      attendees: [],
+    });
     await backend.updateMemberProfile(actors.rider.sessionToken, visibleProfile);
     await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
       summary: { visibleCount: 1, anonymousCount: 0 },
