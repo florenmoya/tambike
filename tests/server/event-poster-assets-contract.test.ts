@@ -15,6 +15,15 @@ const screen = readFileSync(
   "utf8",
 );
 
+function componentSource(componentName: string) {
+  const start = screen.indexOf(`function ${componentName}(`);
+  const nextComponent = screen.indexOf("\nfunction ", start + 1);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+
+  return screen.slice(start, nextComponent === -1 ? undefined : nextComponent);
+}
+
 describe("event poster asset contract", () => {
   test("maps every bundled event poster to a static image asset", () => {
     const posterPaths = [...data.matchAll(/poster:\s*"([^"]+\.jpg)"/g)].map(
@@ -35,22 +44,32 @@ describe("event poster asset contract", () => {
     );
   });
 
-  test("resolves posters for cards and details with static-image blur placeholders", () => {
-    expect(screen.match(/const poster = resolveEventPoster\(event\.poster\);/g)).toHaveLength(
-      2,
+  test("resolves card and detail posters with component-local blur placeholders", () => {
+    const card = componentSource("EventCard");
+    const detail = componentSource("EventDetail");
+
+    expect(card).toContain("const poster = resolveEventPoster(event.poster);");
+    expect(detail).toContain(
+      "const poster = resolveEventPoster(event.poster);",
     );
-    expect(screen).toContain(
+    expect(card).toContain(
+      'placeholder={typeof poster === "string" ? "empty" : "blur"}',
+    );
+    expect(detail).toContain(
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
   });
 
   test("preloads the detail poster while cards retain selective loading", () => {
-    expect(screen).toMatch(/function EventDetail[\s\S]*?preload/);
-    expect(screen).toMatch(
-      /function EventCard[\s\S]*?loading=\{priority \? "eager" : "lazy"\}/,
+    const card = componentSource("EventCard");
+    const detail = componentSource("EventDetail");
+
+    expect(detail).toContain("preload");
+    expect(card).toContain(
+      'loading={priority ? "eager" : "lazy"}',
     );
-    expect(screen).toMatch(
-      /function EventCard[\s\S]*?fetchPriority=\{priority \? "high" : "auto"\}/,
+    expect(card).toContain(
+      'fetchPriority={priority ? "high" : "auto"}',
     );
   });
 });
