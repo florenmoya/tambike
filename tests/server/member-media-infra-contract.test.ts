@@ -155,9 +155,66 @@ describe("private member media infrastructure contract", () => {
     expect(template).toMatch(
       /Id: RemoveExpiredMemberMediaDeleteMarkers[\s\S]*Prefix: media\/[\s\S]*ExpiredObjectDeleteMarker: true/,
     );
-    expect(template).toMatch(/CorsConfiguration:[\s\S]*AllowedOrigins:[\s\S]*!Ref AllowedOrigin/);
-    expect(template).toMatch(/AllowedMethods:\s*\r?\n\s*- POST/);
-    expect(template).not.toMatch(/AllowedMethods:[\s\S]{0,120}- (?:GET|PUT|DELETE)/);
+    const cors = template.slice(
+      template.indexOf("      CorsConfiguration:"),
+      template.indexOf("      Tags:", template.indexOf("      CorsConfiguration:")),
+    );
+    expect(cors).toMatch(/AllowedOrigins:[\s\S]*!Ref AllowedOrigin/);
+    expect(cors).toMatch(/AllowedMethods:\s*\r?\n\s*- POST/);
+    expect(cors).not.toMatch(/AllowedMethods:[\s\S]{0,120}- (?:GET|PUT|DELETE)/);
+  });
+
+  test("defines a dedicated signed CloudFront distribution with exact private S3 access", () => {
+    const template = source("infra/aws/tambike-member-media.yaml");
+
+    for (const resource of [
+      "AWS::CloudFront::OriginAccessControl",
+      "AWS::CloudFront::PublicKey",
+      "AWS::CloudFront::KeyGroup",
+      "AWS::CloudFront::CachePolicy",
+      "AWS::CloudFront::Distribution",
+      "AWS::S3::BucketPolicy",
+    ]) {
+      expect(template).toContain(`Type: ${resource}`);
+    }
+    expect(template).toContain("CloudFrontPublicKeyEncoded:");
+    expect(template).toContain("OriginAccessControlOriginType: s3");
+    expect(template).toContain("SigningBehavior: always");
+    expect(template).toContain("SigningProtocol: sigv4");
+    expect(template).toContain("DomainName: !GetAtt MemberMediaBucket.RegionalDomainName");
+    expect(template).toContain('OriginAccessIdentity: ""');
+    expect(template).toContain("TrustedKeyGroups:");
+    expect(template).toContain("ViewerProtocolPolicy: redirect-to-https");
+    expect(template).toContain("PriceClass: PriceClass_200");
+    expect(template).toContain("HttpVersion: http2and3");
+    expect(template).toContain("MinTTL: 60");
+    expect(template).toContain("DefaultTTL: 86400");
+    expect(template).toContain("MaxTTL: 31536000");
+    expect(template).toMatch(/AllowedMethods:\s*\r?\n\s*- GET\s*\r?\n\s*- HEAD/);
+    expect(template).toMatch(/CachedMethods:\s*\r?\n\s*- GET\s*\r?\n\s*- HEAD/);
+
+    const bucketPolicy = template.slice(
+      template.indexOf("MemberMediaBucketPolicy:"),
+      template.indexOf("Outputs:"),
+    );
+    expect(bucketPolicy).toContain("Service: cloudfront.amazonaws.com");
+    expect(bucketPolicy).toContain("Action: s3:GetObject");
+    expect(bucketPolicy).toContain("Resource: !Sub ${MemberMediaBucket.Arn}/media/*");
+    expect(bucketPolicy).toContain("AWS:SourceArn");
+    expect(bucketPolicy).toContain(
+      "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${MemberMediaDistribution}",
+    );
+    expect(bucketPolicy).not.toContain("${MemberMediaBucket.Arn}/*");
+    expect(template).not.toContain("btccc-heatmaps");
+
+    for (const output of [
+      "MemberMediaDistributionId:",
+      "MemberMediaDistributionDomainName:",
+      "MemberMediaCloudFrontPublicKeyId:",
+      "MemberMediaCloudFrontKeyGroupId:",
+    ]) {
+      expect(template).toContain(output);
+    }
   });
 
   test("places expired delete-marker cleanup directly on its dedicated lifecycle rule", () => {

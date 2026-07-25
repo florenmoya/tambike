@@ -27,6 +27,11 @@ Parameters:
       - "false"
       - "true"
     Description: Explicitly allow this exact project preview environment to assume the role.
+  CloudFrontPublicKeyEncoded:
+    Type: String
+    NoEcho: true
+    MinLength: 64
+    Description: PEM-encoded RSA public key used to verify private member-media signed URLs.
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
@@ -147,6 +152,104 @@ Resources:
             - !Ref VercelOidcProvider
             - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/${VercelTeamSlug}
 
+  MemberMediaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-member-media-s3
+        Description: Signed CloudFront access to Tambike private member media.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  MemberMediaCloudFrontPublicKey:
+    Type: AWS::CloudFront::PublicKey
+    Properties:
+      PublicKeyConfig:
+        CallerReference: !Sub ${AWS::StackName}-member-media-signer
+        Comment: Tambike private member-media signed URL verifier.
+        EncodedKey: !Ref CloudFrontPublicKeyEncoded
+        Name: !Sub ${AWS::StackName}-member-media-signer
+
+  MemberMediaCloudFrontKeyGroup:
+    Type: AWS::CloudFront::KeyGroup
+    Properties:
+      KeyGroupConfig:
+        Comment: Trusted keys for Tambike private member-media viewer access.
+        Items:
+          - !Ref MemberMediaCloudFrontPublicKey
+        Name: !Sub ${AWS::StackName}-member-media-signers
+
+  MemberMediaCloudFrontCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Comment: Immutable private Tambike member-media objects.
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 60
+        Name: !Sub ${AWS::StackName}-member-media-cache
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  MemberMediaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: Tambike private member media
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: !Ref MemberMediaCloudFrontCachePolicy
+          Compress: true
+          TargetOriginId: tambike-member-media-s3
+          TrustedKeyGroups:
+            - !Ref MemberMediaCloudFrontKeyGroup
+          ViewerProtocolPolicy: redirect-to-https
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - DomainName: !GetAtt MemberMediaBucket.RegionalDomainName
+            Id: tambike-member-media-s3
+            OriginAccessControlId: !GetAtt MemberMediaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        PriceClass: PriceClass_200
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: DataClassification
+          Value: private-member-media
+
+  MemberMediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MemberMediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowExactTambikeCloudFrontDistributionRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${MemberMediaBucket.Arn}/media/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${MemberMediaDistribution}
+
 Outputs:
   BucketName:
     Description: Set this value as S3_BUCKET_NAME in Vercel.
@@ -154,3 +257,15 @@ Outputs:
   VercelRoleArn:
     Description: Set this value as AWS_ROLE_ARN in Vercel.
     Value: !GetAtt VercelMemberMediaRole.Arn
+  MemberMediaDistributionId:
+    Description: Dedicated private member-media CloudFront distribution ID.
+    Value: !Ref MemberMediaDistribution
+  MemberMediaDistributionDomainName:
+    Description: Set this value as MEMBER_MEDIA_CLOUDFRONT_DOMAIN in Vercel.
+    Value: !GetAtt MemberMediaDistribution.DomainName
+  MemberMediaCloudFrontPublicKeyId:
+    Description: Set this value as MEMBER_MEDIA_CLOUDFRONT_PUBLIC_KEY_ID in Vercel.
+    Value: !Ref MemberMediaCloudFrontPublicKey
+  MemberMediaCloudFrontKeyGroupId:
+    Description: CloudFront trusted key group for private member media.
+    Value: !Ref MemberMediaCloudFrontKeyGroup
