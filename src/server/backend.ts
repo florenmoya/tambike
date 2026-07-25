@@ -1218,8 +1218,15 @@ export class TambikeBackend {
     }
   }
 
+  async authorizeMemberMedia(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): Promise<AuthorizedMemberMediaDescriptor> {
+    return this.resolveMemberMediaDescriptor(sessionToken, mediaId);
+  }
+
   async getMemberMedia(sessionToken: string | undefined, mediaId: string) {
-    const descriptor = this.resolveMemberMediaDescriptor(sessionToken, mediaId);
+    const descriptor = await this.authorizeMemberMedia(sessionToken, mediaId);
     try {
       return await this.memberMedia.read(descriptor);
     } catch (error) {

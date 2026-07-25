@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   createMemberMediaUploadHandler,
 } from "../../src/app/api/member-media/uploads/route";
@@ -140,6 +140,78 @@ describe("member media App Router boundaries", () => {
     expect(missing.status).toBe(404);
     expect(missing.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await missing.text()).not.toContain("NOT_FOUND");
+  });
+
+  test("redirects authorized media to a private temporary CDN URL without reading S3 bytes", async () => {
+    const getMemberMedia = vi.fn(async () => {
+      throw new Error("S3 bytes must not be read for a CDN redirect");
+    });
+    const handler = createMemberMediaDeliveryHandler({
+      readSessionToken: async () => "session-1",
+      getCdnUrlFactory: () => (storageKey) =>
+        `https://d111111abcdef8.cloudfront.net/${storageKey}?signed=true`,
+      getBackend: async () => ({
+        authorizeMemberMedia: async () => ({
+          storageKey: "media/users/user-1/avatar/media-1.webp",
+          mimeType: "image/webp" as const,
+        }),
+        getMemberMedia,
+      }),
+    });
+
+    const response = await handler(new Request("https://tambike.test/media/media-1"), {
+      params: Promise.resolve({ mediaId: "media-1" }),
+    });
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("Location")).toBe(
+      "https://d111111abcdef8.cloudfront.net/media/users/user-1/avatar/media-1.webp?signed=true",
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(response.headers.get("Content-Type")).toBeNull();
+    expect(getMemberMedia).not.toHaveBeenCalled();
+  });
+
+  test("hides CDN authorization and signing failures behind the same private 404", async () => {
+    const authorizationFailure = createMemberMediaDeliveryHandler({
+      readSessionToken: async () => null,
+      getCdnUrlFactory: () => () => {
+        throw new Error("must not sign unauthorized media");
+      },
+      getBackend: async () => ({
+        authorizeMemberMedia: async () => {
+          throw new Error("NOT_FOUND");
+        },
+        getMemberMedia: async () => {
+          throw new Error("must not stream");
+        },
+      }),
+    });
+    const signingFailure = createMemberMediaDeliveryHandler({
+      readSessionToken: async () => "session-1",
+      getCdnUrlFactory: () => () => {
+        throw new Error("SIGNING_FAILED");
+      },
+      getBackend: async () => ({
+        authorizeMemberMedia: async () => ({
+          storageKey: "media/users/user-1/avatar/media-1.webp",
+          mimeType: "image/webp" as const,
+        }),
+        getMemberMedia: async () => {
+          throw new Error("must not stream");
+        },
+      }),
+    });
+
+    for (const handler of [authorizationFailure, signingFailure]) {
+      const response = await handler(new Request("https://tambike.test/media/media-1"), {
+        params: Promise.resolve({ mediaId: "media-1" }),
+      });
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(await response.text()).toBe("Not found");
+    }
   });
 
   test("returns route-level 404 when an admin requests unpublished owner media", async () => {

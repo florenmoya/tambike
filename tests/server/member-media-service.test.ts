@@ -567,6 +567,16 @@ describe("in-memory member media persistence and authorization", () => {
     });
     expect(oldKey && media.objects.has(oldKey)).toBe(false);
 
+    vi.mocked(media.store.getObject).mockClear();
+    await expect(backend.authorizeMemberMedia(actors.rider.sessionToken, current.mediaId))
+      .resolves.toMatchObject({
+        storageKey: expect.stringContaining(current.mediaId),
+        mimeType: "image/webp",
+      });
+    expect(media.store.getObject).not.toHaveBeenCalled();
+    await expect(backend.authorizeMemberMedia(undefined, current.mediaId))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+
     await expect(backend.getMemberMedia(undefined, current.mediaId))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(backend.getMemberMedia(actors.rider.sessionToken, current.mediaId))

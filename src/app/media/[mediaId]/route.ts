@@ -1,14 +1,28 @@
 import type { MemberMediaBody } from "@/server/member-media/store";
+import {
+  createMemberMediaCloudFrontUrl,
+  loadMemberMediaCloudFrontConfig,
+} from "@/server/member-media/cloudfront";
+import type { AuthorizedMemberMediaDescriptor } from "@/server/member-media/service";
 import { getTambikeBackend } from "@/server/backend";
 import { readSessionToken } from "@/server/session-cookie";
 
-const privateHeaders = {
+const privateNoStoreHeaders = {
   "Cache-Control": "private, no-store",
-  "Content-Type": "image/webp",
+  "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 };
 
+const privateImageHeaders = {
+  ...privateNoStoreHeaders,
+  "Content-Type": "image/webp",
+};
+
 interface MemberMediaDeliveryRouteBackend {
+  authorizeMemberMedia?(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): Promise<AuthorizedMemberMediaDescriptor>;
   getMemberMedia(sessionToken: string | undefined, mediaId: string): Promise<{
     body: MemberMediaBody;
     mimeType: "image/webp";
@@ -19,6 +33,7 @@ interface MemberMediaDeliveryRouteBackend {
 interface MemberMediaDeliveryHandlerDependencies {
   readSessionToken: () => Promise<string | null>;
   getBackend: () => Promise<MemberMediaDeliveryRouteBackend>;
+  getCdnUrlFactory?: () => ((storageKey: string) => string) | null;
 }
 
 function responseBody(body: MemberMediaBody): BodyInit {
@@ -53,14 +68,28 @@ export function createMemberMediaDeliveryHandler(
     const sessionToken = await dependencies.readSessionToken();
     try {
       const backend = await dependencies.getBackend();
+      const createCdnUrl = dependencies.getCdnUrlFactory?.() ?? null;
+      if (createCdnUrl) {
+        if (!backend.authorizeMemberMedia) {
+          throw new Error("MEMBER_MEDIA_CLOUDFRONT_CONFIG");
+        }
+        const descriptor = await backend.authorizeMemberMedia(
+          sessionToken ?? undefined,
+          mediaId,
+        );
+        const headers = new Headers(privateNoStoreHeaders);
+        headers.set("Location", createCdnUrl(descriptor.storageKey));
+        return new Response(null, { status: 307, headers });
+      }
+
       const media = await backend.getMemberMedia(sessionToken ?? undefined, mediaId);
-      const headers = new Headers(privateHeaders);
+      const headers = new Headers(privateImageHeaders);
       if (media.contentLength !== undefined) {
         headers.set("Content-Length", String(media.contentLength));
       }
       return new Response(responseBody(media.body), { status: 200, headers });
     } catch {
-      return new Response("Not found", { status: 404, headers: privateHeaders });
+      return new Response("Not found", { status: 404, headers: privateImageHeaders });
     }
   };
 }
@@ -68,4 +97,10 @@ export function createMemberMediaDeliveryHandler(
 export const GET = createMemberMediaDeliveryHandler({
   readSessionToken,
   getBackend: getTambikeBackend,
+  getCdnUrlFactory: () => {
+    const config = loadMemberMediaCloudFrontConfig();
+    return config
+      ? (storageKey) => createMemberMediaCloudFrontUrl(storageKey, config)
+      : null;
+  },
 });
