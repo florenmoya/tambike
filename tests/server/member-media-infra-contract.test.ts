@@ -217,6 +217,26 @@ describe("private member media infrastructure contract", () => {
     }
   });
 
+  test("documents guarded CloudFront deployment, verification, rollback, and key rotation", () => {
+    const guide = source("docs/deployment/member-media-aws-oidc.md");
+
+    for (const value of [
+      "CloudFrontPublicKeyEncoded",
+      "MemberMediaDistributionDomainName",
+      "MEMBER_MEDIA_CLOUDFRONT_DOMAIN",
+      "MEMBER_MEDIA_CLOUDFRONT_PUBLIC_KEY_ID",
+      "MEMBER_MEDIA_CLOUDFRONT_PRIVATE_KEY_BASE64",
+      "MEMBER_MEDIA_CLOUDFRONT_URL_TTL_SECONDS",
+      "Origin Access Control",
+      "signed URL",
+      "unsigned",
+      "403",
+      "key rotation",
+    ]) {
+      expect(guide).toContain(value);
+    }
+  });
+
   test("places expired delete-marker cleanup directly on its dedicated lifecycle rule", () => {
     const template = source("infra/aws/tambike-member-media.yaml");
     const ruleStart = template.indexOf("          - Id: RemoveExpiredMemberMediaDeleteMarkers");

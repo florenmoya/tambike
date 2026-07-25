@@ -10,6 +10,8 @@ Official references:
 - [Vercel OIDC token claims](https://vercel.com/docs/oidc/reference)
 - [AWS CloudFormation S3 bucket reference](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-s3-bucket.html)
 - [AWS CloudFormation IAM OIDC provider reference](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-iam-oidcprovider.html)
+- [AWS CloudFront Origin Access Control](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html)
+- [AWS CloudFront signed URLs](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-signed-urls.html)
 
 ## Preconditions and identity checks
 
@@ -72,6 +74,30 @@ aws iam get-open-id-connect-provider --open-id-connect-provider-arn $ExpectedOid
 
 The final command must report the URL `oidc.vercel.com/<exact-team-slug>` and audience `https://vercel.com/<exact-team-slug>`. A mismatched parameter cannot change the stack's derived IAM principal; deployment fails safely if the exact provider does not exist.
 
+Generate a dedicated RSA 2048 CloudFront signing key in a unique operating-system temporary directory outside the repository. Do not print, paste into source control, or place the private key in the checkout:
+
+```powershell
+$CdnKeyDir = Join-Path ([IO.Path]::GetTempPath()) ("tambike-cloudfront-" + [guid]::NewGuid().ToString())
+$null = New-Item -ItemType Directory -Path $CdnKeyDir
+$CdnPrivateKeyPath = Join-Path $CdnKeyDir "private.pem"
+$CdnPublicKeyPath = Join-Path $CdnKeyDir "public.pem"
+
+& openssl genrsa -out $CdnPrivateKeyPath 2048
+if ($LASTEXITCODE -ne 0) { throw "CloudFront private-key generation failed" }
+& openssl rsa -pubout -in $CdnPrivateKeyPath -out $CdnPublicKeyPath
+if ($LASTEXITCODE -ne 0) { throw "CloudFront public-key derivation failed" }
+
+$CloudFrontPublicKeyEncoded = Get-Content -Raw -LiteralPath $CdnPublicKeyPath
+if (
+  $CloudFrontPublicKeyEncoded -notmatch "-----BEGIN PUBLIC KEY-----" -or
+  -not (Test-Path -LiteralPath $CdnPrivateKeyPath)
+) {
+  throw "CloudFront key files are incomplete"
+}
+```
+
+`CloudFrontPublicKeyEncoded` is the public PEM only. It is safe to pass to CloudFormation. The private PEM remains only in the temporary directory until it is encoded directly for the Vercel production secret below.
+
 Create or update the production stack with exact values. After the non-production gate below has created the provider, always pass its retained exact ARN; this prevents a duplicate provider from being created:
 
 ```powershell
@@ -86,6 +112,7 @@ aws cloudformation deploy `
     AllowedOrigin=https://<exact-tambike-origin> `
     ExistingOidcProviderArn=<retained-exact-provider-arn> `
     EnablePreviewAccess=false `
+    CloudFrontPublicKeyEncoded="$CloudFrontPublicKeyEncoded" `
   --no-fail-on-empty-changeset
 ```
 
@@ -96,12 +123,23 @@ Do not leave `ExistingOidcProviderArn` empty after the non-production gate. The 
 Read outputs and inspect the deployed policy before configuring the app:
 
 ```powershell
-aws cloudformation describe-stacks `
+$StackOutputs = aws cloudformation describe-stacks `
   --region ap-southeast-1 `
   --stack-name tambike-member-media `
-  --query "Stacks[0].Outputs"
+  --query "Stacks[0].Outputs" | ConvertFrom-Json
+$MemberMediaDistributionDomainName = (
+  $StackOutputs | Where-Object OutputKey -eq "MemberMediaDistributionDomainName"
+).OutputValue
+$MemberMediaCloudFrontPublicKeyId = (
+  $StackOutputs | Where-Object OutputKey -eq "MemberMediaCloudFrontPublicKeyId"
+).OutputValue
+if (-not $MemberMediaDistributionDomainName -or -not $MemberMediaCloudFrontPublicKeyId) {
+  throw "CloudFront outputs are incomplete"
+}
 aws iam get-role --role-name <role-name-from-stack-resources>
 ```
+
+The dedicated distribution uses an Origin Access Control to sign S3 origin requests. Its trusted key group requires a Tambike signed URL from the application; the S3 bucket stays private and grants CloudFront only `s3:GetObject` under `media/*` for this exact distribution. The cache policy ignores signed query parameters in the cache key and keeps successful immutable WebP objects warm for one day by default.
 
 The bucket is retained if the stack is deleted. It blocks public access, uses SSE-S3, enables versioning, expires `tmp/` objects after one day, and allows browser CORS POSTs only from `AllowedOrigin`.
 
@@ -115,17 +153,57 @@ Each worker invocation processes bounded batches: at most five batches of ten le
 
 ## Configure Vercel environments
 
-Use only the CloudFormation outputs and the pinned region:
+Use only the CloudFormation outputs, the generated private key, and the pinned region:
 
 ```text
 AWS_REGION=ap-southeast-1
 AWS_ROLE_ARN=<VercelRoleArn output>
 S3_BUCKET_NAME=<BucketName output>
+MEMBER_MEDIA_CLOUDFRONT_DOMAIN=<MemberMediaDistributionDomainName output>
+MEMBER_MEDIA_CLOUDFRONT_PUBLIC_KEY_ID=<MemberMediaCloudFrontPublicKeyId output>
+MEMBER_MEDIA_CLOUDFRONT_PRIVATE_KEY_BASE64=<base64 private PEM, never print>
+MEMBER_MEDIA_CLOUDFRONT_URL_TTL_SECONDS=300
 ```
 
 After rechecking the linked project and scope, add each value to production with `vercel env add <NAME> production --scope <expected-team-slug>`. Use `vercel env ls --scope <expected-team-slug>` to verify names and targets. The values are configuration, not persistent AWS credentials; never add long-lived access keys.
 
-If preview access was explicitly enabled in the stack, add the same three names to preview separately with `vercel env add <NAME> preview --scope <expected-team-slug>`. Do not add preview variables while the trust policy remains production-only.
+Encode the private PEM in memory, pipe every value through standard input, and do not echo the private value or include it in shell history:
+
+```powershell
+$ExpectedVercelTeamSlug = "<expected-team-slug>"
+$CdnPrivateKeyBase64 = [Convert]::ToBase64String(
+  [IO.File]::ReadAllBytes($CdnPrivateKeyPath)
+)
+
+$MemberMediaDistributionDomainName |
+  vercel env add MEMBER_MEDIA_CLOUDFRONT_DOMAIN production --scope $ExpectedVercelTeamSlug
+$MemberMediaCloudFrontPublicKeyId |
+  vercel env add MEMBER_MEDIA_CLOUDFRONT_PUBLIC_KEY_ID production --scope $ExpectedVercelTeamSlug
+$CdnPrivateKeyBase64 |
+  vercel env add MEMBER_MEDIA_CLOUDFRONT_PRIVATE_KEY_BASE64 production --scope $ExpectedVercelTeamSlug
+"300" |
+  vercel env add MEMBER_MEDIA_CLOUDFRONT_URL_TTL_SECONDS production --scope $ExpectedVercelTeamSlug
+
+$CdnPrivateKeyBase64 = $null
+vercel env ls --scope $ExpectedVercelTeamSlug
+```
+
+The application enables CloudFront only when all four values are valid. If they are absent, `/media/{mediaId}` keeps using the existing private S3 streaming path. A partial or malformed configuration fails closed with the same private `404` response as unauthorized media.
+
+If preview access was explicitly enabled in the stack, add the same three AWS names to preview separately with `vercel env add <NAME> preview --scope <expected-team-slug>`. Do not add preview variables while the trust policy remains production-only.
+
+## Verify signed delivery and caching
+
+Wait for the CloudFront distribution and the new Vercel production deployment to report deployed and ready. An unsigned request directly to any path on `https://<MemberMediaDistributionDomainName>/media/...` must return `403`; a `200` means the private-content boundary is broken and the rollout must stop.
+
+Use a member media ID that the test viewer is authorized to see, without logging its redirected query string:
+
+1. Request `https://tambike.bayanko.ph/media/<authorized-media-id>` without following redirects. It must return `307`, `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, and a `Location` hosted by `MemberMediaDistributionDomainName`.
+2. Follow that redirect without printing the signed URL. The image must return `200` and `Content-Type: image/webp`.
+3. Repeat the authorized request and follow it again. The first CloudFront response may be `X-Cache: Miss from cloudfront`; the warm response must become `X-Cache: Hit from cloudfront` with a positive `Age`.
+4. Test a private media ID as an unauthorized or signed-out viewer. The stable app route must remain `404` and must not disclose a CloudFront URL or S3 key.
+
+Do not treat a fast browser render alone as proof. Record status, host, `X-Cache`, `Age`, content type, and transfer time while redacting the complete signed URL.
 
 ## Rollback and recovery
 
@@ -154,6 +232,36 @@ aws cloudformation rollback-stack `
 ```
 
 Do not delete the retained bucket as part of stack recovery. Re-run `describe-stack-events`, verify the exact team/project trust conditions, then deploy the corrected template normally.
+
+For an application-level CDN rollback, remove all four `MEMBER_MEDIA_CLOUDFRONT_*` production variables together and redeploy the last known-good application commit. The built-in direct S3 stream fallback then remains the authorized delivery path. Do not remove the CloudFront key group, public key, distribution, Origin Access Control, or bucket policy until that fallback has been verified in production; infrastructure removal is a separate approved stack change.
+
+For key rotation, preserve overlap:
+
+1. Generate a new key pair in a new unique temporary directory.
+2. Add the new public key to the trusted key group while the old public key remains trusted.
+3. Deploy the new `MEMBER_MEDIA_CLOUDFRONT_PUBLIC_KEY_ID` and `MEMBER_MEDIA_CLOUDFRONT_PRIVATE_KEY_BASE64`.
+4. Verify new signed URLs and warm cache hits in production.
+5. Wait at least the old five-minute signed URL lifetime plus CloudFront propagation.
+6. Then remove the old public key from the key group.
+
+Never replace and revoke the only trusted key in one step. A rotation requires a temporary two-key CloudFormation update so in-flight signed URLs remain valid.
+
+After production verification succeeds and Vercel lists all four production variable names, erase only the exact generated temporary key directory. Validate that its resolved path is a uniquely named child of the operating-system temp directory before recursive deletion:
+
+```powershell
+$ResolvedCdnKeyDir = [IO.Path]::GetFullPath($CdnKeyDir)
+$ResolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$CdnKeyLeaf = Split-Path -Leaf $ResolvedCdnKeyDir
+if (
+  -not $ResolvedCdnKeyDir.StartsWith($ResolvedTempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+  -not $CdnKeyLeaf.StartsWith("tambike-cloudfront-", [StringComparison]::Ordinal)
+) {
+  throw "Refusing to remove an unverified CloudFront key directory"
+}
+Remove-Item -LiteralPath $ResolvedCdnKeyDir -Recurse -Force
+```
+
+The Vercel secret remains the active signing copy. A deleted private key cannot be recovered from CloudFront; generate a new pair and use the overlap procedure for future key rotation.
 
 ## Deploy and run the disposable non-production S3 smoke gate
 
