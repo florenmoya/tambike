@@ -34,7 +34,7 @@ function decodePrivateKey(value: string) {
     invalidConfig();
   }
   const match = privateKey.match(
-    /^-----BEGIN (PRIVATE KEY|RSA PRIVATE KEY)-----\r?\n[\s\S]+\r?\n-----END \1-----$/,
+    /^-----BEGIN (PRIVATE KEY|RSA PRIVATE KEY)-----\r?\n[\s\S]+\r?\n-----END \1-----(?:\r?\n)?$/,
   );
   if (!match) invalidConfig();
   return privateKey;

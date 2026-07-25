@@ -74,6 +74,18 @@ describe("member media CloudFront configuration", () => {
     });
   });
 
+  test("accepts the trailing newline emitted by OpenSSL PEM files", () => {
+    const opensslPrivateKey = `${privateKey}\n`;
+
+    expect(loadMemberMediaCloudFrontConfig({
+      ...completeEnvironment,
+      MEMBER_MEDIA_CLOUDFRONT_PRIVATE_KEY_BASE64:
+        Buffer.from(opensslPrivateKey).toString("base64"),
+    })).toMatchObject({
+      privateKey: opensslPrivateKey,
+    });
+  });
+
   test("signs an encoded HTTPS object path with a bounded expiration", () => {
     const sign = vi.fn((input: {
       url: string;
