@@ -46,12 +46,11 @@ export function EventAttendeePreview({
   const goingCopy =
     going === 1 ? "1 rider is going" : `${going} riders are going`;
   const rosterEnabled = preview?.summary?.rosterEnabled !== false;
-  const riders =
-    preview?.signedIn && rosterEnabled ? preview.attendees.slice(0, 4) : [];
-  const memberCanBrowse = preview?.signedIn && rosterEnabled;
-  const guestCanLogIn =
-    preview?.signedIn === false && !preview.unavailable && rosterEnabled;
-  const canOpenRoster = rosterEnabled && !guestCanLogIn;
+  const riders = rosterEnabled ? preview?.attendees.slice(0, 4) ?? [] : [];
+  const canOpenRoster = rosterEnabled;
+  const [failedPhotos, setFailedPhotos] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   return (
     <section className={styles.preview} aria-labelledby="event-attendee-preview-title">
@@ -64,47 +63,47 @@ export function EventAttendeePreview({
       {riders.length > 0 ? (
         <div className={styles.riderSummary}>
           <div className={styles.facepile} aria-label="Featured attendees">
-            {riders.map((rider) => (
-              <Link
-                key={rider.slug}
-                className={styles.rider}
-                href={`/riders/${rider.slug}`}
-                aria-label={`View ${rider.displayName}’s rider profile`}
-              >
-                {rider.profilePhotoUrl ? (
-                  <Image
-                    src={rider.profilePhotoUrl}
-                    alt=""
-                    width={52}
-                    height={52}
-                    sizes="52px"
-                    unoptimized
-                  />
-                ) : (
-                  <span aria-hidden="true">
-                    {rider.displayName.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-              </Link>
-            ))}
+            {riders.map((rider) => {
+              const photoFailed = failedPhotos.has(rider.slug);
+              const initial = rider.displayName.trim().charAt(0).toUpperCase() || "R";
+
+              return (
+                <Link
+                  key={rider.slug}
+                  className={styles.rider}
+                  href={`/riders/${rider.slug}`}
+                  aria-label={`View ${rider.displayName}’s rider profile`}
+                >
+                  {rider.profilePhotoUrl && !photoFailed ? (
+                    <Image
+                      src={rider.profilePhotoUrl}
+                      alt=""
+                      width={52}
+                      height={52}
+                      sizes="52px"
+                      unoptimized
+                      onError={() => {
+                        setFailedPhotos((current) => {
+                          const next = new Set(current);
+                          next.add(rider.slug);
+                          return next;
+                        });
+                      }}
+                    />
+                  ) : (
+                    <span aria-hidden="true">{initial}</span>
+                  )}
+                </Link>
+              );
+            })}
           </div>
-          <p className={styles.names}>
-            {riders.map((rider) => rider.displayName).join(", ")}
-          </p>
         </div>
-      ) : memberCanBrowse ? (
+      ) : rosterEnabled && !preview?.unavailable ? (
         <p className={styles.state}>Rider profiles will appear here as they join.</p>
       ) : null}
 
       <div className={styles.footer}>
-        {guestCanLogIn ? (
-          <Link
-            className={styles.action}
-            href={`/login?next=${encodeURIComponent(`/events/${eventId}`)}`}
-          >
-            Log in to see riders
-          </Link>
-        ) : canOpenRoster ? (
+        {canOpenRoster ? (
           <Link className={styles.action} href={`/events/${eventId}/attendees`}>
             See who’s going
           </Link>

@@ -10,6 +10,13 @@ const css = readFileSync(
   join(process.cwd(), "src/app/globals.css"),
   "utf8",
 );
+const attendeePreviewSource = readFileSync(
+  join(
+    process.cwd(),
+    "src/features/member-profiles/event-attendee-preview.tsx",
+  ),
+  "utf8",
+);
 
 function componentSource(componentName: string) {
   const start = screenSource.indexOf(`function ${componentName}(`);
@@ -123,6 +130,13 @@ describe("event detail decision-first UI contract", () => {
     expect(route).toContain("loadEventAttendeePreview");
     expect(route).toContain("attendeePreview={attendeePreview}");
     expect(route).not.toContain('"use client"');
+  });
+
+  test("keeps the attendee preview to public facepile and roster action", () => {
+    expect(attendeePreviewSource).toContain("styles.facepile");
+    expect(attendeePreviewSource).toContain("See who’s going");
+    expect(attendeePreviewSource).not.toContain("styles.names");
+    expect(attendeePreviewSource).not.toContain("Log in to see riders");
   });
 
   test("uses a compact responsive poster and readable title system", () => {

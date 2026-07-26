@@ -30,7 +30,6 @@ const memberPreview: EventAttendeePreviewData = {
       area: "Quezon City",
     },
   ],
-  signedIn: true,
   unavailable: false,
 };
 
@@ -50,35 +49,18 @@ function render(
 }
 
 describe("event attendee preview", () => {
-  test("leads with turnout and authorized rider identities", () => {
+  test("shows public rider links without a login gate or long name list", () => {
     const markup = render(memberPreview);
 
-    expect(markup).toContain("Who’s going");
-    expect(markup).toContain("15 riders are going");
-    expect(markup).toContain("15 interested");
-    expect(markup).toContain("Around 55 expected");
-    expect(markup).toContain("Mika Santos");
-    expect(markup).toContain("Paolo Reyes");
     expect(markup).toContain('href="/riders/mika-santos"');
-    expect(markup).toContain('src="/media/mika"');
-    expect(markup).toContain('href="/events/ride-1/attendees"');
+    expect(markup).toContain('href="/riders/paolo-reyes"');
     expect(markup).toContain("See who’s going");
+    expect(markup).not.toContain("Log in to see riders");
+    expect(markup).not.toContain("Mika Santos, Paolo Reyes");
+    expect(markup).toContain('src="/media/mika"');
     expect(markup).not.toMatch(
       /anonymous riders|visible riders|email|userId|verification|motorcycle/i,
     );
-  });
-
-  test("shows a count and login action without identities for guests", () => {
-    const markup = render({
-      ...memberPreview,
-      attendees: [],
-      signedIn: false,
-    });
-
-    expect(markup).toContain("15 riders are going");
-    expect(markup).toContain("Log in to see riders");
-    expect(markup).toContain('href="/login?next=%2Fevents%2Fride-1"');
-    expect(markup).not.toContain("Mika Santos");
   });
 
   test("does not expose roster navigation when the organizer disabled it", () => {
@@ -93,7 +75,6 @@ describe("event attendee preview", () => {
 
     expect(markup).toContain("15 riders are going");
     expect(markup).not.toContain("See who’s going");
-    expect(markup).not.toContain("Log in to see riders");
     expect(markup).not.toMatch(/organizer|privacy|disabled/i);
   });
 
@@ -101,17 +82,15 @@ describe("event attendee preview", () => {
     const markup = render({
       summary: null,
       attendees: [],
-      signedIn: false,
       unavailable: true,
     });
 
     expect(markup).toContain("12 riders are going");
     expect(markup).toContain("See who’s going");
     expect(markup).toContain('href="/events/ride-1/attendees"');
-    expect(markup).not.toContain("Log in to see riders");
   });
 
-  test("guides signed-in riders when no visible profiles are available", () => {
+  test("guides riders when no visible profiles are available", () => {
     const markup = render({
       ...memberPreview,
       attendees: [],
@@ -119,6 +98,62 @@ describe("event attendee preview", () => {
 
     expect(markup).toContain("Rider profiles will appear here as they join");
     expect(markup).toContain("See who’s going");
+  });
+
+  test("replaces a failed portrait with the rider initial", async () => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(EventAttendeePreview, {
+            eventId: "ride-1",
+            fallbackGoing: 15,
+            interested: 15,
+            expected: 55,
+            preview: memberPreview,
+          }),
+        );
+      });
+      const image = container.querySelector('img[src$="/media/mika"]');
+      expect(image).not.toBeNull();
+
+      await act(async () => {
+        image!.dispatchEvent(new Event("error"));
+      });
+
+      const mikaLink = container.querySelector(
+        'a[href="/riders/mika-santos"]',
+      );
+      expect(mikaLink?.querySelector("img")).toBeNull();
+      expect(mikaLink?.textContent).toBe("M");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  test("uses the first non-whitespace character when a rider has no portrait", () => {
+    const markup = render({
+      ...memberPreview,
+      attendees: [
+        {
+          slug: "mika-santos",
+          displayName: "  Mika Santos",
+          area: "Davao City",
+        },
+      ],
+    });
+
+    expect(markup).toContain('href="/riders/mika-santos"');
+    expect(markup).toContain(">M</span>");
   });
 
   test.each([

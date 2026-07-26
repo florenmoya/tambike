@@ -62,7 +62,6 @@ export interface EventAttendeePublicPreview {
 export interface EventAttendeePreviewData {
   summary: EventAttendeeSummary | null;
   attendees: EventAttendeePreviewRider[];
-  signedIn: boolean;
   unavailable: boolean;
 }
 

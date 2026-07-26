@@ -37,7 +37,6 @@
 }
 
 .heading p,
-.names,
 .state {
   margin: 0;
   color: rgba(255, 255, 255, 0.68);
@@ -50,6 +49,7 @@
   align-items: center;
   gap: 0.85rem;
   min-width: 0;
+  min-height: 52px;
 }
 
 .facepile {
@@ -98,12 +98,6 @@
   outline-offset: 3px;
 }
 
-.names {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: rgba(255, 255, 255, 0.82);
-}
-
 .footer {
   min-height: 44px;
   display: flex;
@@ -126,8 +120,7 @@
     padding: 0.9rem;
   }
 
-  .riderSummary {
-    align-items: flex-start;
-    flex-direction: column;
+  .facepile {
+    max-width: 100%;
   }
 }
