@@ -153,7 +153,7 @@ describe("interactive attendee roster state transitions", () => {
       signedIn: true,
       loadPage,
     })));
-    expect(container.textContent).toContain("Roster is counts only");
+    expect(container.textContent).toContain("The rider list isn’t available for this event.");
     expect(container.textContent).not.toContain("Mika");
 
     const enabledAgain = rosterPage([bea], "cursor-2");

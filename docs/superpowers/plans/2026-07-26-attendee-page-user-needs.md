@@ -22,7 +22,7 @@
 
 ## File Responsibility Map
 
-- `tests/server/event-roster-ui-contract.test.ts` — executable public-copy, public-data, state, organizer-total, and CSS selector contracts.
+- `tests/server/event-roster-ui-contract.test.ts` — executable public-copy, public-data, state, and organizer-total contracts.
 - `src/features/member-profiles/event-attendee-roster.tsx` — public header, rider-list states, cards, and pagination presentation.
 - `src/features/member-profiles/organizer-roster-panel.tsx` — organizer-only totals; expected to remain functionally unchanged.
 - `src/app/globals.css` — attendee-page layout, compact header, responsive containment, rider-card focus, and image sizing.
@@ -164,7 +164,6 @@ Expected: PASS with a focused markup/copy commit. `organizer-roster-panel.tsx` r
 ### Task 2: Integrate the roster visually with a compact responsive layout
 
 **Files:**
-- Modify: `tests/server/event-roster-ui-contract.test.ts`
 - Modify: `src/app/globals.css:2805-3016`
 - Modify: `src/app/globals.css:3103-3124`
 
@@ -173,34 +172,7 @@ Expected: PASS with a focused markup/copy commit. `organizer-roster-panel.tsx` r
 - Removes CSS hooks: `.event-roster__eyebrow`, `.event-roster__metrics`, `.roster-metric`
 - Preserves: `.event-roster__grid`, rider-card, state, pagination, and organizer selectors
 
-- [ ] **Step 1: Add a focused stylesheet regression contract**
-
-Add a test that loads `src/app/globals.css` and proves the new hooks exist while the deleted public-metric hooks do not:
-
-```ts
-const css = source("src/app/globals.css");
-
-expect(css).toContain(".event-roster__back-link");
-expect(css).toContain(".event-roster__heading-row");
-expect(css).toContain(".event-roster__count");
-expect(css).not.toContain(".event-roster__eyebrow");
-expect(css).not.toContain(".event-roster__metrics");
-expect(css).not.toContain(".roster-metric");
-```
-
-Also keep a source assertion for `max-width: 100%` on the attendee card/image group so later styling cannot let images escape the viewport.
-
-- [ ] **Step 2: Run the targeted test and verify RED**
-
-Run:
-
-```powershell
-npx vitest run tests/server/event-roster-ui-contract.test.ts
-```
-
-Expected: FAIL because the stylesheet still contains the old dark hero and three-metric grid and lacks the new hooks.
-
-- [ ] **Step 3: Replace only the roster-header CSS**
+- [ ] **Step 1: Replace only the roster-header CSS**
 
 Delete the old `.event-roster__header::after`, `.event-roster__eyebrow`, `.event-roster__metrics`, and `.roster-metric*` rules. Replace the header styling with a compact light treatment:
 
@@ -274,7 +246,7 @@ Delete the old `.event-roster__header::after`, `.event-roster__eyebrow`, `.event
 
 Keep the existing light page shell and existing rider-card palette. Remove the obsolete organizer header-size override and mobile metric-stack rules; leave the organizer heading’s one-column mobile rule in place.
 
-- [ ] **Step 4: Harden the card and image containment**
+- [ ] **Step 2: Harden the card and image containment**
 
 Add or retain:
 
@@ -302,18 +274,20 @@ Add or retain:
 
 Do not enlarge the existing 60px avatar or 138px motorcycle-photo region. Preserve `object-fit: cover`, the responsive grid’s `min(100%, 280px)`, and visible focus styling.
 
-- [ ] **Step 5: Run targeted tests and commit**
+- [ ] **Step 3: Run the existing rendered UI contract and commit**
+
+Do not add CSS source-text regression assertions. Responsive CSS behavior is verified against the real rendered page through the Codex browser in Task 3.
 
 Run:
 
 ```powershell
 npx vitest run tests/server/event-roster-ui-contract.test.ts
 git diff --check
-git add src/app/globals.css tests/server/event-roster-ui-contract.test.ts
+git add src/app/globals.css
 git commit -m "style: align attendee roster with event journey"
 ```
 
-Expected: PASS with no obsolete public roster selector left behind.
+Expected: the existing rendered UI contract passes and the CSS-only diff has no whitespace errors. Selector cleanup and responsive containment are verified on the real page in Task 3.
 
 ---
 
@@ -337,7 +311,7 @@ Expected: PASS with no obsolete public roster selector left behind.
 Run:
 
 ```powershell
-npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-roster-ui-rerender.test.ts tests/server/event-roster-domain.test.ts
+npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-attendee-roster-rerender.test.ts tests/server/event-roster-domain.test.ts
 npm run lint
 npm run build
 npm run test:server
