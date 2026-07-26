@@ -1,0 +1,133 @@
+.preview {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 760px;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--event-accent) 30%, transparent);
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(
+      115deg,
+      color-mix(in srgb, var(--event-accent) 12%, transparent),
+      transparent 48%
+    ),
+    rgba(16, 14, 16, 0.9);
+}
+
+.heading {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.heading > span {
+  color: color-mix(in srgb, var(--event-accent) 82%, #fff);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.heading h2 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(1.2rem, 3vw, 1.65rem);
+  line-height: 1.1;
+}
+
+.heading p,
+.names,
+.state {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.riderSummary {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.facepile {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding-left: 0.65rem;
+}
+
+.facepile::before {
+  content: "";
+  position: absolute;
+  right: 0.2rem;
+  left: 0;
+  top: 50%;
+  height: 1px;
+  background: color-mix(in srgb, var(--event-accent) 38%, transparent);
+}
+
+.rider {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  margin-left: -0.65rem;
+  overflow: hidden;
+  border: 2px solid #191417;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--event-accent) 22%, #21181d);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 850;
+}
+
+.rider img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rider:focus-visible,
+.action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--event-accent) 64%, #fff);
+  outline-offset: 3px;
+}
+
+.names {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.footer {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.action {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: color-mix(in srgb, var(--event-accent) 86%, #fff);
+  font-size: 0.84rem;
+  font-weight: 820;
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+@media (max-width: 430px) {
+  .preview {
+    padding: 0.9rem;
+  }
+
+  .riderSummary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
