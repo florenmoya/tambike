@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import {
   Building2,
+  Coffee,
   Gauge,
   LockKeyhole,
   LogIn,
@@ -43,6 +44,7 @@ import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notifica
 import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
 import { ProfileSettings } from "@/features/member-profiles/profile-settings";
+import { EventAttendeePreview } from "@/features/member-profiles/event-attendee-preview";
 import {
   filterEventsByQuery,
   getEventCtaState,
@@ -56,6 +58,7 @@ import type {
   Pass,
   Role,
 } from "./types";
+import type { EventAttendeePreviewData } from "@/features/member-profiles/types";
 
 export type TambikeView =
   | "discovery"
@@ -74,6 +77,7 @@ interface TambikeScreenProps {
   id?: string;
   eventQuery?: EventQueryInput;
   nextHref?: string;
+  attendeePreview?: EventAttendeePreviewData;
 }
 
 const roleLabels: Record<Role, string> = {
@@ -241,7 +245,13 @@ const eventVisuals: Record<
   Race: { accent: "#ffbe45", poster: "#09090a" },
 };
 
-export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenProps) {
+export function TambikeScreen({
+  view,
+  id,
+  eventQuery,
+  nextHref,
+  attendeePreview,
+}: TambikeScreenProps) {
   if (view === "discovery") {
     return (
       <TambikeAppShell>
@@ -260,7 +270,9 @@ export function TambikeScreen({ view, id, eventQuery, nextHref }: TambikeScreenP
 
   const content = (
     <>
-      {view === "event-detail" && <EventDetail eventId={id} />}
+      {view === "event-detail" && (
+        <EventDetail eventId={id} attendeePreview={attendeePreview} />
+      )}
       {view === "event-register" && <EventRegisterScreen eventId={id} />}
       {view === "event-test-ride" && <TestRideLeadScreen eventId={id} />}
       {view === "passes" && <PassesScreen />}
@@ -916,7 +928,13 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
   );
 }
 
-function EventDetail({ eventId }: { eventId?: string }) {
+function EventDetail({
+  eventId,
+  attendeePreview,
+}: {
+  eventId?: string;
+  attendeePreview?: EventAttendeePreviewData;
+}) {
   const { authNotice, currentUser, events, registerForEvent, requireLogin, setAuthNotice } = useDemo();
   const event = findEvent(events, eventId);
   const organizer = getOrganizer(event.organizerId);
@@ -999,6 +1017,13 @@ function EventDetail({ eventId }: { eventId?: string }) {
             {actionError ? (
               <p className="inline-error" aria-live="polite">{actionError}</p>
             ) : null}
+            <EventAttendeePreview
+              eventId={event.id}
+              fallbackGoing={event.going}
+              interested={event.interested}
+              expected={event.expectedRiders}
+              preview={attendeePreview}
+            />
           </div>
 
           <div className="event-detail-poster-wrap">
@@ -1028,6 +1053,27 @@ function EventDetail({ eventId }: { eventId?: string }) {
             <p>{event.whatHappens}</p>
           </InfoPanel>
 
+          <aside className="event-detail-perk" aria-label="Event perk">
+            <Coffee aria-hidden="true" />
+            <span>Perk</span>
+            <strong>{event.perkPreview}</strong>
+          </aside>
+
+          <InfoPanel eyebrow="Venue" title={event.locationName}>
+            <p>{event.locationAddress}</p>
+            <strong>{event.area}</strong>
+            {event.locationMapLink ? (
+              <Link
+                className="primary-action event-detail-map-link"
+                href={event.locationMapLink}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open map
+              </Link>
+            ) : null}
+          </InfoPanel>
+
           {event.rideOut ? (
             <InfoPanel eyebrow="Ride / meetup" title={event.rideOut.meetup}>
               <div className="detail-grid">
@@ -1038,34 +1084,6 @@ function EventDetail({ eventId }: { eventId?: string }) {
               </div>
             </InfoPanel>
           ) : null}
-
-          <div className="event-detail-essentials">
-            <InfoPanel eyebrow="Venue" title={event.locationName}>
-              <p>{event.locationAddress}</p>
-              <strong>{event.area}</strong>
-              {event.locationMapLink ? (
-                <Link
-                  className="primary-action event-detail-map-link"
-                  href={event.locationMapLink}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open map
-                </Link>
-              ) : null}
-            </InfoPanel>
-
-            <InfoPanel eyebrow="Perk and attendance" title={event.perkPreview}>
-              <div className="event-detail-pass-stats">
-                <Detail label="Going" value={String(event.going)} />
-                <Detail label="Interested" value={String(event.interested)} />
-                <Detail label="Expected" value={String(event.expectedRiders)} />
-              </div>
-              <Link className="ghost-action as-link" href={`/events/${event.id}/attendees`}>
-                View attendee roster
-              </Link>
-            </InfoPanel>
-          </div>
 
           <InfoPanel eyebrow="Rules" title="Safety and venue notes">
             <div className="chip-list">

@@ -56,6 +56,7 @@ describe("event detail decision-first UI contract", () => {
     const description = sourceIndex(screen, "{event.shortDescription}");
     const brief = sourceIndex(screen, 'className="event-detail-brief"');
     const actions = sourceIndex(screen, 'className="event-detail-actions"');
+    const attendeePreview = sourceIndex(screen, "<EventAttendeePreview");
     const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
 
     expect(screen).toContain('className="event-detail-poster-link"');
@@ -80,31 +81,48 @@ describe("event detail decision-first UI contract", () => {
     expect(heading).toBeLessThan(description);
     expect(description).toBeLessThan(brief);
     expect(brief).toBeLessThan(actions);
-    expect(actions).toBeLessThan(poster);
+    expect(actions).toBeLessThan(attendeePreview);
+    expect(attendeePreview).toBeLessThan(poster);
   });
 
-  test("keeps explanatory sections in the approved decision order", () => {
+  test("keeps social proof near the decision and treats the perk as supporting context", () => {
     const screen = componentSource("EventDetail");
+    const actions = sourceIndex(screen, 'className="event-detail-actions"');
+    const attendeePreview = sourceIndex(screen, "<EventAttendeePreview");
     const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
     const whatToExpect = sourceIndex(screen, 'eyebrow="What to expect"');
-    const rideMeetup = sourceIndex(screen, 'eyebrow="Ride / meetup"');
+    const perk = sourceIndex(screen, 'className="event-detail-perk"');
     const venue = sourceIndex(screen, 'eyebrow="Venue"');
-    const attendance = sourceIndex(screen, 'eyebrow="Perk and attendance"');
+    const rideMeetup = sourceIndex(screen, 'eyebrow="Ride / meetup"');
     const rules = sourceIndex(screen, 'eyebrow="Rules"');
     const organizer = sourceIndex(screen, 'eyebrow="Organizer"');
     const giveaways = sourceIndex(screen, "<PublicGiveawayPanel");
 
     expect(screen).not.toContain('className="event-detail-tags"');
+    expect(actions).toBeLessThan(attendeePreview);
+    expect(attendeePreview).toBeLessThan(poster);
     expect(poster).toBeLessThan(whatToExpect);
-    expect(whatToExpect).toBeLessThan(rideMeetup);
-    expect(whatToExpect).toBeLessThan(venue);
-    expect(rideMeetup).toBeLessThan(venue);
-    expect(venue).toBeLessThan(attendance);
-    expect(venue).toBeLessThan(rules);
-    expect(attendance).toBeLessThan(rules);
+    expect(whatToExpect).toBeLessThan(perk);
+    expect(perk).toBeLessThan(venue);
+    expect(venue).toBeLessThan(rideMeetup);
+    expect(rideMeetup).toBeLessThan(rules);
     expect(rules).toBeLessThan(organizer);
     expect(organizer).toBeLessThan(giveaways);
-    expect(screen).toContain("View attendee roster");
+    expect(screen).toContain("{event.perkPreview}");
+    expect(screen).not.toContain('eyebrow="Perk and attendance"');
+    expect(screen).not.toContain('className="event-detail-pass-stats"');
+    expect(screen).not.toContain("View attendee roster");
+  });
+
+  test("loads attendee preview data at the event route server boundary", () => {
+    const route = readFileSync(
+      join(process.cwd(), "src/app/events/[eventId]/page.tsx"),
+      "utf8",
+    );
+
+    expect(route).toContain("loadEventAttendeePreview");
+    expect(route).toContain("attendeePreview={attendeePreview}");
+    expect(route).not.toContain('"use client"');
   });
 
   test("uses a compact responsive poster and readable title system", () => {
@@ -133,8 +151,7 @@ describe("event detail decision-first UI contract", () => {
         ".event-detail-actions button,",
         ".event-detail-actions a,",
         ".event-detail-map-link,",
-        ".event-detail-poster-link,",
-        ".event-detail-essentials .as-link",
+        ".event-detail-poster-link",
       ].join("\n"),
     );
 
@@ -146,8 +163,7 @@ describe("event detail decision-first UI contract", () => {
       [
         ".event-detail-actions .primary-action:focus-visible,",
         ".event-detail-actions .ghost-action:focus-visible,",
-        ".event-detail-map-link:focus-visible,",
-        ".event-detail-essentials .as-link:focus-visible",
+        ".event-detail-map-link:focus-visible",
       ].join("\n"),
     );
 

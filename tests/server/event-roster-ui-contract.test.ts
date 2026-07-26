@@ -199,6 +199,7 @@ describe("event attendee route and roster presentation", () => {
 describe("roster identity controls", () => {
   test("removes event-specific privacy APIs and controls while preserving roster access", () => {
     const screen = source("src/features/tambike-demo/tambike-screen.tsx");
+    const preview = source("src/features/member-profiles/event-attendee-preview.tsx");
     const provider = source("src/features/tambike-demo/demo-provider.tsx");
     const actions = source("src/server/actions.ts");
 
@@ -234,7 +235,9 @@ describe("roster identity controls", () => {
       expect(actions).not.toContain(removedSymbol);
     }
 
-    expect(screen).toContain("View attendee roster");
+    expect(screen).toContain("<EventAttendeePreview");
+    expect(screen).not.toContain("View attendee roster");
+    expect(preview).toContain('href={`/events/${eventId}/attendees`}');
     expect(provider).toContain("configureEventRoster");
     expect(provider).toContain("listEventAttendees");
   });
