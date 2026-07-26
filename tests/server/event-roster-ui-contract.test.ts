@@ -47,22 +47,23 @@ const enabledPage: EventAttendeeRosterPage = {
 };
 
 describe("event attendee route and roster presentation", () => {
-  test("awaits event params, loads on the server, and narrows only expected route states", () => {
+  test("awaits event params and exposes only the page component from the route module", async () => {
     const route = source("src/app/events/[eventId]/attendees/page.tsx");
+    const routeModule = await import("../../src/app/events/[eventId]/attendees/page");
 
     expect(route).toMatch(/params:\s*Promise<\{\s*eventId:\s*string\s*\}>/);
     expect(route).toMatch(/await\s+params/);
-    expect(route).toContain("listEventAttendeesAction");
-    expect(route).toContain("BackendError");
-    expect(route).toContain('error.code === "NOT_FOUND"');
-    expect(route).toContain('error.code === "UNAUTHENTICATED"');
-    expect(route).toContain("notFound()");
+    expect(route).toContain("loadEventAttendeeRoster");
+    expect(route).not.toContain("listEventAttendeesAction");
+    expect(Object.keys(routeModule)).toEqual(["default"]);
     expect(route).not.toContain('"use client"');
   });
 
   test("keeps guest counts but maps only not-found to the route boundary", async () => {
-    const route = await import("../../src/app/events/[eventId]/attendees/page");
-    const load = route.loadEventAttendeeRoster;
+    const loader = await import(
+      "../../src/app/events/[eventId]/attendees/load-event-attendee-roster"
+    );
+    const load = loader.loadEventAttendeeRoster;
     const unauthenticated = new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     const summary = enabledPage.summary;
 
