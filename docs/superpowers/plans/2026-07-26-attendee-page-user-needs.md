@@ -4,7 +4,7 @@
 
 **Goal:** Make `/events/[eventId]/attendees` feel like a clear continuation of the Tambike event journey by showing only the event context, one Going total, and useful visible-rider cards.
 
-**Architecture:** Keep the existing server route, roster DTO, privacy checks, pagination, and CloudFront-backed `/media/{mediaId}` delivery unchanged. Reshape only the public `EventAttendeeRoster` markup and its scoped global CSS: replace the oversized policy-heavy hero with a compact back link, “Who’s going” heading, and aggregate turnout; simplify public state copy; retain the separate organizer totals rendered by `OrganizerRosterPanelSurface`.
+**Architecture:** Keep the existing server route, roster DTO, privacy checks, pagination, and CloudFront-backed `/media/{mediaId}` delivery unchanged. Reshape only the public `EventAttendeeRoster` markup and its scoped global CSS: replace the oversized policy-heavy hero with a compact back link, “Who’s going” heading, and aggregate turnout; continue the live event detail page’s dark amber/plum atmosphere under `.event-roster-page-shell`; simplify public state copy; retain the separate light organizer totals rendered by `OrganizerRosterPanelSurface`.
 
 **Tech Stack:** Next.js 16.2 App Router, React 19, TypeScript, Lucide icons, shadcn-style Card/Button components, global CSS, Vitest server-rendered UI contract tests, Codex in-app browser.
 
@@ -17,6 +17,7 @@
 - Preserve organizer-only Going, Visible, and Anonymous totals.
 - Keep member-media images on their existing opaque `/media/{mediaId}` URLs with `unoptimized`; do not bypass the authorized CloudFront redirect flow.
 - Keep all images bounded by their cards and viewport, with no horizontal overflow at 390×844.
+- Scope dark attendee-page palette rules under `.event-roster-page-shell`; unscoped roster rules remain the organizer-safe light baseline.
 - Reuse an existing dev server when available. For browser checks, use only the Codex in-app browser.
 - Preserve unrelated local changes and do not “fix” unrelated time-sensitive test fixtures as part of this redesign.
 
@@ -164,19 +165,30 @@ Expected: PASS with a focused markup/copy commit. `organizer-roster-panel.tsx` r
 ### Task 2: Integrate the roster visually with a compact responsive layout
 
 **Files:**
+- Modify: `src/features/member-profiles/event-attendee-roster.tsx:178-193`
 - Modify: `src/app/globals.css:2805-3016`
 - Modify: `src/app/globals.css:3103-3124`
 
 **Interfaces:**
-- Adds CSS hooks: `.event-roster__back-link`, `.event-roster__heading-row`, `.event-roster__count`
+- Adds CSS hooks: `.event-roster__back-link`, `.event-roster__heading-row`, `.event-roster__count`, `.event-roster__state-action`
 - Removes CSS hooks: `.event-roster__eyebrow`, `.event-roster__metrics`, `.roster-metric`
 - Preserves: `.event-roster__grid`, rider-card, state, pagination, and organizer selectors
 
-- [ ] **Step 1: Replace only the roster-header CSS**
+- [ ] **Step 1: Replace the roster header and apply the selected public-route palette**
 
-Delete the old `.event-roster__header::after`, `.event-roster__eyebrow`, `.event-roster__metrics`, and `.roster-metric*` rules. Replace the header styling with a compact light treatment:
+Delete the old `.event-roster__header::after`, `.event-roster__eyebrow`, `.event-roster__metrics`, and `.roster-metric*` rules. Keep compact roster structure as the light organizer-safe baseline, then scope the selected dark event palette to the public route:
 
 ```css
+.event-roster-page-shell {
+  min-height: calc(100vh - 76px);
+  padding: clamp(82px, 8vw, 108px) clamp(14px, 4vw, 48px) clamp(28px, 6vw, 72px);
+  background:
+    linear-gradient(135deg, rgba(255, 190, 69, 0.14), transparent 28%),
+    linear-gradient(215deg, rgba(122, 39, 72, 0.22), transparent 34%),
+    linear-gradient(180deg, #030303 0, #101113 48%, #030303 100%);
+  color: #fff8eb;
+}
+
 .event-roster__header {
   display: grid;
   gap: clamp(18px, 3vw, 28px);
@@ -242,9 +254,52 @@ Delete the old `.event-roster__header::after`, `.event-roster__eyebrow`, `.event
   color: #17130f;
   font: 800 1.35rem/1 var(--font-geist-mono), monospace;
 }
+
+.event-roster-page-shell .event-roster__header {
+  border-bottom-color: rgba(255, 255, 255, 0.16);
+}
+
+.event-roster-page-shell .event-roster__back-link,
+.event-roster-page-shell .event-roster__count {
+  color: rgba(255, 248, 235, 0.7);
+}
+
+.event-roster-page-shell .event-roster__back-link:hover,
+.event-roster-page-shell .event-roster__back-link:focus-visible {
+  color: #fff;
+  text-decoration-color: #ffbe45;
+}
+
+.event-roster-page-shell .event-roster__header h1 {
+  color: #fff8eb;
+}
+
+.event-roster-page-shell .event-roster__count strong {
+  color: #ffbe45;
+}
+
+.event-roster-page-shell .event-roster__state {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(16, 17, 19, 0.78);
+  color: #fff8eb;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+}
+
+.event-roster-page-shell .event-roster__state-action {
+  background: #ffbe45;
+  color: #17130f;
+}
+
+.event-roster-page-shell .event-roster__state-action:hover,
+.event-roster-page-shell .event-roster__state-action:focus-visible {
+  background: #ffd078;
+  color: #050506;
+}
 ```
 
-Keep the existing light page shell and existing rider-card palette. Remove the obsolete organizer header-size override and mobile metric-stack rules; leave the organizer heading’s one-column mobile rule in place.
+Add `.event-roster__state-action` to both public default action links (`Log in` and `Join this event`) without changing their destinations, copy, or behavior. Keep the existing rider-card palette. Remove the obsolete organizer header-size override and mobile metric-stack rules; leave the organizer heading’s one-column mobile rule in place.
+
+All dark header, state, and action overrides must remain prefixed by `.event-roster-page-shell` so `OrganizerRosterPanelSurface` remains readable on its existing light screens.
 
 - [ ] **Step 2: Harden the card and image containment**
 
@@ -281,13 +336,14 @@ Do not add CSS source-text regression assertions. Responsive CSS behavior is ver
 Run:
 
 ```powershell
-npx vitest run tests/server/event-roster-ui-contract.test.ts
+npx vitest run tests/server/event-roster-ui-contract.test.ts tests/server/event-attendee-roster-rerender.test.ts --pool=vmThreads --reporter=verbose
+npm run lint
 git diff --check
-git add src/app/globals.css
-git commit -m "style: align attendee roster with event journey"
+git add src/app/globals.css src/features/member-profiles/event-attendee-roster.tsx docs/superpowers/specs/2026-07-26-attendee-page-user-needs-design.md docs/superpowers/plans/2026-07-26-attendee-page-user-needs.md
+git commit -m "style: match attendee roster to event palette"
 ```
 
-Expected: the existing rendered UI contract passes and the CSS-only diff has no whitespace errors. Selector cleanup and responsive containment are verified on the real page in Task 3.
+Expected: the existing rendered UI contracts and lint pass, and the focused diff has no whitespace errors. Public-route selector scoping and responsive containment are verified on the real page in Task 3.
 
 ---
 
@@ -340,7 +396,7 @@ At desktop (approximately 1440×900), compare:
 - `/events/tambike-cafe-classico`
 - `/events/tambike-cafe-classico/attendees`
 
-Confirm the attendee page has the Tambike shell, compact event-title back link, “Who’s going,” one Going total, visible rider cards, and no public policy or anonymous/visible breakdown.
+Confirm the attendee page has the Tambike shell, dark event-aligned amber/plum atmosphere, compact event-title back link, “Who’s going,” one Going total, visible rider cards, and no public policy or anonymous/visible breakdown. Confirm organizer roster surfaces retain their existing light treatment.
 
 At 390×844, confirm:
 
@@ -400,6 +456,7 @@ Expected: production shows the approved compact roster, images load through the 
 ## Final Acceptance Checklist
 
 - [ ] Public header shows event back link, “Who’s going,” and one aggregate Going total.
+- [ ] Public attendee shell matches the dark event-detail palette while organizer roster surfaces remain readable and light.
 - [ ] Public page omits “Ride roll-call,” the privacy explanation, Visible riders, and Anonymous riders.
 - [ ] Organizer panel still exposes Going, Visible, and Anonymous totals.
 - [ ] Signed-out, unavailable, empty, and pagination states use rider-facing copy and preserve behavior.

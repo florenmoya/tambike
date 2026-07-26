@@ -51,8 +51,9 @@ Who’s going                         15 going
 - Add a back link using the event title and `/events/{eventId}`.
 - Use “Who’s going” as the page heading.
 - Show only the aggregate Going total, formatted as “15 going”.
-- Remove the dark promotional hero.
-- Match the event detail page’s light background, typography, borders, spacing, and restrained accent colors.
+- Remove the oversized, boxed promotional hero.
+- Use the live event detail page’s dark visual language: layered amber and plum atmosphere over the `#030303 → #101113 → #030303` background, cream/white text, translucent white dividers, and amber turnout emphasis.
+- Scope the dark palette to the public attendee route so organizer roster panels keep their existing readable light treatment.
 
 ### Remove from the public page
 
@@ -75,7 +76,7 @@ Keep the useful social information already present:
 - motorcycle nickname, make, and model;
 - link to the rider profile.
 
-Cards should share the event page’s visual language and remain fully bounded within the viewport. Mobile uses one column; wider screens progressively add columns.
+Cards should share the event page’s visual language and remain fully bounded within the viewport. Keep the established light identity area and dark motorcycle area for legibility. Mobile uses one column; wider screens progressively add columns.
 
 ### States
 
@@ -125,6 +126,6 @@ Live browser verification must compare the attendee page with the event detail p
 ## Success criteria
 
 - A rider can identify the event, turnout, and visible attendees without reading internal policy language.
-- The page visually belongs to the same Tambike event journey.
+- The public page visually continues the live dark Tambike event-detail journey without changing light organizer surfaces.
 - Public privacy behavior is enforced silently.
 - Organizer operational information remains available only in organizer surfaces.
