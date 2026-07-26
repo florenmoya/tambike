@@ -2816,69 +2816,75 @@ svg {
 }
 
 .event-roster__header {
-  position: relative;
-  overflow: hidden;
-  padding: clamp(24px, 5vw, 52px);
-  border: 1px solid rgba(215, 222, 226, 0.22);
-  border-radius: 12px;
-  background: #050506;
-  color: #f7f4ef;
+  display: grid;
+  gap: clamp(18px, 3vw, 28px);
+  padding-bottom: clamp(18px, 3vw, 28px);
+  border-bottom: 1px solid rgba(23, 19, 15, 0.16);
 }
 
-.event-roster__header::after {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 4px;
-  background: linear-gradient(90deg, #e63b2e 0 18%, #ffbe45 18% 65%, #20b26b 65%);
-  content: "";
+.event-roster__back-link {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #625c54;
+  font-size: 0.9rem;
+  font-weight: 750;
+  line-height: 1.35;
+  text-decoration: none;
 }
 
-.event-roster__eyebrow,
+.event-roster__back-link span {
+  overflow-wrap: anywhere;
+}
+
+.event-roster__back-link svg {
+  width: 17px;
+  flex: 0 0 auto;
+}
+
+.event-roster__back-link:hover,
+.event-roster__back-link:focus-visible {
+  color: #17130f;
+  text-decoration: underline;
+  text-decoration-color: #e63b2e;
+  text-underline-offset: 4px;
+}
+
+.event-roster__heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+
+.event-roster__header h1 {
+  margin: 0;
+  color: #17130f;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.event-roster__count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: #625c54;
+  white-space: nowrap;
+}
+
+.event-roster__count strong {
+  color: #17130f;
+  font: 800 1.35rem/1 var(--font-geist-mono), monospace;
+}
+
 .roster-rider-card__motorcycle > span {
   font: 750 0.7rem/1.2 var(--font-geist-mono), monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-}
-
-.event-roster__header h1 {
-  max-width: 18ch;
-  margin: 12px 0 8px;
-  font-size: clamp(2rem, 5vw, 4.5rem);
-  line-height: 0.96;
-  letter-spacing: -0.06em;
-}
-
-.event-roster__header > p {
-  max-width: 68ch;
-  color: #d7dee2;
-}
-
-.event-roster__metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 28px;
-  overflow: hidden;
-  border: 1px solid rgba(215, 222, 226, 0.2);
-  border-radius: 8px;
-  background: rgba(215, 222, 226, 0.2);
-}
-
-.roster-metric {
-  display: grid;
-  gap: 4px;
-  padding: 16px;
-  background: #101012;
-}
-
-.roster-metric span {
-  color: #d7dee2;
-  font-size: 0.78rem;
-}
-
-.roster-metric strong {
-  font: 750 clamp(1.6rem, 4vw, 2.7rem)/1 var(--font-geist-mono), monospace;
-  color: #ffbe45;
 }
 
 .event-roster__state {
@@ -2893,6 +2899,8 @@ svg {
 }
 
 .roster-rider-card {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid rgba(23, 19, 15, 0.16);
   border-radius: 10px;
@@ -2926,6 +2934,10 @@ svg {
   padding: 14px;
 }
 
+.roster-rider-card__identity > div {
+  min-width: 0;
+}
+
 .roster-rider-avatar {
   display: grid;
   width: 60px;
@@ -2943,12 +2955,19 @@ svg {
 .roster-rider-card__motorcycle img {
   width: 100%;
   height: 100%;
+  max-width: 100%;
   object-fit: cover;
 }
 
 .roster-rider-card__identity h3,
 .roster-rider-card__identity p {
   margin: 0;
+}
+
+.roster-rider-card__identity h3,
+.roster-rider-card__identity p,
+.roster-rider-card__motorcycle strong {
+  overflow-wrap: anywhere;
 }
 
 .roster-rider-card__identity p {
@@ -3104,22 +3123,9 @@ svg {
   padding: 24px;
 }
 
-.organizer-roster-panel .event-roster__header h1 {
-  font-size: clamp(1.75rem, 4vw, 3rem);
-}
-
 @media (max-width: 640px) {
-  .event-roster__metrics,
   .organizer-roster-panel__heading {
     grid-template-columns: 1fr;
-  }
-
-  .event-roster__metrics {
-    gap: 0;
-  }
-
-  .roster-metric + .roster-metric {
-    border-top: 1px solid rgba(215, 222, 226, 0.2);
   }
 }
 
