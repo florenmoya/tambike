@@ -3006,13 +3006,14 @@ svg {
   object-fit: cover;
 }
 
-.roster-rider-card__identity h3,
+.roster-rider-card__identity h2,
 .roster-rider-card__identity p {
   margin: 0;
 }
 
-.roster-rider-card__identity h3,
+.roster-rider-card__identity h2,
 .roster-rider-card__identity p,
+.roster-rider-card__motorcycle > span,
 .roster-rider-card__motorcycle strong {
   overflow-wrap: anywhere;
 }

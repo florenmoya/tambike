@@ -112,6 +112,8 @@ describe("event attendee route and roster presentation", () => {
     expect(markup).not.toContain("Visible riders");
     expect(markup).not.toContain("Anonymous riders");
     expect(markup).toContain("Mika Santos");
+    expect(markup).toContain("<h2>Mika Santos</h2>");
+    expect(markup).not.toContain("<h3>Mika Santos</h3>");
     expect(markup).toContain("Honda CB650R");
     expect(markup).toContain('href="/riders/mika-santos"');
     expect(markup).toContain('src="/media/avatar-mika"');
@@ -142,6 +144,27 @@ describe("event attendee route and roster presentation", () => {
     expect(guestMarkup).toContain("Log in to see who’s going");
     expect(guestMarkup).toContain('href="/login?next=%2Fevents%2Fride-1%2Fattendees"');
     expect(guestMarkup).not.toContain("Mika Santos");
+  });
+
+  test("shows a neutral state when going riders have no visible profiles", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EventAttendeeRoster, {
+        initialPage: {
+          ...enabledPage,
+          summary: { ...enabledPage.summary, visibleCount: 0, anonymousCount: 5 },
+          attendees: [],
+          nextCursor: undefined,
+        },
+        signedIn: true,
+      }),
+    );
+
+    expect(markup).toContain("No rider profiles to show yet");
+    expect(markup.indexOf("Who’s going")).toBeLessThan(
+      markup.indexOf("No rider profiles to show yet"),
+    );
+    expect(markup).not.toMatch(/anonymous riders|visible riders|privacy/i);
+    expect(markup).not.toContain("Mika Santos");
   });
 
   test("keeps rider loading behavior while simplifying the empty state", () => {

@@ -38,7 +38,7 @@ function RiderExcerpt({ attendee }: { attendee: Attendee }) {
           )}
         </div>
         <div>
-          <h3>{attendee.displayName}</h3>
+          <h2>{attendee.displayName}</h2>
           <p><MapPin aria-hidden="true" /> {attendee.area}</p>
         </div>
       </div>
@@ -191,6 +191,12 @@ function StatefulEventAttendeeRoster({
           <CardContent>
             <Button asChild><Link className="event-roster__state-action" href={`/events/${summary.eventId}/register`}>Join this event</Link></Button>
           </CardContent>
+        </Card>
+      ) : summary.visibleCount === 0 && attendees.length === 0 && !nextCursor ? (
+        <Card className="event-roster__state">
+          <CardHeader>
+            <CardTitle>No rider profiles to show yet</CardTitle>
+          </CardHeader>
         </Card>
       ) : (
         <>
