@@ -2,11 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { MapPin, Motorbike, Users } from "lucide-react";
+import { ArrowLeft, MapPin, Motorbike, Users } from "lucide-react";
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listEventAttendeesAction } from "@/server/actions";
 import type { EventAttendeeRosterPage } from "./types";
 
@@ -14,15 +14,6 @@ type Attendee = EventAttendeeRosterPage["attendees"][number];
 
 function mergeAttendees(current: Attendee[], incoming: Attendee[]) {
   return [...new Map([...current, ...incoming].map((attendee) => [attendee.slug, attendee])).values()];
-}
-
-function RosterMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="roster-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
 }
 
 function RiderExcerpt({ attendee }: { attendee: Attendee }) {
@@ -162,30 +153,31 @@ function StatefulEventAttendeeRoster({
   return (
     <section className="event-roster" aria-labelledby="event-roster-title">
       <header className="event-roster__header">
-        <span className="event-roster__eyebrow">Ride roll-call</span>
-        <h1 id="event-roster-title">{summary.eventTitle}</h1>
-        <p>Attendance choices belong to each rider. Private and unpublished profiles stay anonymous.</p>
-        <div className="event-roster__metrics" aria-label="Roster totals">
-          <RosterMetric label="Going" value={summary.goingCount} />
-          <RosterMetric label="Visible riders" value={summary.visibleCount} />
-          <RosterMetric label="Anonymous riders" value={summary.anonymousCount} />
+        <Link className="event-roster__back-link" href={`/events/${summary.eventId}`}>
+          <ArrowLeft aria-hidden="true" />
+          <span>{summary.eventTitle}</span>
+        </Link>
+        <div className="event-roster__heading-row">
+          <h1 id="event-roster-title">Who’s going</h1>
+          <span
+            className="event-roster__count"
+            aria-label={`${summary.goingCount} riders going`}
+          >
+            <strong>{summary.goingCount}</strong> going
+          </span>
         </div>
       </header>
 
       {!summary.rosterEnabled ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>Roster is counts only</CardTitle>
-            <CardDescription>
-              Rider cards stay hidden until the event organizer turns on the member roster.
-            </CardDescription>
+            <CardTitle>The rider list isn’t available for this event.</CardTitle>
           </CardHeader>
         </Card>
       ) : !signedIn ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>Log in to view riders</CardTitle>
-            <CardDescription>This roster is shared only with signed-in Tambike members.</CardDescription>
+            <CardTitle>Log in to see who’s going</CardTitle>
           </CardHeader>
           <CardContent>
             <Button asChild><Link href={`/login?next=${encodeURIComponent(`/events/${summary.eventId}/attendees`)}`}>Log in</Link></Button>
@@ -194,11 +186,10 @@ function StatefulEventAttendeeRoster({
       ) : summary.goingCount === 0 ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>No one is going yet</CardTitle>
-            <CardDescription>Register for this event to become its first rider.</CardDescription>
+            <CardTitle>No riders yet</CardTitle>
           </CardHeader>
           <CardContent>
-            <Button asChild><Link href={`/events/${summary.eventId}/register`}>Register for this event</Link></Button>
+            <Button asChild><Link href={`/events/${summary.eventId}/register`}>Join this event</Link></Button>
           </CardContent>
         </Card>
       ) : (

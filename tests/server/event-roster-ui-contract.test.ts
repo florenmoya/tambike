@@ -93,14 +93,23 @@ describe("event attendee route and roster presentation", () => {
     )).rejects.toBe(outage);
   });
 
-  test("leads with exact counts before rendering sanitized garage excerpts", () => {
+  test("leads with the event link and going count before sanitized garage excerpts", () => {
     const markup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, { initialPage: enabledPage, signedIn: true }),
     );
 
-    expect(markup.indexOf("5")).toBeLessThan(markup.indexOf("Mika Santos"));
-    expect(markup).toContain("Visible riders");
-    expect(markup).toContain("Anonymous riders");
+    expect(markup).toContain('href="/events/ride-1"');
+    expect(markup).toContain("Marilaque Dawn Roll");
+    expect(markup).toContain("Who’s going");
+    expect(markup).toMatch(/<strong>5<\/strong> going/);
+    expect(markup.indexOf("<strong>5</strong> going")).toBeLessThan(markup.indexOf("Mika Santos"));
+
+    expect(markup).not.toContain("Ride roll-call");
+    expect(markup).not.toContain(
+      "Attendance choices belong to each rider. Private and unpublished profiles stay anonymous.",
+    );
+    expect(markup).not.toContain("Visible riders");
+    expect(markup).not.toContain("Anonymous riders");
     expect(markup).toContain("Mika Santos");
     expect(markup).toContain("Honda CB650R");
     expect(markup).toContain('href="/riders/mika-santos"');
@@ -110,7 +119,7 @@ describe("event attendee route and roster presentation", () => {
     expect(markup).not.toMatch(/email|userId|account id|verificationStatus/i);
   });
 
-  test("shows disabled counts-only and enabled guest login states without member cards", () => {
+  test("shows disabled and enabled guest states without member cards", () => {
     const disabledMarkup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, {
         initialPage: {
@@ -122,24 +131,22 @@ describe("event attendee route and roster presentation", () => {
         signedIn: false,
       }),
     );
-    expect(disabledMarkup).toMatch(/counts only/i);
-    expect(disabledMarkup).toMatch(/organizer.*turns on/i);
+    expect(disabledMarkup).toContain("The rider list isn’t available for this event.");
+    expect(disabledMarkup).not.toMatch(/counts only|organizer|privacy/i);
     expect(disabledMarkup).not.toContain("Mika Santos");
 
     const guestMarkup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, { initialPage: enabledPage, signedIn: false }),
     );
-    expect(guestMarkup).toMatch(/Log in to view riders/i);
+    expect(guestMarkup).toContain("Log in to see who’s going");
     expect(guestMarkup).toContain('href="/login?next=%2Fevents%2Fride-1%2Fattendees"');
     expect(guestMarkup).not.toContain("Mika Santos");
   });
 
-  test("keeps anonymous attendance in totals without a separate roster card", () => {
+  test("keeps rider loading behavior while simplifying the empty state", () => {
     const markup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, { initialPage: enabledPage, signedIn: true }),
     );
-    expect(markup).toContain("Anonymous riders");
-    expect(markup).not.toMatch(/Privacy respected|riders chose privacy/i);
     expect(markup).toContain("Load more riders");
 
     const emptyMarkup = renderToStaticMarkup(
@@ -153,8 +160,9 @@ describe("event attendee route and roster presentation", () => {
         signedIn: true,
       }),
     );
-    expect(emptyMarkup).toMatch(/No one is going yet/i);
-    expect(emptyMarkup).toMatch(/register.*first rider/i);
+    expect(emptyMarkup).toContain("No riders yet");
+    expect(emptyMarkup).toContain('href="/events/ride-1/register"');
+    expect(emptyMarkup).toContain("Join this event");
 
     const component = source("src/features/member-profiles/event-attendee-roster.tsx");
     expect(component).toContain("nextCursor");
@@ -224,9 +232,9 @@ describe("organizer roster ownership controls", () => {
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain('aria-live="polite"');
-    expect(markup).toContain("5");
-    expect(markup).toContain("2");
-    expect(markup).toContain("3");
+    expect(markup).toMatch(/<strong>5<\/strong> Going/);
+    expect(markup).toMatch(/<strong>2<\/strong> Visible/);
+    expect(markup).toMatch(/<strong>3<\/strong> Anonymous/);
     expect(markup).toContain("Mika Santos");
     expect(markup).not.toMatch(/email|userId|account id|verificationStatus/i);
   });
