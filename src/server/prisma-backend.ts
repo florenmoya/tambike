@@ -153,6 +153,7 @@ import {
   encodeRosterCursor,
   normalizeRosterPageLimit,
 } from "./member-profiles/roster-domain";
+import { createPrismaPgPool } from "./prisma-pg-pool";
 import {
   createMemberMediaLifecycleService,
   MemberMediaLifecycleError,
@@ -430,7 +431,8 @@ export class PrismaTambikeBackend {
   }
 
   static create(databaseUrl: string, options: { memberMedia?: MemberMediaLifecycleOptions } = {}) {
-    const adapter = new PrismaPg(databaseUrl);
+    const pool = createPrismaPgPool(databaseUrl);
+    const adapter = new PrismaPg(pool, { disposeExternalPool: true });
     return new PrismaTambikeBackend(new PrismaClient({ adapter }), options);
   }
 
