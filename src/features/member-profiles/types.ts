@@ -54,6 +54,11 @@ export type EventAttendeePreviewRider = Pick<
   "slug" | "displayName" | "area" | "profilePhotoUrl"
 >;
 
+export interface EventAttendeePublicPreview {
+  summary: EventAttendeeSummary;
+  attendees: EventAttendeePreviewRider[];
+}
+
 export interface EventAttendeePreviewData {
   summary: EventAttendeeSummary | null;
   attendees: EventAttendeePreviewRider[];

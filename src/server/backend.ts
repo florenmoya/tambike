@@ -90,6 +90,7 @@ import type {
   MemberProfileEditorView,
   MemberProfileView,
   MotorcycleShowcase,
+  EventAttendeePublicPreview,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
   ProfileVisibility,
@@ -103,6 +104,7 @@ import {
   decodeRosterCursor,
   encodeRosterCursor,
   normalizeRosterPageLimit,
+  PUBLIC_ATTENDEE_PREVIEW_LIMIT,
 } from "./member-profiles/roster-domain";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
 import {
@@ -4301,6 +4303,53 @@ export class TambikeBackend {
   async getEventAttendeeSummary(eventId: string): Promise<EventAttendeeSummary> {
     const event = this.requireEvent(eventId);
     return this.buildMemoryRosterSummary(event, this.rosterSettings.get(event.id) ?? false);
+  }
+
+  async getPublicEventAttendeePreview(
+    eventId: string,
+  ): Promise<EventAttendeePublicPreview> {
+    const event = this.requireEvent(eventId);
+    const enabled = this.rosterSettings.get(event.id) ?? false;
+    const summary = this.buildMemoryRosterSummary(event, enabled);
+    if (!enabled) return { summary, attendees: [] };
+
+    const attendees = Array.from(this.rsvps.values())
+      .filter(
+        (rsvp) =>
+          rsvp.eventId === event.id &&
+          rsvp.status === "going" &&
+          Boolean(rsvp.goingAt),
+      )
+      .map((rsvp) => ({ rsvp, user: this.users.get(rsvp.userId) }))
+      .filter(
+        (entry): entry is typeof entry & { user: BackendUser } =>
+          Boolean(
+            entry.user &&
+              entry.user.defaultRosterIdentity === "VISIBLE" &&
+              entry.user.profileSlug &&
+              entry.user.profileVisibility === "PUBLIC",
+          ),
+      )
+      .sort(
+        (left, right) =>
+          left.rsvp.goingAt!.localeCompare(right.rsvp.goingAt!) ||
+          compareRosterRsvpIds(
+            left.rsvp.id ?? `${left.rsvp.eventId}:${left.rsvp.userId}`,
+            right.rsvp.id ?? `${right.rsvp.eventId}:${right.rsvp.userId}`,
+          ),
+      )
+      .slice(0, PUBLIC_ATTENDEE_PREVIEW_LIMIT)
+      .map(({ user }) => {
+        const profile = this.toMemberProfileView(user);
+        return {
+          slug: profile.slug,
+          displayName: profile.displayName,
+          area: profile.area,
+          profilePhotoUrl: profile.profilePhotoUrl,
+        };
+      });
+
+    return { summary, attendees };
   }
 
   async configureCheckIn(

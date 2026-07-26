@@ -87,6 +87,7 @@ import type {
   MemberProfileEditorView,
   MemberProfileView,
   MotorcycleShowcase,
+  EventAttendeePublicPreview,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
   UpdateMemberProfileInput,
@@ -152,6 +153,7 @@ import {
   decodeRosterCursor,
   encodeRosterCursor,
   normalizeRosterPageLimit,
+  PUBLIC_ATTENDEE_PREVIEW_LIMIT,
 } from "./member-profiles/roster-domain";
 import { createPrismaPgPool } from "./prisma-pg-pool";
 import {
@@ -4822,6 +4824,56 @@ export class PrismaTambikeBackend {
       event.title,
       event.rosterSettings?.enabled ?? false,
     );
+  }
+
+  async getPublicEventAttendeePreview(
+    eventId: string,
+  ): Promise<EventAttendeePublicPreview> {
+    const event = await this.requireRosterEvent(eventId);
+    const enabled = event.rosterSettings?.enabled ?? false;
+    const summary = await this.buildPrismaRosterSummary(
+      event.id,
+      event.title,
+      enabled,
+    );
+    if (!enabled) return { summary, attendees: [] };
+
+    const rows = await this.prisma.rSVP.findMany({
+      where: {
+        eventId,
+        status: "going",
+        goingAt: { not: null },
+        user: {
+          defaultRosterIdentity: "VISIBLE",
+          profileSlug: { not: null },
+          profileVisibility: "PUBLIC",
+        },
+      },
+      orderBy: [{ goingAt: "asc" }, { id: "asc" }],
+      take: PUBLIC_ATTENDEE_PREVIEW_LIMIT,
+      select: {
+        user: {
+          include: {
+            motorcycle: {
+              include: { photos: { orderBy: { position: "asc" } } },
+            },
+          },
+        },
+      },
+    });
+
+    const attendees = await Promise.all(
+      rows.map(async ({ user }) => {
+        const profile = await this.sanitizeMemberProfile(user);
+        return {
+          slug: profile.slug,
+          displayName: profile.displayName,
+          area: profile.area,
+          profilePhotoUrl: profile.profilePhotoUrl,
+        };
+      }),
+    );
+    return { summary, attendees };
   }
 
   async configureCheckIn(

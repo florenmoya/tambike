@@ -6,6 +6,7 @@ import { BackendError } from "../backend";
 
 export const DEFAULT_ROSTER_PAGE_LIMIT = 24;
 export const MAX_ROSTER_PAGE_LIMIT = 50;
+export const PUBLIC_ATTENDEE_PREVIEW_LIMIT = 4;
 
 export type RosterCursorValue = {
   goingAt: string;

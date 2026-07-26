@@ -29,6 +29,11 @@ async function snapshot(sessionToken?: string): Promise<DemoState> {
   return backend.getSnapshot(token ?? undefined);
 }
 
+export async function getPublicEventAttendeePreviewAction(eventId: string) {
+  const backend = await getTambikeBackend();
+  return backend.getPublicEventAttendeePreview(eventId);
+}
+
 export async function loginWithPasswordAction(email: string, password: string) {
   const backend = await getTambikeBackend();
   const result = await backend.loginWithPassword(email, password);
