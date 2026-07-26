@@ -1,7 +1,7 @@
 # Attendee Page User-Needs Redesign
 
-**Status:** Approved  
-**Date:** 2026-07-26  
+**Status:** Approved
+**Date:** 2026-07-26
 **Surface:** `/events/[eventId]/attendees`
 
 ## Problem
