@@ -49,6 +49,18 @@ export interface EventAttendeeRosterPage {
   pageSize: number;
 }
 
+export type EventAttendeePreviewRider = Pick<
+  MemberProfileView,
+  "slug" | "displayName" | "area" | "profilePhotoUrl"
+>;
+
+export interface EventAttendeePreviewData {
+  summary: EventAttendeeSummary | null;
+  attendees: EventAttendeePreviewRider[];
+  signedIn: boolean;
+  unavailable: boolean;
+}
+
 export interface UpdateMemberProfileInput {
   displayName: string;
   area: string;
