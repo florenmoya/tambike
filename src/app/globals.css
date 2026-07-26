@@ -2804,7 +2804,7 @@ svg {
 
 .event-roster-page-shell {
   min-height: calc(100vh - 76px);
-  padding: clamp(28px, 6vw, 72px) clamp(14px, 4vw, 48px);
+  padding: clamp(82px, 8vw, 108px) clamp(14px, 4vw, 48px) clamp(28px, 6vw, 72px);
   background: #f7f4ef;
   color: #17130f;
 }
@@ -2889,6 +2889,10 @@ svg {
 
 .event-roster__state {
   margin-top: 18px;
+}
+
+.event-roster__state-action {
+  color: #f7f4ef;
 }
 
 .event-roster__grid {

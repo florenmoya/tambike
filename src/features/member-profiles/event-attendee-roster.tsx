@@ -180,7 +180,7 @@ function StatefulEventAttendeeRoster({
             <CardTitle>Log in to see who’s going</CardTitle>
           </CardHeader>
           <CardContent>
-            <Button asChild><Link href={`/login?next=${encodeURIComponent(`/events/${summary.eventId}/attendees`)}`}>Log in</Link></Button>
+            <Button asChild><Link className="event-roster__state-action" href={`/login?next=${encodeURIComponent(`/events/${summary.eventId}/attendees`)}`}>Log in</Link></Button>
           </CardContent>
         </Card>
       ) : summary.goingCount === 0 ? (
@@ -189,7 +189,7 @@ function StatefulEventAttendeeRoster({
             <CardTitle>No riders yet</CardTitle>
           </CardHeader>
           <CardContent>
-            <Button asChild><Link href={`/events/${summary.eventId}/register`}>Join this event</Link></Button>
+            <Button asChild><Link className="event-roster__state-action" href={`/events/${summary.eventId}/register`}>Join this event</Link></Button>
           </CardContent>
         </Card>
       ) : (
