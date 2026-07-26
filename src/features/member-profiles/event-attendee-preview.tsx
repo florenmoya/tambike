@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 
 import type { EventAttendeePreviewData } from "./types";
 import styles from "./event-attendee-preview.module.css";
@@ -19,7 +20,31 @@ export function EventAttendeePreview({
   expected,
   preview,
 }: EventAttendeePreviewProps) {
-  const going = preview?.summary?.goingCount ?? fallbackGoing;
+  const initialGoing = preview?.summary?.goingCount ?? fallbackGoing;
+  const [goingState, setGoingState] = useState(() => ({
+    eventId,
+    fallbackGoing,
+    value: initialGoing,
+  }));
+  const eventChanged = goingState.eventId !== eventId;
+  const liveCountChanged =
+    !eventChanged && goingState.fallbackGoing !== fallbackGoing;
+  const going = eventChanged
+    ? initialGoing
+    : liveCountChanged
+      ? fallbackGoing
+      : goingState.value;
+
+  if (eventChanged || liveCountChanged) {
+    setGoingState({
+      eventId,
+      fallbackGoing,
+      value: going,
+    });
+  }
+
+  const goingCopy =
+    going === 1 ? "1 rider is going" : `${going} riders are going`;
   const rosterEnabled = preview?.summary?.rosterEnabled !== false;
   const riders =
     preview?.signedIn && rosterEnabled ? preview.attendees.slice(0, 4) : [];
@@ -32,7 +57,7 @@ export function EventAttendeePreview({
     <section className={styles.preview} aria-labelledby="event-attendee-preview-title">
       <div className={styles.heading}>
         <span>Who’s going</span>
-        <h2 id="event-attendee-preview-title">{going} riders are going</h2>
+        <h2 id="event-attendee-preview-title">{goingCopy}</h2>
         <p>{interested} interested · Around {expected} expected</p>
       </div>
 

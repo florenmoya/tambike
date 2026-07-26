@@ -1,4 +1,7 @@
-import { createElement } from "react";
+/** @vitest-environment jsdom */
+
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
@@ -31,11 +34,14 @@ const memberPreview: EventAttendeePreviewData = {
   unavailable: false,
 };
 
-function render(preview: EventAttendeePreviewData | undefined) {
+function render(
+  preview: EventAttendeePreviewData | undefined,
+  fallbackGoing = 12,
+) {
   return renderToStaticMarkup(
     createElement(EventAttendeePreview, {
       eventId: "ride-1",
-      fallbackGoing: 12,
+      fallbackGoing,
       interested: 15,
       expected: 55,
       preview,
@@ -113,5 +119,60 @@ describe("event attendee preview", () => {
 
     expect(markup).toContain("Rider profiles will appear here as they join");
     expect(markup).toContain("See who’s going");
+  });
+
+  test.each([
+    [0, "0 riders are going"],
+    [1, "1 rider is going"],
+    [2, "2 riders are going"],
+  ])("uses correct turnout grammar for %i attendees", (going, copy) => {
+    expect(render(undefined, going)).toContain(copy);
+  });
+
+  test("updates the turnout headline when the current Going count changes", async () => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const preview = {
+      ...memberPreview,
+      attendees: [],
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(EventAttendeePreview, {
+            eventId: "ride-1",
+            fallbackGoing: 12,
+            interested: 15,
+            expected: 55,
+            preview,
+          }),
+        );
+      });
+      expect(container.textContent).toContain("15 riders are going");
+
+      await act(async () => {
+        root.render(
+          createElement(EventAttendeePreview, {
+            eventId: "ride-1",
+            fallbackGoing: 13,
+            interested: 15,
+            expected: 55,
+            preview,
+          }),
+        );
+      });
+      expect(container.textContent).toContain("13 riders are going");
+      expect(container.textContent).not.toContain("15 riders are going");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 });

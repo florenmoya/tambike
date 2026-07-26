@@ -52,7 +52,7 @@ describe("account and event-location UI contracts", () => {
     expect(filterEventsByQuery([locationEvent], { q: "Ortigas Avenue" })).toEqual([locationEvent]);
   });
 
-  test("uses organizer-defined location inputs and event-detail essentials styling", () => {
+  test("uses organizer-defined location inputs and the event-detail Venue and perk structure", () => {
     expect(organizerSource).toContain('name="locationName"');
     expect(organizerSource).toContain('name="locationAddress"');
     expect(organizerSource).toContain('name="locationMapLink"');
@@ -61,8 +61,11 @@ describe("account and event-location UI contracts", () => {
     expect(organizerSource).not.toContain('name="venueId"');
     expect(adminSource).toContain("event.locationName");
     expect(adminSource).toContain("event.locationAddress");
-    expect(screenSource).toContain("event-detail-essentials");
-    expect(stylesSource).toContain(".event-detail-essentials");
+    expect(screenSource).toContain('className="event-detail-perk"');
+    expect(screenSource).toContain('eyebrow="Venue"');
+    expect(screenSource).not.toContain("event-detail-essentials");
+    expect(stylesSource).toContain(".event-detail-perk");
+    expect(stylesSource).not.toContain(".event-detail-essentials");
     expect(stylesSource).not.toContain(".event-detail-venue-card");
   });
 
