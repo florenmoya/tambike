@@ -113,8 +113,12 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
 
       {loadState === "loading" ? (
         <div className={styles.loadingSpotlight} role="status">
-          <LoaderCircle aria-hidden="true" />
-          Loading raffles…
+          <div className={styles.loadingOpenCard} aria-hidden="true" />
+          <div className={styles.loadingWinnerCard} aria-hidden="true" />
+          <span className={styles.loadingLabel}>
+            <LoaderCircle aria-hidden="true" />
+            Loading raffles…
+          </span>
         </div>
       ) : (
         <>
@@ -223,6 +227,7 @@ function OpenGiveawaySpotlight({
           label="How it works"
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
+          sponsorDisclosure={giveaway.sponsorDisclosure}
         />
       </div>
     </article>
@@ -246,10 +251,10 @@ function CompletedGiveawayResult({
 
         {results.length > 0 ? (
           <div className={styles.winnerList}>
-            {results.map((result) => (
+            {results.map((result, index) => (
               <p
                 className={styles.winnerAlias}
-                key={`${result.prizePoolTitle}-${result.winnerAlias}`}
+                key={`${result.prizePoolTitle}-${result.winnerAlias}-${index}`}
               >
                 {result.winnerAlias}
               </p>
@@ -264,6 +269,7 @@ function CompletedGiveawayResult({
           label="How it worked"
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
+          sponsorDisclosure={giveaway.sponsorDisclosure}
         />
 
         {drawVerifications.length > 0 ? (
@@ -295,7 +301,9 @@ function CompactGiveawayCard({
 
   return (
     <article className={styles.compactCard}>
-      <span className={styles.compactStatus}>{giveawayStateLabel(giveaway.state)}</span>
+      <span className={styles.compactStatus}>
+        {giveaway.state === "open" ? "Open now" : giveawayStateLabel(giveaway.state)}
+      </span>
       <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
       <p className={styles.compactPrize}>{primaryPrizeSummary(campaign)}</p>
       <div className={styles.metadata}>
@@ -313,6 +321,7 @@ function CompactGiveawayCard({
         label="How it works"
         mechanics={giveaway.mechanics}
         terms={giveaway.terms}
+        sponsorDisclosure={giveaway.sponsorDisclosure}
       />
     </article>
   );
@@ -322,11 +331,15 @@ function CampaignDetails({
   label,
   mechanics,
   terms,
+  sponsorDisclosure,
 }: {
   label: string;
   mechanics: string;
   terms: string;
+  sponsorDisclosure?: string;
 }) {
+  const disclosure = sponsorDisclosure?.trim();
+
   return (
     <details className={styles.details}>
       <summary>
@@ -334,6 +347,7 @@ function CampaignDetails({
         <ChevronDown aria-hidden="true" />
       </summary>
       <div className={styles.detailsBody}>
+        {disclosure ? <p className={styles.sponsorDisclosure}>{disclosure}</p> : null}
         <p>{mechanics}</p>
         <p>{terms}</p>
       </div>

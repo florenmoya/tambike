@@ -28,7 +28,7 @@ afterEach(() => {
     act(() => root.unmount());
   }
   document.body.replaceChildren();
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 function campaign(id: string, state: GiveawayState): PublicEventGiveaway {
@@ -88,6 +88,7 @@ describe("public giveaway spotlight", () => {
 
   test("renders every open raffle before completed results and keeps proof secondary", async () => {
     const completed = campaign("Completed helmet raffle", "completed");
+    completed.giveaway.sponsorDisclosure = "Supported by Helmet Co.";
     completed.giveaway.prizePools = [
       {
         id: "helmet-pool",
@@ -114,6 +115,7 @@ describe("public giveaway spotlight", () => {
     ];
 
     const open = campaign("Open jacket raffle", "open");
+    open.giveaway.sponsorDisclosure = "Presented by Jacket Co.";
     open.giveaway.prizePools = [
       {
         id: "jacket-pool",
@@ -130,7 +132,9 @@ describe("public giveaway spotlight", () => {
     open.giveaway.entryClosesAt = "2026-07-30T00:00:00.000Z";
 
     const secondOpen = campaign("Open gloves raffle", "open");
+    secondOpen.giveaway.sponsorDisclosure = "Backed by Gloves Co.";
     const secondCompleted = campaign("Completed boots raffle", "completed");
+    secondCompleted.giveaway.sponsorDisclosure = "   ";
 
     vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
       ok: true,
@@ -160,6 +164,7 @@ describe("public giveaway spotlight", () => {
       "Completed helmet raffle",
       "Completed boots raffle",
     ]);
+    const articles = [...container.querySelectorAll("article")];
     expect(container.querySelector("header span")?.textContent).toBe("Raffles & prizes");
     expect(text).not.toContain("Prize route");
     expect(text).toContain("Open now");
@@ -168,15 +173,78 @@ describe("public giveaway spotlight", () => {
     expect(text).toContain("Rider M.");
     expect(text).toContain("Winner chose to share this alias.");
     expect(text).toContain("Verify the draw");
+    expect(articles[1]?.querySelector("span")?.textContent).toBe("Open now");
+    expect(text).toContain("Presented by Jacket Co.");
+    expect(text).toContain("Supported by Helmet Co.");
+    expect(text).toContain("Backed by Gloves Co.");
     expect(
       container.querySelector<HTMLAnchorElement>('a[href="/login?next=%2Fevents%2Fevent-1"]')
         ?.textContent,
     ).toContain("Log in to enter");
     expect(text).not.toContain("Log in with your rider account to enter while this raffle is open.");
 
-    const articles = [...container.querySelectorAll("article")];
     expect(articles[0]?.textContent).not.toContain("Verify the draw");
     expect(articles[0]?.textContent).not.toContain("Rider M.");
     expect(articles[2]?.querySelector("details summary")?.textContent).toBe("How it worked");
+    expect(articles[3]?.querySelectorAll("details p")).toHaveLength(2);
+  });
+
+  test("reserves a two-panel spotlight footprint while raffle data loads", () => {
+    vi.mocked(listPublicGiveawaysForEventAction).mockReturnValue(
+      new Promise(() => undefined),
+    );
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    act(() => {
+      root.render(createElement(PublicGiveawayPanel, { eventId: "event-1" }));
+    });
+
+    const section = container.querySelector("section");
+    const status = container.querySelector('[role="status"]');
+
+    expect(section?.getAttribute("aria-busy")).toBe("true");
+    expect(status?.textContent).toContain("Loading raffles…");
+    expect(
+      status?.querySelectorAll(':scope > [aria-hidden="true"]'),
+    ).toHaveLength(2);
+  });
+
+  test("renders repeated public aliases without duplicate React keys", async () => {
+    const completed = campaign("Completed duplicate-alias raffle", "completed");
+    completed.results = [
+      { prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." },
+      { prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." },
+    ];
+    vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
+      ok: true,
+      code: "OK",
+      data: [completed],
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    await act(async () => {
+      root.render(createElement(PublicGiveawayPanel, { eventId: "event-1" }));
+    });
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Completed duplicate-alias raffle");
+    });
+
+    expect(
+      [...container.querySelectorAll("p")].filter(
+        (paragraph) => paragraph.textContent === "Rider M.",
+      ),
+    ).toHaveLength(2);
+    expect(consoleError.mock.calls.flat().join(" ")).not.toContain(
+      "Encountered two children with the same key",
+    );
   });
 });
