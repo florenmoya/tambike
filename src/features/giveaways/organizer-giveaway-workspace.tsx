@@ -34,6 +34,7 @@ import {
   cancelGiveawayAction,
   createGiveawayAction,
   createGiveawayCampaignCodeAction,
+  deleteGiveawayPrizeImageAction,
   getOrganizerGiveawayPresentationAction,
   getOrganizerGiveawayOperationsAction,
   getOrganizerGiveawayWorkspaceAction,
@@ -65,6 +66,7 @@ import type {
   GiveawayCampaignListItem,
   GiveawayCampaignCodeSummary,
   GiveawayComplianceStatus,
+  GiveawayPrizeDisclosure,
   GiveawayEligibilityConditionInput,
   GiveawayEligibilityGroupInput,
   GiveawayEntryMode,
@@ -89,6 +91,10 @@ import {
   GiveawayPresentationController,
   type GiveawayPresentationManualSelectionGate,
 } from "./giveaway-presentation-controller";
+import {
+  GiveawayPrizeImageUploader,
+  performGiveawayPrizeImageRemoval,
+} from "./giveaway-prize-image-uploader";
 
 export type GiveawayLifecycleRouteStatus = "complete" | "active" | "hold" | "upcoming";
 
@@ -436,6 +442,58 @@ const fulfilmentOptions: Array<{ value: GiveawayFulfilmentMode; label: string }>
   { value: "manual_contact", label: "Manual contact" },
 ];
 
+export function toPublicPrizePreview(input: {
+  disclosure: GiveawayPrizeDisclosure;
+  title?: string;
+}): string {
+  return input.disclosure === "surprise"
+    ? "Surprise prize"
+    : input.title?.trim() || "Prize details unavailable";
+}
+
+export function toOrganizerPrizePoolDisclosureDraft(
+  pool: GiveawayPrizePoolInput,
+  disclosure: GiveawayPrizeDisclosure,
+): GiveawayPrizePoolInput {
+  if (disclosure === "surprise") {
+    const { publicImage: _publicImage, ...withoutImage } = pool;
+    void _publicImage;
+    return {
+      ...withoutImage,
+      publicPresentation: { disclosure: "surprise" },
+    } as GiveawayPrizePoolInput;
+  }
+
+  return {
+    ...pool,
+    publicPresentation: {
+      disclosure: "revealed",
+      title: pool.publicPresentation.title ?? "",
+      description: pool.publicPresentation.description ?? "",
+    },
+  } as GiveawayPrizePoolInput;
+}
+
+export function toOrganizerGiveawayConfigurationPrizePools(
+  prizePools: GiveawayPrizePoolInput[],
+): GiveawayPrizePoolInput[] {
+  return prizePools.map((pool) => {
+    const { publicImage: _publicImage, ...configuration } = pool;
+    void _publicImage;
+    return {
+      ...configuration,
+      publicPresentation:
+        pool.publicPresentation.disclosure === "surprise"
+          ? { disclosure: "surprise" }
+          : {
+              disclosure: "revealed",
+              title: pool.publicPresentation.title,
+              description: pool.publicPresentation.description,
+            },
+    } as GiveawayPrizePoolInput;
+  });
+}
+
 export function OrganizerGiveawayWorkspace({
   eventId,
   initialCampaigns = [],
@@ -445,6 +503,8 @@ export function OrganizerGiveawayWorkspace({
     initialCampaigns[0]?.id ?? null,
   );
   const [draftsByCampaignId, setDraftsByCampaignId] = React.useState<Record<string, GiveawayEditorDraft>>({});
+  const [persistedPrizePoolIdsByCampaignId, setPersistedPrizePoolIdsByCampaignId] =
+    React.useState<Record<string, string[]>>({});
   const [configurationFailures, setConfigurationFailures] = React.useState<Record<string, true>>({});
   const [editorDraft, setEditorDraft] = React.useState<GiveawayEditorDraft>(() => createEmptyDraft());
   const [report, setReport] = React.useState<{
@@ -587,6 +647,25 @@ export function OrganizerGiveawayWorkspace({
   }, [eventId, initialCampaigns.length]);
 
   const selectedCampaignIdForConfiguration = selectedCampaign?.id;
+  const reloadCampaignConfiguration = React.useCallback(async (giveawayId: string) => {
+    const result = await getOrganizerGiveawayWorkspaceAction(giveawayId);
+    if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
+    const workspace = result.data as OrganizerGiveawayWorkspaceData;
+    setDraftsByCampaignId((current) => ({
+      ...current,
+      [giveawayId]: toOrganizerGiveawayEditorDraft(workspace),
+    }));
+    setPersistedPrizePoolIdsByCampaignId((current) => ({
+      ...current,
+      [giveawayId]: workspace.prizePools.map((pool) => pool.id),
+    }));
+    setOperationalEntryModes((current) => ({
+      ...current,
+      [giveawayId]: workspace.entryMode,
+    }));
+    return workspace;
+  }, []);
+
   React.useEffect(() => {
     if (
       !selectedCampaignIdForConfiguration ||
@@ -598,13 +677,19 @@ export function OrganizerGiveawayWorkspace({
     let cancelled = false;
     void Promise.resolve().then(async () => {
       try {
-        const result = await getOrganizerGiveawayWorkspaceAction(selectedCampaignIdForConfiguration);
+        const result = await getOrganizerGiveawayWorkspaceAction(
+          selectedCampaignIdForConfiguration,
+        );
         if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
         if (cancelled) return;
         const workspace = result.data as OrganizerGiveawayWorkspaceData;
         setDraftsByCampaignId((current) => ({
           ...current,
           [selectedCampaignIdForConfiguration]: toOrganizerGiveawayEditorDraft(workspace),
+        }));
+        setPersistedPrizePoolIdsByCampaignId((current) => ({
+          ...current,
+          [selectedCampaignIdForConfiguration]: workspace.prizePools.map((pool) => pool.id),
         }));
         setOperationalEntryModes((current) => ({
           ...current,
@@ -997,6 +1082,10 @@ export function OrganizerGiveawayWorkspace({
           if (!result.ok) throw new Error("GIVEAWAY_CREATE_UNAVAILABLE");
           const campaign = result.data as OrganizerGiveawayCampaign;
           setDraftsByCampaignId((current) => ({ ...current, [campaign.id]: editorDraft }));
+          setPersistedPrizePoolIdsByCampaignId((current) => ({
+            ...current,
+            [campaign.id]: editorDraft.prizePools.map((pool) => pool.id),
+          }));
           setOperationalEntryModes((current) => ({ ...current, [campaign.id]: editorDraft.entryMode }));
           setSelectedCampaignId(campaign.id);
           await refreshCampaigns();
@@ -1017,6 +1106,10 @@ export function OrganizerGiveawayWorkspace({
         const result = await updateGiveawayAction(input);
         if (!result.ok) throw new Error("GIVEAWAY_UPDATE_UNAVAILABLE");
         setDraftsByCampaignId((current) => ({ ...current, [selectedCampaign.id]: selectedDraft }));
+        setPersistedPrizePoolIdsByCampaignId((current) => ({
+          ...current,
+          [selectedCampaign.id]: selectedDraft.prizePools.map((pool) => pool.id),
+        }));
         setOperationalEntryModes((current) => ({
           ...current,
           [selectedCampaign.id]: selectedDraft.entryMode,
@@ -1440,6 +1533,19 @@ export function OrganizerGiveawayWorkspace({
                 : configurationFailures[selectedCampaign.id]
                   ? "unavailable"
                   : "loading"
+            }
+            giveawayId={selectedCampaign?.id}
+            persistedPrizePoolIds={
+              new Set(
+                selectedCampaign
+                  ? persistedPrizePoolIdsByCampaignId[selectedCampaign.id] ?? []
+                  : [],
+              )
+            }
+            onPrizeMediaChanged={() =>
+              selectedCampaign
+                ? reloadCampaignConfiguration(selectedCampaign.id).then(() => undefined)
+                : Promise.resolve()
             }
           />
 
@@ -2052,6 +2158,9 @@ function CampaignEditor({
   isPending,
   isExisting,
   configurationStatus,
+  giveawayId,
+  persistedPrizePoolIds,
+  onPrizeMediaChanged,
 }: {
   draft: GiveawayEditorDraft;
   onChange: React.Dispatch<React.SetStateAction<GiveawayEditorDraft>>;
@@ -2059,6 +2168,9 @@ function CampaignEditor({
   isPending: boolean;
   isExisting: boolean;
   configurationStatus: "ready" | "loading" | "unavailable";
+  giveawayId?: string;
+  persistedPrizePoolIds: ReadonlySet<string>;
+  onPrizeMediaChanged: () => Promise<void> | void;
 }) {
   if (configurationStatus !== "ready") {
     return (
@@ -2141,7 +2253,14 @@ function CampaignEditor({
       </Card>
 
       <EligibilityBuilder draft={draft} onChange={onChange} />
-      <PrizePoolBuilder draft={draft} onChange={onChange} />
+      <PrizePoolBuilder
+        draft={draft}
+        onChange={onChange}
+        giveawayId={giveawayId}
+        persistedPrizePoolIds={persistedPrizePoolIds}
+        disabled={isPending}
+        onPrizeMediaChanged={onPrizeMediaChanged}
+      />
       <ScheduleBuilder draft={draft} onChange={onChange} />
 
       <Card className="border-primary/20 bg-primary/[0.03]">
@@ -2525,7 +2644,21 @@ function EligibilityBuilder({ draft, onChange }: { draft: GiveawayEditorDraft; o
   );
 }
 
-function PrizePoolBuilder({ draft, onChange }: { draft: GiveawayEditorDraft; onChange: React.Dispatch<React.SetStateAction<GiveawayEditorDraft>> }) {
+function PrizePoolBuilder({
+  draft,
+  onChange,
+  giveawayId,
+  persistedPrizePoolIds,
+  disabled,
+  onPrizeMediaChanged,
+}: {
+  draft: GiveawayEditorDraft;
+  onChange: React.Dispatch<React.SetStateAction<GiveawayEditorDraft>>;
+  giveawayId?: string;
+  persistedPrizePoolIds: ReadonlySet<string>;
+  disabled: boolean;
+  onPrizeMediaChanged: () => Promise<void> | void;
+}) {
   return (
     <Card>
       <CardHeader className="gap-2 md:flex-row md:items-start md:justify-between">
@@ -2539,27 +2672,140 @@ function PrizePoolBuilder({ draft, onChange }: { draft: GiveawayEditorDraft; onC
         {draft.prizePools.map((pool, poolIndex) => {
           const isGuaranteed = pool.awardMode === "guaranteed";
           const quantity = pool.inventory.kind === "finite" ? pool.inventory.quantity : 0;
+          const publicPresentation = pool.publicPresentation ?? {
+            disclosure: "revealed" as const,
+            title: pool.title,
+          };
+          const isPersistedPool = Boolean(
+            giveawayId && persistedPrizePoolIds.has(pool.id),
+          );
           return (
-            <div key={pool.id} className="grid gap-3 rounded-lg border bg-muted/20 p-3">
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem_10rem_auto] lg:items-end">
-                <Field label="Pool title"><Input value={pool.title} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, title: event.target.value }))} /></Field>
-                <Field label="Award method"><select className={selectClassName} value={pool.awardMode} onChange={(event) => setPrizePoolAwardMode(onChange, poolIndex, event.target.value as GiveawayAwardMode)}>{awardModeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
-                <Field label="Fulfilment"><select className={selectClassName} value={pool.fulfilmentMode} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, fulfilmentMode: event.target.value as GiveawayFulfilmentMode }))}>{fulfilmentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
-                <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${pool.title}`} disabled={draft.prizePools.length === 1} onClick={() => onChange((current) => ({ ...current, prizePools: current.prizePools.filter((_, index) => index !== poolIndex) }))}><Trash2Icon /></Button>
-              </div>
-              <p className="text-xs text-muted-foreground">{awardModeOptions.find((option) => option.value === pool.awardMode)?.detail}</p>
-              <div className="grid gap-3 md:grid-cols-[8rem_minmax(0,1fr)_auto] md:items-end">
-                <Field label={isGuaranteed ? "Inventory" : "Finite quantity"}>{isGuaranteed ? <Input value="Unlimited" readOnly /> : <Input min={1} type="number" value={quantity} onChange={(event) => setPrizePoolQuantity(onChange, poolIndex, numberOr(quantity, event.target.value))} />}</Field>
-                <Field label="Eligible groups"><GroupCheckboxes pool={pool} groups={draft.eligibilityGroups} onChange={(groupIds) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, eligibilityGroupIds: groupIds.length ? groupIds : undefined }))} /></Field>
-                <label className="flex min-h-9 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(pool.presenceVerificationRequired)} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, presenceVerificationRequired: event.target.checked }))} /> Presence check</label>
-              </div>
-              {!isGuaranteed ? <div className="grid gap-2"><span className="text-sm font-medium">Prize items</span>{pool.items.map((item, itemIndex) => <Input key={item.id ?? itemIndex} value={item.title} onChange={(event) => updatePrizeItem(onChange, poolIndex, itemIndex, event.target.value)} placeholder={`Prize item ${itemIndex + 1}`} />)}</div> : null}
+            <div key={pool.id} className="grid gap-4 rounded-lg border bg-muted/20 p-3">
+              <section className="grid gap-3" aria-label={`Internal prize group ${poolIndex + 1}`}>
+                <div>
+                  <h3 className="text-sm font-semibold">Internal prize group</h3>
+                  <p className="text-xs text-muted-foreground">Actual prizes and inventory</p>
+                </div>
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem_10rem_auto] lg:items-end">
+                  <Field label="Pool title"><Input value={pool.title} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, title: event.target.value }))} /></Field>
+                  <Field label="Award method"><select className={selectClassName} value={pool.awardMode} onChange={(event) => setPrizePoolAwardMode(onChange, poolIndex, event.target.value as GiveawayAwardMode)}>{awardModeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
+                  <Field label="Fulfilment"><select className={selectClassName} value={pool.fulfilmentMode} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, fulfilmentMode: event.target.value as GiveawayFulfilmentMode }))}>{fulfilmentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
+                  <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${pool.title}`} disabled={draft.prizePools.length === 1} onClick={() => onChange((current) => ({ ...current, prizePools: current.prizePools.filter((_, index) => index !== poolIndex) }))}><Trash2Icon /></Button>
+                </div>
+                <p className="text-xs text-muted-foreground">{awardModeOptions.find((option) => option.value === pool.awardMode)?.detail}</p>
+                <div className="grid gap-3 md:grid-cols-[8rem_minmax(0,1fr)_auto] md:items-end">
+                  <Field label={isGuaranteed ? "Inventory" : "Finite quantity"}>{isGuaranteed ? <Input value="Unlimited" readOnly /> : <Input min={1} type="number" value={quantity} onChange={(event) => setPrizePoolQuantity(onChange, poolIndex, numberOr(quantity, event.target.value))} />}</Field>
+                  <Field label="Eligible groups"><GroupCheckboxes pool={pool} groups={draft.eligibilityGroups} onChange={(groupIds) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, eligibilityGroupIds: groupIds.length ? groupIds : undefined }))} /></Field>
+                  <label className="flex min-h-9 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(pool.presenceVerificationRequired)} onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({ ...current, presenceVerificationRequired: event.target.checked }))} /> Presence check</label>
+                </div>
+                {!isGuaranteed ? <div className="grid gap-2"><span className="text-sm font-medium">Prize items</span>{pool.items.map((item, itemIndex) => <Input key={item.id ?? itemIndex} value={item.title} onChange={(event) => updatePrizeItem(onChange, poolIndex, itemIndex, event.target.value)} placeholder={`Prize item ${itemIndex + 1}`} />)}</div> : null}
+              </section>
+
+              <section className="grid gap-3 border-t pt-4" aria-label={`Public prize display ${poolIndex + 1}`}>
+                <div>
+                  <h3 className="text-sm font-semibold">Public prize display</h3>
+                  <p className="text-xs text-muted-foreground">Choose what riders see before the draw.</p>
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name={`pool-${pool.id}-disclosure`}
+                      checked={publicPresentation.disclosure === "revealed"}
+                      onChange={() => updatePrizePool(onChange, poolIndex, (current) =>
+                        toOrganizerPrizePoolDisclosureDraft(current, "revealed"))}
+                    />
+                    Show the prize
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name={`pool-${pool.id}-disclosure`}
+                      checked={publicPresentation.disclosure === "surprise"}
+                      onChange={() => {
+                        const currentImage = pool.publicImage;
+                        updatePrizePool(onChange, poolIndex, (current) =>
+                          toOrganizerPrizePoolDisclosureDraft(current, "surprise"));
+                        if (giveawayId && isPersistedPool && currentImage) {
+                          void performGiveawayPrizeImageRemoval(
+                            {
+                              giveawayId,
+                              prizePoolId: pool.id,
+                              mediaId: currentImage.mediaId,
+                            },
+                            deleteGiveawayPrizeImageAction,
+                          ).catch(() => undefined);
+                        }
+                      }}
+                    />
+                    Keep it a surprise
+                  </label>
+                </div>
+                {publicPresentation.disclosure === "revealed" ? (
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <Field label="Public prize name">
+                      <Input
+                        value={publicPresentation.title ?? ""}
+                        onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({
+                          ...current,
+                          publicPresentation: {
+                            ...current.publicPresentation,
+                            disclosure: "revealed",
+                            title: event.target.value,
+                          },
+                        } as GiveawayPrizePoolInput))}
+                      />
+                    </Field>
+                    <Field label="Short description (optional)">
+                      <Input
+                        value={publicPresentation.description ?? ""}
+                        onChange={(event) => updatePrizePool(onChange, poolIndex, (current) => ({
+                          ...current,
+                          publicPresentation: {
+                            ...current.publicPresentation,
+                            disclosure: "revealed",
+                            description: event.target.value,
+                          },
+                        } as GiveawayPrizePoolInput))}
+                      />
+                    </Field>
+                  </div>
+                ) : null}
+                {publicPresentation.disclosure === "revealed" ? (
+                  isPersistedPool && giveawayId ? (
+                    <GiveawayPrizeImageUploader
+                      giveawayId={giveawayId}
+                      prizePoolId={pool.id}
+                      image={pool.publicImage}
+                      disabled={disabled}
+                      onChanged={onPrizeMediaChanged}
+                    />
+                  ) : (
+                    <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                      Save this prize pool before uploading its public image.
+                    </p>
+                  )
+                ) : null}
+                <div className="rounded-lg border bg-background p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Public preview</p>
+                  <p className="mt-1 text-base font-semibold">
+                    Win: {toPublicPrizePreview(publicPresentation)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Entries close: {formatPrizePreviewDate(draft.entryClosesAt)} · Draw: {formatPrizePreviewDate(draft.drawAt)}
+                  </p>
+                </div>
+              </section>
             </div>
           );
         })}
       </CardContent>
     </Card>
   );
+}
+
+function formatPrizePreviewDate(value: string) {
+  return value ? value.replace("T", " ") : "Not scheduled";
 }
 
 function ScheduleBuilder({ draft, onChange }: { draft: GiveawayEditorDraft; onChange: React.Dispatch<React.SetStateAction<GiveawayEditorDraft>> }) {
@@ -3022,10 +3268,16 @@ export function toOrganizerGiveawayEditorDraft(
 }
 
 function clonePrizePool(pool: GiveawayPrizePoolInput): GiveawayPrizePoolInput {
+  const publicPresentation = pool.publicPresentation ?? {
+    disclosure: "revealed" as const,
+    title: pool.title,
+  };
   const base = {
     id: pool.id,
     title: pool.title,
     fulfilmentMode: pool.fulfilmentMode,
+    publicPresentation: { ...publicPresentation },
+    ...(pool.publicImage ? { publicImage: { ...pool.publicImage } } : {}),
     ...(pool.eligibilityGroupIds ? { eligibilityGroupIds: [...pool.eligibilityGroupIds] } : {}),
     ...(pool.perRiderLimit ? { perRiderLimit: pool.perRiderLimit } : {}),
     ...(pool.presenceVerificationRequired !== undefined
@@ -3110,6 +3362,10 @@ function createPrizePool(position: number, groups: GiveawayEligibilityGroupInput
     fulfilmentMode: "onsite",
     inventory: { kind: "finite", quantity: 1 },
     items: [{ title: `Prize item ${position}` }],
+    publicPresentation: {
+      disclosure: "revealed",
+      title: `Prize pool ${position}`,
+    },
     eligibilityGroupIds: groups[0] ? [groups[0].id] : undefined,
     perRiderLimit: 1,
   };
@@ -3168,7 +3424,7 @@ function toCreateGiveawayInput(eventId: string, draft: GiveawayEditorDraft): Cre
     timeZone: draft.timeZone.trim(),
     winnerLimits: { perRider: draft.winnerLimitPerRider, total: draft.winnerLimitTotal },
     organizerAttestation: true,
-    prizePools: draft.prizePools,
+    prizePools: toOrganizerGiveawayConfigurationPrizePools(draft.prizePools),
     publicVisibility: draft.publicVisibility,
     ...(draft.sponsorDisclosure.trim() ? { sponsorDisclosure: draft.sponsorDisclosure.trim() } : {}),
     presenceVerificationRequired: draft.presenceVerificationRequired,

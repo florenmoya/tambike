@@ -37,8 +37,17 @@ import {
   resolveInitialDrawSubmission,
   resolveManualSelectionSubmission,
   submitCampaignCode,
+  toOrganizerGiveawayConfigurationPrizePools,
   toOrganizerGiveawayEditorDraft,
+  toOrganizerPrizePoolDisclosureDraft,
+  toPublicPrizePreview,
 } from "../../src/features/giveaways/organizer-giveaway-workspace";
+import {
+  GiveawayPrizeImageUploader,
+  performGiveawayPrizeImageRemoval,
+  performGiveawayPrizeImageUpload,
+  validateGiveawayPrizeImageFile,
+} from "../../src/features/giveaways/giveaway-prize-image-uploader";
 
 const organizerGiveawayWorkspaceSourceUrl = new URL(
   "../../src/features/giveaways/organizer-giveaway-workspace.tsx",
@@ -154,6 +163,10 @@ describe("organizer giveaway lifecycle route", () => {
           fulfilmentMode: "onsite",
           inventory: { kind: "finite", quantity: 1 },
           items: [{ id: "item-1", title: "Ride helmet" }],
+          publicPresentation: {
+            disclosure: "revealed",
+            title: "Ride helmet",
+          },
           eligibilityGroupIds: ["group-1"],
           presenceVerificationRequired: true,
         },
@@ -182,6 +195,277 @@ describe("organizer giveaway lifecycle route", () => {
 
     expect(updatedDrafts[workspace.id]?.entryOpensAt).toBe("2026-08-19T09:00");
     expect(draftsByCampaignId[workspace.id]?.entryOpensAt).toBe("2026-08-17T17:30");
+  });
+
+  test("maps persisted public presentation into the editable pool draft", () => {
+    const workspace: OrganizerGiveawayWorkspaceData = {
+      id: "giveaway-1",
+      eventId: "event-1",
+      title: "Rider gear draw",
+      kind: "raffle",
+      state: "draft",
+      complianceStatus: "draft",
+      entryMode: "automatic",
+      maxEntriesPerRider: 1,
+      mechanics: "One entry per eligible rider.",
+      terms: "Claim by the stated deadline.",
+      timeZone: "Asia/Manila",
+      winnerLimits: { perRider: 1, total: 1 },
+      publicVisibility: "event_page",
+      presenceVerificationRequired: false,
+      eligibilityGroups: [
+        {
+          id: "group-1",
+          label: "Registered riders",
+          weight: 1,
+          conditions: [{ source: "active_rsvp_pass" }],
+        },
+      ],
+      prizePools: [
+        {
+          id: "pool-1",
+          title: "Internal gear inventory",
+          awardMode: "random_draw",
+          fulfilmentMode: "onsite",
+          inventory: { kind: "finite", quantity: 1 },
+          items: [{ id: "item-1", title: "Private Ducati Helmet" }],
+          publicPresentation: {
+            disclosure: "revealed",
+            title: "Weekend Rider Gear Package",
+            description: "Helmet, gloves, and Tambike gear.",
+          },
+        },
+      ],
+    };
+
+    const draft = toOrganizerGiveawayEditorDraft(workspace);
+
+    expect(draft.prizePools[0]?.publicPresentation).toEqual({
+      disclosure: "revealed",
+      title: "Weekend Rider Gear Package",
+      description: "Helmet, gloves, and Tambike gear.",
+    });
+  });
+
+  test("surprise preview never renders the actual inventory title", () => {
+    expect(toPublicPrizePreview({
+      disclosure: "surprise",
+      title: "Private Ducati Helmet",
+    })).toBe("Surprise prize");
+  });
+
+  test("switching to surprise immediately clears public copy and the managed image draft", () => {
+    const pool = {
+      id: "pool-1",
+      title: "Internal gear inventory",
+      awardMode: "random_draw" as const,
+      fulfilmentMode: "onsite" as const,
+      inventory: { kind: "finite" as const, quantity: 1 },
+      items: [{ id: "item-1", title: "Private Ducati Helmet" }] as [
+        { id: string; title: string },
+      ],
+      publicPresentation: {
+        disclosure: "revealed" as const,
+        title: "Weekend Rider Gear Package",
+        description: "Helmet, gloves, and Tambike gear.",
+      },
+      publicImage: {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: 1200,
+        height: 800,
+      },
+    };
+
+    expect(toOrganizerPrizePoolDisclosureDraft(pool, "surprise")).toEqual({
+      id: "pool-1",
+      title: "Internal gear inventory",
+      awardMode: "random_draw",
+      fulfilmentMode: "onsite",
+      inventory: { kind: "finite", quantity: 1 },
+      items: [{ id: "item-1", title: "Private Ducati Helmet" }],
+      publicPresentation: { disclosure: "surprise" },
+    });
+  });
+
+  test("configuration saves public presentation without caller-supplied public image data", () => {
+    const pool = {
+      id: "pool-1",
+      title: "Internal gear inventory",
+      awardMode: "random_draw" as const,
+      fulfilmentMode: "onsite" as const,
+      inventory: { kind: "finite" as const, quantity: 1 },
+      items: [{ id: "item-1", title: "Private Ducati Helmet" }] as [
+        { id: string; title: string },
+      ],
+      publicPresentation: {
+        disclosure: "revealed" as const,
+        title: "Weekend Rider Gear Package",
+      },
+      publicImage: {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: 1200,
+        height: 800,
+      },
+    };
+
+    expect(toOrganizerGiveawayConfigurationPrizePools([pool])).toEqual([
+      {
+        id: "pool-1",
+        title: "Internal gear inventory",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ id: "item-1", title: "Private Ducati Helmet" }],
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Weekend Rider Gear Package",
+        },
+      },
+    ]);
+  });
+
+  test("renders separate internal inventory and public prize display controls", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(OrganizerGiveawayWorkspace, {
+        eventId: "event-1",
+      }),
+    );
+
+    expect(markup).toContain("Internal prize group");
+    expect(markup).toContain("Actual prizes and inventory");
+    expect(markup).toContain("Public prize display");
+    expect(markup).toContain("Show the prize");
+    expect(markup).toContain("Keep it a surprise");
+    expect(markup).toContain("Public prize name");
+    expect(markup).toContain("Short description (optional)");
+    expect(markup).toContain("Public preview");
+    expect(markup).toContain("Save this prize pool before uploading its public image.");
+  });
+
+  test("validates public prize image type, empty files, and the 8 MiB limit", () => {
+    expect(validateGiveawayPrizeImageFile({ type: "image/jpeg", size: 1 })).toBeNull();
+    expect(validateGiveawayPrizeImageFile({ type: "image/png", size: 8 * 1024 * 1024 })).toBeNull();
+    expect(validateGiveawayPrizeImageFile({ type: "image/webp", size: 512 })).toBeNull();
+    expect(validateGiveawayPrizeImageFile({ type: "image/gif", size: 512 })).toBe(
+      "Choose a JPEG, PNG, or WebP image.",
+    );
+    expect(validateGiveawayPrizeImageFile({ type: "image/png", size: 0 })).toBe(
+      "Choose a non-empty image file.",
+    );
+    expect(validateGiveawayPrizeImageFile({ type: "image/png", size: 8 * 1024 * 1024 + 1 })).toBe(
+      "Choose an image no larger than 8 MB.",
+    );
+  });
+
+  test("uploads a public prize image through presign, storage, and managed finalize", async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], "prize.png", {
+      type: "image/png",
+    });
+    const statuses: string[] = [];
+    const finalizedImage = {
+      mediaId: "media-1",
+      url: "/giveaway-prize-media/media-1",
+      width: 1200,
+      height: 800,
+    };
+    const finalize = vi.fn(async () => ({
+      ok: true as const,
+      data: finalizedImage,
+    }));
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (fetchImpl.mock.calls.length === 1) {
+        return Response.json({
+          key: "tmp/giveaway-prizes/organizer-1/upload-1",
+          mimeType: "image/png",
+          url: "https://uploads.example.test",
+          fields: {
+            key: "tmp/giveaway-prizes/organizer-1/upload-1",
+            "Content-Type": "image/png",
+          },
+        });
+      }
+      expect(init?.body).toBeInstanceOf(FormData);
+      expect((init?.body as FormData).get("key")).toBe(
+        "tmp/giveaway-prizes/organizer-1/upload-1",
+      );
+      expect((init?.body as FormData).get("file")).toBe(file);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(performGiveawayPrizeImageUpload({
+      file,
+      giveawayId: "giveaway-1",
+      prizePoolId: "pool-1",
+    }, {
+      fetchImpl,
+      finalize,
+      onStatus: (status) => statuses.push(status),
+    })).resolves.toEqual(finalizedImage);
+
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      "/api/giveaway-prize-media/uploads",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          giveawayId: "giveaway-1",
+          prizePoolId: "pool-1",
+          mimeType: "image/png",
+        }),
+      },
+    ]);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe("https://uploads.example.test");
+    expect(finalize).toHaveBeenCalledWith({
+      giveawayId: "giveaway-1",
+      prizePoolId: "pool-1",
+      tempKey: "tmp/giveaway-prizes/organizer-1/upload-1",
+      claimedMimeType: "image/png",
+    });
+    expect(statuses).toEqual([
+      "Preparing secure upload…",
+      "Uploading image…",
+      "Finishing image…",
+    ]);
+  });
+
+  test("removes only the current managed public prize image", async () => {
+    const remove = vi.fn(async () => ({ ok: true as const, data: undefined }));
+
+    await expect(performGiveawayPrizeImageRemoval({
+      giveawayId: "giveaway-1",
+      prizePoolId: "pool-1",
+      mediaId: "media-1",
+    }, remove)).resolves.toBeUndefined();
+
+    expect(remove).toHaveBeenCalledWith({
+      giveawayId: "giveaway-1",
+      prizePoolId: "pool-1",
+      mediaId: "media-1",
+    });
+  });
+
+  test("renders managed public image replacement and removal controls", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(GiveawayPrizeImageUploader, {
+        giveawayId: "giveaway-1",
+        prizePoolId: "pool-1",
+        image: {
+          mediaId: "media-1",
+          url: "/giveaway-prize-media/media-1",
+          width: 1200,
+          height: 800,
+        },
+        disabled: false,
+        onChanged: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("/giveaway-prize-media/media-1");
+    expect(markup).toContain("Replace image");
+    expect(markup).toContain("Remove image");
+    expect(markup).not.toContain("storageKey");
   });
 
   test("wires existing campaign edits through the selected campaign draft dispatcher", async () => {
