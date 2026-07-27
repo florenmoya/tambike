@@ -212,6 +212,11 @@ enum GiveawayAwardMode {
   manual_selection
 }
 
+enum GiveawayPrizeDisclosure {
+  revealed
+  surprise
+}
+
 enum GiveawayPrizeItemStatus {
   available
   reserved
@@ -324,6 +329,7 @@ model User {
   giveawayOperatorGrants      GiveawayOperator[]          @relation("GiveawayOperatorGranter")
   giveawayOperatorRevocations GiveawayOperator[]          @relation("GiveawayOperatorRevoker")
   giveawayAuditEvents         GiveawayAuditEvent[]        @relation("GiveawayAuditActor")
+  uploadedGiveawayPrizeImages GiveawayPrizeImage[]        @relation("GiveawayPrizeImageUploader")
 }
 
 model Session {
@@ -919,6 +925,9 @@ model GiveawayPrizePool {
   position                     Int
   title                        String
   description                  String?
+  publicDisclosure             GiveawayPrizeDisclosure @default(revealed)
+  publicTitle                  String?
+  publicDescription            String?
   awardMode                    GiveawayAwardMode
   fulfillmentType              GiveawayFulfillmentType
   inventoryLimit               Int?
@@ -929,12 +938,31 @@ model GiveawayPrizePool {
   updatedAt                    DateTime                @updatedAt
 
   giveaway          EventGiveaway                       @relation(fields: [giveawayId], references: [id], onDelete: Restrict)
+  publicImage       GiveawayPrizeImage?
   prizeItems        GiveawayPrizeItem[]
   eligibilityGroups GiveawayPrizePoolEligibilityGroup[]
   awards            GiveawayAward[]
 
   @@unique([giveawayId, position])
   @@index([giveawayId, awardMode])
+}
+
+model GiveawayPrizeImage {
+  id               String   @id @default(cuid())
+  prizePoolId      String   @unique
+  uploadedByUserId String
+  mediaId          String   @unique
+  storageKey       String   @unique
+  mimeType         String
+  width            Int
+  height           Int
+  finalizedAt      DateTime
+  createdAt        DateTime @default(now())
+
+  prizePool  GiveawayPrizePool @relation(fields: [prizePoolId], references: [id], onDelete: Restrict)
+  uploadedBy User              @relation("GiveawayPrizeImageUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([uploadedByUserId])
 }
 
 model GiveawayPrizeItem {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import * as generatedPrismaClient from "@prisma/client";
@@ -26,6 +26,13 @@ const liveRafflePresentationMigrationSql = readFileSync(
   ),
   "utf8",
 );
+const presentationMigrationPath = resolve(
+  process.cwd(),
+  "prisma/migrations/20260728000000_public_raffle_prize_presentation/migration.sql",
+);
+const presentationMigrationSql = existsSync(presentationMigrationPath)
+  ? readFileSync(presentationMigrationPath, "utf8")
+  : "";
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
 const prismaSeed = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
 
@@ -71,6 +78,7 @@ const requiredEnums = {
   ],
   GiveawayPresentationLabelKind: ["consented_name", "masked"],
   GiveawayAwardMode: ["random_draw", "first_come", "guaranteed", "manual_selection"],
+  GiveawayPrizeDisclosure: ["revealed", "surprise"],
   GiveawayPrizeItemStatus: ["available", "reserved", "fulfilled", "voided"],
   GiveawayDrawType: ["initial", "redraw"],
   GiveawayDrawStatus: ["pending", "completed", "published", "voided"],
@@ -102,6 +110,7 @@ const requiredModels = [
   "GiveawaySnapshot",
   "GiveawaySnapshotEntry",
   "GiveawayPrizePool",
+  "GiveawayPrizeImage",
   "GiveawayPrizeItem",
   "GiveawayPrizePoolEligibilityGroup",
   "GiveawayDraw",
@@ -159,6 +168,41 @@ describe("giveaway Prisma schema contract", () => {
       'CONSTRAINT "EventGiveaway_maxEntriesPerRider_bounded" CHECK ("maxEntriesPerRider" >= 1 AND "maxEntriesPerRider" <= 10000)',
     );
     expect(giveawayMigrationSql).toContain('"qualifiedSourceFingerprint" TEXT NOT NULL');
+  });
+
+  test("persists public prize presentation copy and image ownership", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
+    const pool = models.get("GiveawayPrizePool");
+    const image = models.get("GiveawayPrizeImage");
+
+    expect(pool?.fields.find((field) => field.name === "publicDisclosure")).toMatchObject({
+      kind: "enum",
+      type: "GiveawayPrizeDisclosure",
+    });
+    expect(pool?.fields.find((field) => field.name === "publicTitle")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(pool?.fields.find((field) => field.name === "publicDescription")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(image?.fields.find((field) => field.name === "prizePool")).toMatchObject({
+      kind: "object",
+      type: "GiveawayPrizePool",
+    });
+    expect(prismaSchema).toContain("enum GiveawayPrizeDisclosure");
+    expect(prismaSchema).toContain("publicDisclosure");
+    expect(prismaSchema).toContain("publicTitle");
+    expect(prismaSchema).toContain("publicDescription");
+    expect(prismaSchema).toContain("model GiveawayPrizeImage");
+    expect(presentationMigrationSql).toContain('COALESCE((SELECT item."title"');
+    expect(presentationMigrationSql).toContain(
+      'CREATE OR REPLACE FUNCTION "validate_giveaway_prize_pool_entrant_configuration"()',
+    );
+    expect(presentationMigrationSql).toContain(
+      'CREATE TRIGGER "GiveawayPrizeImage_entrant_configuration_guard"',
+    );
   });
 
   test("persists canonical eligibility-cycle timing, direct allocation proof, and RSVP going transitions", () => {

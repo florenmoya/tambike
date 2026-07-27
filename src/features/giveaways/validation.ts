@@ -63,12 +63,44 @@ const prizeItemSchema = z
   })
   .strict();
 
+const publicPrizePresentationSchema = z
+  .object({
+    disclosure: z.enum(["revealed", "surprise"]),
+    title: z.string().trim().min(1).max(160).optional(),
+    description: z.string().trim().max(500).optional(),
+  })
+  .superRefine((presentation, context) => {
+    if (presentation.disclosure === "revealed" && !presentation.title) {
+      context.addIssue({
+        code: "custom",
+        path: ["title"],
+        message: "Public prize name is required when the prize is shown.",
+      });
+    }
+  })
+  .transform((presentation) =>
+    presentation.disclosure === "surprise"
+      ? { disclosure: "surprise" as const }
+      : presentation,
+  );
+
+const publicPrizeImageSchema = z
+  .object({
+    mediaId: identifier,
+    url: z.url(),
+    width: positiveInteger,
+    height: positiveInteger,
+  })
+  .strict();
+
 const prizePoolSchema = z
   .object({
     id: identifier,
     title: nonEmptyText,
     awardMode: z.enum(["random_draw", "first_come", "guaranteed", "manual_selection"]),
     fulfilmentMode: z.enum(["onsite", "digital_code", "delivery", "manual_contact"]),
+    publicPresentation: publicPrizePresentationSchema,
+    publicImage: publicPrizeImageSchema.optional(),
     inventory: z.discriminatedUnion("kind", [finiteInventorySchema, unlimitedInventorySchema]),
     items: z.array(prizeItemSchema),
     eligibilityGroupIds: z.array(identifier).min(1).optional(),

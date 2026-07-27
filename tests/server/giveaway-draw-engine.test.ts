@@ -63,6 +63,7 @@ function createValidGiveawayInput() {
         fulfilmentMode: "onsite",
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Tambike helmet" }],
+        publicPresentation: { disclosure: "revealed", title: "Tambike helmet" },
       },
     ],
   };
@@ -207,6 +208,21 @@ describe("giveaway input validation", () => {
     };
 
     expect(createGiveawaySchema.safeParse(createGiveawayInputWithPrizePool(pool)).success).toBe(true);
+  });
+
+  test("requires a public title only when a prize is revealed", () => {
+    const randomPool = createValidGiveawayInput().prizePools[0];
+    const revealed = createGiveawayInputWithPrizePool({
+      ...randomPool,
+      publicPresentation: { disclosure: "revealed", title: "  " },
+    });
+    const surprise = createGiveawayInputWithPrizePool({
+      ...randomPool,
+      publicPresentation: { disclosure: "surprise" },
+    });
+
+    expect(createGiveawaySchema.safeParse(revealed).success).toBe(false);
+    expect(createGiveawaySchema.safeParse(surprise).success).toBe(true);
   });
 
   test.each(["random_draw", "first_come", "manual_selection"])(

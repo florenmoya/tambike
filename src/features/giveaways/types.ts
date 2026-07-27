@@ -78,10 +78,27 @@ export interface GiveawayPrizeItemInput {
   description?: string;
 }
 
+export type GiveawayPrizeDisclosure = "revealed" | "surprise";
+
+export interface GiveawayPrizePublicPresentationInput {
+  disclosure: GiveawayPrizeDisclosure;
+  title?: string;
+  description?: string;
+}
+
+export interface GiveawayPrizeImageSummary {
+  mediaId: string;
+  url: string;
+  width: number;
+  height: number;
+}
+
 export interface GiveawayPrizePoolBaseInput {
   id: string;
   title: string;
   fulfilmentMode: GiveawayFulfilmentMode;
+  publicPresentation: GiveawayPrizePublicPresentationInput;
+  publicImage?: GiveawayPrizeImageSummary;
   eligibilityGroupIds?: string[];
   perRiderLimit?: number;
   presenceVerificationRequired?: boolean;
