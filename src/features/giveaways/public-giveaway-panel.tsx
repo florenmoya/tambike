@@ -385,7 +385,7 @@ export function PublicPrizeImage({
 }: {
   presentation: ReturnType<typeof primaryPrizePresentation>;
 }) {
-  const image = presentation.image;
+  const image = toValidPublicPrizeImage(presentation.image);
   const imageIdentity = image ? `${image.mediaId}\u0000${image.url}` : undefined;
   const [failedImageIdentity, setFailedImageIdentity] = useState<string>();
 
@@ -550,24 +550,41 @@ function toValidPublicPrizeImage(
   if (!value || typeof value !== "object") return undefined;
 
   const image = value as Record<string, unknown>;
+  const mediaId =
+    typeof image.mediaId === "string" ? image.mediaId.trim() : "";
   if (
-    typeof image.mediaId !== "string" ||
-    !image.mediaId.trim() ||
+    !mediaId ||
+    mediaId.length > 200 ||
+    /[\u0000-\u001f\u007f]/.test(mediaId) ||
     typeof image.url !== "string" ||
-    !image.url.trim() ||
     typeof image.width !== "number" ||
-    !Number.isFinite(image.width) ||
+    !Number.isSafeInteger(image.width) ||
     image.width <= 0 ||
+    image.width > 32_768 ||
     typeof image.height !== "number" ||
-    !Number.isFinite(image.height) ||
-    image.height <= 0
+    !Number.isSafeInteger(image.height) ||
+    image.height <= 0 ||
+    image.height > 32_768
   ) {
     return undefined;
   }
 
+  let encodedMediaId: string;
+  try {
+    encodedMediaId = encodeURIComponent(mediaId);
+  } catch {
+    return undefined;
+  }
+
+  const canonicalUrl = `/giveaway-prize-media/${encodedMediaId}`;
+  const apiAlias = `/api/giveaway-prize-media/${encodedMediaId}`;
+  if (image.url !== canonicalUrl && image.url !== apiAlias) {
+    return undefined;
+  }
+
   return {
-    mediaId: image.mediaId,
-    url: image.url,
+    mediaId,
+    url: canonicalUrl,
     width: image.width,
     height: image.height,
   };

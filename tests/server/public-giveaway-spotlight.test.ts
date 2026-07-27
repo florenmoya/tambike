@@ -91,7 +91,7 @@ describe("public giveaway spotlight", () => {
             disclosure: "revealed",
             title: "Road helmet",
             image: {
-              mediaId: "media-1",
+              mediaId: "  media-1  ",
               url: "/api/giveaway-prize-media/media-1",
               width: 1200,
               height: 900,
@@ -103,6 +103,12 @@ describe("public giveaway spotlight", () => {
 
     const failedImage = container.querySelector("img");
     expect(failedImage).not.toBeNull();
+    expect(
+      new URL(failedImage?.getAttribute("src") ?? "", window.location.href)
+        .pathname,
+    ).toBe(
+      "/giveaway-prize-media/media-1",
+    );
     act(() => {
       failedImage?.dispatchEvent(new Event("error"));
     });
@@ -127,6 +133,124 @@ describe("public giveaway spotlight", () => {
     });
 
     expect(container.querySelector("img")?.alt).toBe("Riding jacket");
+    expect(
+      new URL(
+        container.querySelector("img")?.getAttribute("src") ?? "",
+        window.location.href,
+      ).pathname,
+    ).toBe(
+      "/giveaway-prize-media/media-2",
+    );
+  });
+
+  test.each([
+    [
+      "padded URL",
+      {
+        mediaId: "media-1",
+        url: " /giveaway-prize-media/media-1 ",
+        width: 1200,
+        height: 900,
+      },
+    ],
+    [
+      "control-character URL",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1\n",
+        width: 1200,
+        height: 900,
+      },
+    ],
+    [
+      "remote URL",
+      {
+        mediaId: "media-1",
+        url: "https://tracker.example/prize.webp",
+        width: 1200,
+        height: 900,
+      },
+    ],
+    [
+      "mismatched managed URL",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-2",
+        width: 1200,
+        height: 900,
+      },
+    ],
+    [
+      "nonpositive dimensions",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: 0,
+        height: -1,
+      },
+    ],
+    [
+      "fractional dimensions",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: 1200.5,
+        height: 900,
+      },
+    ],
+    [
+      "unsafe dimensions",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: Number.MAX_SAFE_INTEGER + 1,
+        height: 900,
+      },
+    ],
+    [
+      "unreasonably large dimensions",
+      {
+        mediaId: "media-1",
+        url: "/giveaway-prize-media/media-1",
+        width: 32_769,
+        height: 900,
+      },
+    ],
+  ])("drops %s and leaves a clean text-only prize", async (_label, image) => {
+    const panelModule = (await import(
+      "../../src/features/giveaways/public-giveaway-panel"
+    )) as Record<string, unknown>;
+    const prizeImage = panelModule.PublicPrizeImage;
+
+    expect(prizeImage).toBeTypeOf("function");
+    if (typeof prizeImage !== "function") return;
+
+    const PrizeImage = prizeImage as ComponentType<{
+      presentation: {
+        disclosure: "revealed";
+        title: string;
+        image: typeof image;
+      };
+    }>;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    act(() => {
+      root.render(
+        createElement(PrizeImage, {
+          presentation: {
+            disclosure: "revealed",
+            title: "Text-only prize",
+            image,
+          },
+        }),
+      );
+    });
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.children).toHaveLength(0);
   });
 
   test("keeps a restrained four-by-three image box at desktop and mobile widths", () => {
