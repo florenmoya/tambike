@@ -92,8 +92,11 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
 
   const groups = groupPublicGiveawaysForSpotlight(campaigns);
   const featuredCompleted = groups.completed[0];
+  const additionalOpenCampaigns = groups.additional.filter(
+    ({ giveaway }) => giveaway.state === "open",
+  );
   const compactCampaigns = [
-    ...groups.additional,
+    ...groups.additional.filter(({ giveaway }) => giveaway.state !== "open"),
     ...groups.completed.slice(featuredCompleted ? 1 : 0),
   ];
 
@@ -123,7 +126,7 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
                 viewerRole={viewerRole}
               />
             ) : null}
-            {featuredCompleted ? (
+            {featuredCompleted && additionalOpenCampaigns.length === 0 ? (
               <CompletedGiveawayResult
                 campaign={featuredCompleted}
                 eventId={eventId}
@@ -131,6 +134,27 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
               />
             ) : null}
           </div>
+          {additionalOpenCampaigns.length > 0 ? (
+            <div className={styles.compactGrid}>
+              {additionalOpenCampaigns.map((campaign) => (
+                <CompactGiveawayCard
+                  key={campaign.giveaway.id}
+                  campaign={campaign}
+                  eventId={eventId}
+                  viewerRole={viewerRole}
+                />
+              ))}
+            </div>
+          ) : null}
+          {featuredCompleted && additionalOpenCampaigns.length > 0 ? (
+            <div className={styles.spotlightGrid}>
+              <CompletedGiveawayResult
+                campaign={featuredCompleted}
+                eventId={eventId}
+                viewerRole={viewerRole}
+              />
+            </div>
+          ) : null}
           {compactCampaigns.length > 0 ? (
             <div className={styles.compactGrid}>
               {compactCampaigns.map((campaign) => (

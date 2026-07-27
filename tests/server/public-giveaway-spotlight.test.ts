@@ -86,7 +86,7 @@ describe("public giveaway spotlight", () => {
     expect(groups.additional.map(({ giveaway }) => giveaway.id)).toEqual(["scheduled-1"]);
   });
 
-  test("renders the open raffle first and keeps winner identity and proof secondary", async () => {
+  test("renders every open raffle before completed results and keeps proof secondary", async () => {
     const completed = campaign("Completed helmet raffle", "completed");
     completed.giveaway.prizePools = [
       {
@@ -129,10 +129,13 @@ describe("public giveaway spotlight", () => {
     open.giveaway.entryOpensAt = "2026-07-27T00:00:00.000Z";
     open.giveaway.entryClosesAt = "2026-07-30T00:00:00.000Z";
 
+    const secondOpen = campaign("Open gloves raffle", "open");
+    const secondCompleted = campaign("Completed boots raffle", "completed");
+
     vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
       ok: true,
       code: "OK",
-      data: [completed, open],
+      data: [completed, open, secondCompleted, secondOpen],
     });
 
     const container = document.createElement("div");
@@ -149,9 +152,16 @@ describe("public giveaway spotlight", () => {
     });
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("Open jacket raffle")).toBeLessThan(
-      text.indexOf("Completed helmet raffle"),
-    );
+    expect(
+      [...container.querySelectorAll("article h3")].map((heading) => heading.textContent),
+    ).toEqual([
+      "Open jacket raffle",
+      "Open gloves raffle",
+      "Completed helmet raffle",
+      "Completed boots raffle",
+    ]);
+    expect(container.querySelector("header span")?.textContent).toBe("Raffles & prizes");
+    expect(text).not.toContain("Prize route");
     expect(text).toContain("Open now");
     expect(text).toContain("Tambike riding jacket");
     expect(text).toContain("Recent winner");
@@ -166,6 +176,6 @@ describe("public giveaway spotlight", () => {
     const articles = [...container.querySelectorAll("article")];
     expect(articles[0]?.textContent).not.toContain("Verify the draw");
     expect(articles[0]?.textContent).not.toContain("Rider M.");
-    expect(articles[1]?.querySelector("details summary")?.textContent).toBe("How it worked");
+    expect(articles[2]?.querySelector("details summary")?.textContent).toBe("How it worked");
   });
 });
