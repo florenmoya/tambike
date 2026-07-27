@@ -191,6 +191,31 @@ describe("giveaway Prisma schema contract", () => {
       kind: "object",
       type: "GiveawayPrizePool",
     });
+    expect(image?.fields.find((field) => field.name === "prizePoolId")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(image?.fields.find((field) => field.name === "mediaId")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(image?.fields.find((field) => field.name === "storageKey")).toMatchObject({
+      kind: "scalar",
+      type: "String",
+    });
+    expect(image?.fields.find((field) => field.name === "uploadedBy")).toMatchObject({
+      kind: "object",
+      type: "User",
+    });
+    expect(presentationMigrationSql).toContain(
+      'CREATE UNIQUE INDEX "GiveawayPrizeImage_prizePoolId_key"',
+    );
+    expect(presentationMigrationSql).toContain(
+      'CREATE UNIQUE INDEX "GiveawayPrizeImage_mediaId_key"',
+    );
+    expect(presentationMigrationSql).toContain(
+      'CREATE UNIQUE INDEX "GiveawayPrizeImage_storageKey_key"',
+    );
     expect(prismaSchema).toContain("enum GiveawayPrizeDisclosure");
     expect(prismaSchema).toContain("publicDisclosure");
     expect(prismaSchema).toContain("publicTitle");

@@ -24,6 +24,7 @@ import type {
   GiveawayNotification,
   GiveawayNotificationKind,
   GiveawayOperatorCandidate,
+  GiveawayPrizeImageSummary,
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
@@ -167,6 +168,14 @@ import {
   type MemberMediaPersistence,
 } from "./member-media/service";
 import { MemberMediaError } from "./member-media/types";
+import {
+  createGiveawayPrizeMediaLifecycleService,
+  GiveawayPrizeMediaLifecycleError,
+  type AuthorizedGiveawayPrizeMediaDescriptor,
+  type FinalizeGiveawayPrizeImageInput,
+  type GiveawayPrizeMediaLifecycleOptions,
+  type GiveawayPrizeMediaPersistence,
+} from "./giveaway-prize-media/service";
 
 type SignupWithPasswordInput = SignupInput & {
   password: string;
@@ -426,15 +435,28 @@ function defaultRulesForEvent(type: EventType) {
 
 export class PrismaTambikeBackend {
   private readonly memberMedia;
+  private readonly giveawayPrizeMedia;
 
   private constructor(
     private readonly prisma: PrismaClient,
-    options: { memberMedia?: MemberMediaLifecycleOptions } = {},
+    options: {
+      memberMedia?: MemberMediaLifecycleOptions;
+      giveawayPrizeMedia?: GiveawayPrizeMediaLifecycleOptions;
+    } = {},
   ) {
     this.memberMedia = createMemberMediaLifecycleService(options.memberMedia);
+    this.giveawayPrizeMedia = createGiveawayPrizeMediaLifecycleService(
+      options.giveawayPrizeMedia,
+    );
   }
 
-  static create(databaseUrl: string, options: { memberMedia?: MemberMediaLifecycleOptions } = {}) {
+  static create(
+    databaseUrl: string,
+    options: {
+      memberMedia?: MemberMediaLifecycleOptions;
+      giveawayPrizeMedia?: GiveawayPrizeMediaLifecycleOptions;
+    } = {},
+  ) {
     const pool = createPrismaPgPool(databaseUrl);
     const adapter = new PrismaPg(pool, { disposeExternalPool: true });
     return new PrismaTambikeBackend(new PrismaClient({ adapter }), options);
@@ -747,6 +769,120 @@ export class PrismaTambikeBackend {
       return await this.memberMedia.read(descriptor);
     } catch (error) {
       throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async createGiveawayPrizeImageUpload(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+    mimeType: string,
+  ) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      return await this.giveawayPrizeMedia.createUpload(
+        user.id,
+        giveawayId,
+        prizePoolId,
+        mimeType,
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async finalizeGiveawayPrizeImage(
+    sessionToken: string,
+    input: FinalizeGiveawayPrizeImageInput,
+  ) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      return await this.giveawayPrizeMedia.finalize(
+        user.id,
+        input,
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async deleteGiveawayPrizeImage(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+    mediaId: string,
+  ) {
+    const user = await this.requireUser(sessionToken);
+    try {
+      await this.giveawayPrizeMedia.delete(
+        user.id,
+        { giveawayId, prizePoolId, mediaId },
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async authorizeGiveawayPrizeImageMedia(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): Promise<AuthorizedGiveawayPrizeMediaDescriptor> {
+    const image = await this.prisma.giveawayPrizeImage.findUnique({
+      where: { mediaId },
+      select: {
+        storageKey: true,
+        mimeType: true,
+        prizePool: { select: { giveawayId: true } },
+      },
+    });
+    if (!image || image.mimeType !== "image/webp") {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const giveaway = await this.requireGiveawayCampaign(
+      image.prizePool.giveawayId,
+    );
+    if (
+      !["PUBLISHED", "ONGOING", "COMPLETED"].includes(giveaway.event.status)
+    ) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const viewer = sessionToken
+      ? await this.getUserForSessionToken(sessionToken)
+      : null;
+    const viewerId =
+      viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    if (!(await this.canViewPublicEventGiveaway(giveaway, viewerId))) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    if (
+      giveaway.visibility !== "event_page" &&
+      giveaway.visibility !== "registered_riders" &&
+      giveaway.visibility !== "eligible_riders"
+    ) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    return {
+      storageKey: image.storageKey,
+      mimeType: "image/webp",
+      visibility: giveaway.visibility,
+    };
+  }
+
+  async getGiveawayPrizeImageMedia(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ) {
+    const descriptor = await this.authorizeGiveawayPrizeImageMedia(
+      sessionToken,
+      mediaId,
+    );
+    try {
+      return await this.giveawayPrizeMedia.read(descriptor);
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
     }
   }
 
@@ -6722,7 +6858,17 @@ export class PrismaTambikeBackend {
       }),
       tx.giveawayPrizePool.findMany({
         where: { giveawayId },
-        select: { id: true, position: true },
+        select: {
+          id: true,
+          position: true,
+          publicImage: {
+            select: {
+              id: true,
+              uploadedByUserId: true,
+              storageKey: true,
+            },
+          },
+        },
       }),
       groups.length
         ? tx.giveawayEligibilityGroup.findMany({
@@ -6746,6 +6892,9 @@ export class PrismaTambikeBackend {
 
     const currentGroupIds = new Set(currentGroups.map((group) => group.id));
     const currentPoolIds = new Set(currentPools.map((pool) => pool.id));
+    const currentPoolsById = new Map(
+      currentPools.map((pool) => [pool.id, pool]),
+    );
     const retainedGroupIds = new Set(
       groups.filter((group) => currentGroupIds.has(group.id)).map((group) => group.id),
     );
@@ -6765,6 +6914,19 @@ export class PrismaTambikeBackend {
     await tx.giveawayPrizeItem.deleteMany({ where: { prizePool: { giveawayId } } });
     await tx.giveawayEligibilityCondition.deleteMany({ where: { group: { giveawayId } } });
     if (removedPoolIds.length) {
+      const cleanupAfter = new Date();
+      for (const pool of currentPools) {
+        if (!removedPoolIds.includes(pool.id) || !pool.publicImage) continue;
+        await tx.memberMediaCleanupIntent.upsert({
+          where: { storageKey: pool.publicImage.storageKey },
+          create: {
+            userId: pool.publicImage.uploadedByUserId,
+            storageKey: pool.publicImage.storageKey,
+            cleanupAfter,
+          },
+          update: { cleanupAfter },
+        });
+      }
       await tx.giveawayPrizeImage.deleteMany({
         where: { prizePoolId: { in: removedPoolIds } },
       });
@@ -6835,6 +6997,25 @@ export class PrismaTambikeBackend {
       const id = currentPoolIds.has(pool.id)
         ? pool.id
         : `giveaway-prize-pool-${randomUUID()}`;
+      const currentPool = currentPoolsById.get(id);
+      if (
+        pool.publicPresentation.disclosure === "surprise" &&
+        currentPool?.publicImage
+      ) {
+        const cleanupAfter = new Date();
+        await tx.memberMediaCleanupIntent.upsert({
+          where: { storageKey: currentPool.publicImage.storageKey },
+          create: {
+            userId: currentPool.publicImage.uploadedByUserId,
+            storageKey: currentPool.publicImage.storageKey,
+            cleanupAfter,
+          },
+          update: { cleanupAfter },
+        });
+        await tx.giveawayPrizeImage.delete({
+          where: { id: currentPool.publicImage.id },
+        });
+      }
       const eligibilityGroupIds = (pool.eligibilityGroupIds ?? []).map((requestId) => {
         const persistedId = groupIdByRequestId.get(requestId);
         if (!persistedId) {
@@ -9298,6 +9479,180 @@ export class PrismaTambikeBackend {
     };
   }
 
+  private toGiveawayPrizeImageSummary(image: {
+    mediaId: string;
+    width: number;
+    height: number;
+  }): GiveawayPrizeImageSummary {
+    return {
+      mediaId: image.mediaId,
+      url: `/giveaway-prize-media/${encodeURIComponent(image.mediaId)}`,
+      width: image.width,
+      height: image.height,
+    };
+  }
+
+  private async requireGiveawayPrizePoolAccess(
+    client: Prisma.TransactionClient | PrismaClient,
+    userId: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ) {
+    const [user, pool] = await Promise.all([
+      client.user.findUnique({
+        where: { id: userId },
+        select: { id: true, role: true, verificationStatus: true },
+      }),
+      client.giveawayPrizePool.findUnique({
+        where: { id: prizePoolId },
+        include: {
+          publicImage: true,
+          giveaway: {
+            select: {
+              id: true,
+              event: {
+                include: {
+                  organizer: { select: { userId: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+    if (!user) {
+      throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+    }
+    if (!pool || pool.giveaway.id !== giveawayId) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    this.requireGiveawayConfigurator(user, pool.giveaway.event);
+    if (pool.publicDisclosure !== "revealed") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return pool;
+  }
+
+  private giveawayPrizeMediaPersistence(): GiveawayPrizeMediaPersistence {
+    return {
+      authorizePool: async ({ userId, giveawayId, prizePoolId }) => {
+        await this.requireGiveawayPrizePoolAccess(
+          this.prisma,
+          userId,
+          giveawayId,
+          prizePoolId,
+        );
+      },
+      replaceFinalized: (input) =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`
+            SELECT "id"
+            FROM "EventGiveaway"
+            WHERE "id" = ${input.giveawayId}
+            FOR UPDATE
+          `;
+          await tx.$queryRaw`
+            SELECT "id"
+            FROM "GiveawayPrizePool"
+            WHERE "id" = ${input.prizePoolId}
+            FOR UPDATE
+          `;
+          const pool = await this.requireGiveawayPrizePoolAccess(
+            tx,
+            input.userId,
+            input.giveawayId,
+            input.prizePoolId,
+          );
+          const cleanupIntent = await tx.memberMediaCleanupIntent.findUnique({
+            where: { storageKey: input.storageKey },
+            select: { id: true },
+          });
+          if (!cleanupIntent) {
+            throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+          }
+          if (pool.publicImage) {
+            await tx.memberMediaCleanupIntent.upsert({
+              where: { storageKey: pool.publicImage.storageKey },
+              create: {
+                userId: pool.publicImage.uploadedByUserId,
+                storageKey: pool.publicImage.storageKey,
+                cleanupAfter: input.finalizedAt,
+              },
+              update: { cleanupAfter: input.finalizedAt },
+            });
+          }
+          const image = await tx.giveawayPrizeImage.upsert({
+            where: { prizePoolId: input.prizePoolId },
+            create: {
+              id: `giveaway-prize-image-${randomUUID()}`,
+              prizePoolId: input.prizePoolId,
+              uploadedByUserId: input.userId,
+              mediaId: input.mediaId,
+              storageKey: input.storageKey,
+              mimeType: input.mimeType,
+              width: input.width,
+              height: input.height,
+              finalizedAt: input.finalizedAt,
+            },
+            update: {
+              uploadedByUserId: input.userId,
+              mediaId: input.mediaId,
+              storageKey: input.storageKey,
+              mimeType: input.mimeType,
+              width: input.width,
+              height: input.height,
+              finalizedAt: input.finalizedAt,
+            },
+          });
+          await tx.memberMediaCleanupIntent.delete({
+            where: { storageKey: input.storageKey },
+          });
+          return this.toGiveawayPrizeImageSummary(image);
+        }),
+      remove: (input) =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`
+            SELECT "id"
+            FROM "EventGiveaway"
+            WHERE "id" = ${input.giveawayId}
+            FOR UPDATE
+          `;
+          await tx.$queryRaw`
+            SELECT "id"
+            FROM "GiveawayPrizePool"
+            WHERE "id" = ${input.prizePoolId}
+            FOR UPDATE
+          `;
+          const pool = await this.requireGiveawayPrizePoolAccess(
+            tx,
+            input.userId,
+            input.giveawayId,
+            input.prizePoolId,
+          );
+          const image = pool.publicImage;
+          if (!image || image.mediaId !== input.mediaId) {
+            throw new BackendError("NOT_FOUND", "NOT_FOUND");
+          }
+          const cleanupAfter = new Date();
+          await tx.memberMediaCleanupIntent.upsert({
+            where: { storageKey: image.storageKey },
+            create: {
+              userId: image.uploadedByUserId,
+              storageKey: image.storageKey,
+              cleanupAfter,
+            },
+            update: { cleanupAfter },
+          });
+          await tx.giveawayPrizeImage.delete({ where: { id: image.id } });
+          return image.storageKey;
+        }),
+      registerCleanup: ({ userId, storageKey, cleanupAfter }) =>
+        this.registerMemberMediaCleanup(userId, storageKey, cleanupAfter),
+      activateCleanup: ({ storageKey, cleanupAfter }) =>
+        this.activateMemberMediaCleanup(storageKey, cleanupAfter),
+    };
+  }
+
   private toEvent(event: PrismaEventRecord): Event {
     const type = dbEventTypeToUi[event.type] ?? "Tambike";
     return {
@@ -9727,6 +10082,17 @@ export class PrismaTambikeBackend {
     if (error instanceof MemberMediaLifecycleError) {
       const code = error.code;
       return new BackendError(code, code);
+    }
+    return error;
+  }
+
+  private toGiveawayPrizeMediaBackendError(error: unknown): unknown {
+    if (error instanceof BackendError) return error;
+    if (error instanceof MemberMediaError) {
+      return new BackendError("INVALID_IMAGE", "INVALID_IMAGE");
+    }
+    if (error instanceof GiveawayPrizeMediaLifecycleError) {
+      return new BackendError(error.code, error.code);
     }
     return error;
   }

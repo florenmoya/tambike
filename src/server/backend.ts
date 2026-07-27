@@ -169,6 +169,14 @@ import {
   type MemberMediaPersistence,
 } from "./member-media/service";
 import { MemberMediaError } from "./member-media/types";
+import {
+  createGiveawayPrizeMediaLifecycleService,
+  GiveawayPrizeMediaLifecycleError,
+  type AuthorizedGiveawayPrizeMediaDescriptor,
+  type FinalizeGiveawayPrizeImageInput,
+  type GiveawayPrizeMediaLifecycleOptions,
+  type GiveawayPrizeMediaPersistence,
+} from "./giveaway-prize-media/service";
 
 export class BackendError extends Error {
   constructor(
@@ -418,6 +426,16 @@ type GiveawayPrizeItemRecord = {
   status: "available" | "reserved" | "fulfilled" | "voided";
 };
 
+type BackendGiveawayPrizeImageRecord = {
+  mediaId: string;
+  width: number;
+  height: number;
+  uploadedByUserId: string;
+  storageKey: string;
+  mimeType: "image/webp";
+  finalizedAt: Date;
+};
+
 type GiveawayPrizePoolRecord = {
   id: string;
   position: number;
@@ -425,7 +443,7 @@ type GiveawayPrizePoolRecord = {
   publicDisclosure: "revealed" | "surprise";
   publicTitle?: string;
   publicDescription?: string;
-  publicImage?: GiveawayPrizeImageSummary;
+  publicImage?: BackendGiveawayPrizeImageRecord;
   awardMode: "random_draw" | "first_come" | "guaranteed" | "manual_selection";
   fulfilmentMode: GiveawayFulfilmentMode;
   inventoryKind: "finite" | "unlimited";
@@ -784,6 +802,7 @@ export type TambikeTestSeedOptions = {
   /** Deterministic test seam for IDs that participate in frozen draw state. */
   generateGiveawayUuid?: () => string;
   memberMedia?: MemberMediaLifecycleOptions;
+  giveawayPrizeMedia?: GiveawayPrizeMediaLifecycleOptions;
 };
 
 function slugify(value: string) {
@@ -957,6 +976,7 @@ export class TambikeBackend {
   };
   private readonly audits: AuditRecord[] = [];
   private readonly memberMedia;
+  private readonly giveawayPrizeMedia;
 
   private readonly generateGiveawayDrawSeed: () => Uint8Array;
   private readonly generateGiveawayUuid: () => string;
@@ -965,6 +985,9 @@ export class TambikeBackend {
     this.generateGiveawayDrawSeed = options.generateGiveawayDrawSeed ?? generateDrawSeed;
     this.generateGiveawayUuid = options.generateGiveawayUuid ?? randomUUID;
     this.memberMedia = createMemberMediaLifecycleService(options.memberMedia);
+    this.giveawayPrizeMedia = createGiveawayPrizeMediaLifecycleService(
+      options.giveawayPrizeMedia,
+    );
     for (const user of seed.users) {
       this.users.set(user.id, { ...user });
     }
@@ -1239,6 +1262,115 @@ export class TambikeBackend {
       return await this.memberMedia.read(descriptor);
     } catch (error) {
       throw this.toMemberMediaBackendError(error);
+    }
+  }
+
+  async createGiveawayPrizeImageUpload(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+    mimeType: string,
+  ) {
+    const user = this.requireUser(sessionToken);
+    try {
+      return await this.giveawayPrizeMedia.createUpload(
+        user.id,
+        giveawayId,
+        prizePoolId,
+        mimeType,
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async finalizeGiveawayPrizeImage(
+    sessionToken: string,
+    input: FinalizeGiveawayPrizeImageInput,
+  ) {
+    const user = this.requireUser(sessionToken);
+    try {
+      return await this.giveawayPrizeMedia.finalize(
+        user.id,
+        input,
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async deleteGiveawayPrizeImage(
+    sessionToken: string,
+    giveawayId: string,
+    prizePoolId: string,
+    mediaId: string,
+  ) {
+    const user = this.requireUser(sessionToken);
+    try {
+      await this.giveawayPrizeMedia.delete(
+        user.id,
+        { giveawayId, prizePoolId, mediaId },
+        this.giveawayPrizeMediaPersistence(),
+      );
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
+    }
+  }
+
+  async authorizeGiveawayPrizeImageMedia(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ): Promise<AuthorizedGiveawayPrizeMediaDescriptor> {
+    const pool = Array.from(this.giveaways.prizePoolsById.values()).find(
+      (candidate) => candidate.publicImage?.mediaId === mediaId,
+    );
+    const image = pool?.publicImage;
+    if (!pool || !image) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const giveaway = Array.from(this.giveaways.campaignsById.values()).find(
+      (candidate) => candidate.prizePools.some((candidatePool) => candidatePool.id === pool.id),
+    );
+    if (!giveaway) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const event = this.requireEvent(giveaway.eventId);
+    if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const viewer = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const viewerId = viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    if (!this.canViewPublicEventGiveaway(giveaway, viewerId)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    if (
+      giveaway.publicVisibility !== "event_page" &&
+      giveaway.publicVisibility !== "registered_riders" &&
+      giveaway.publicVisibility !== "eligible_riders"
+    ) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    return {
+      storageKey: image.storageKey,
+      mimeType: image.mimeType,
+      visibility: giveaway.publicVisibility,
+    };
+  }
+
+  async getGiveawayPrizeImageMedia(
+    sessionToken: string | undefined,
+    mediaId: string,
+  ) {
+    const descriptor = await this.authorizeGiveawayPrizeImageMedia(
+      sessionToken,
+      mediaId,
+    );
+    try {
+      return await this.giveawayPrizeMedia.read(descriptor);
+    } catch (error) {
+      throw this.toGiveawayPrizeMediaBackendError(error);
     }
   }
 
@@ -6829,7 +6961,10 @@ export class TambikeBackend {
           pool.publicPresentation.disclosure === "revealed"
             ? pool.publicPresentation.description?.trim()
             : undefined,
-        publicImage: current?.publicImage,
+        publicImage:
+          pool.publicPresentation.disclosure === "revealed"
+            ? current?.publicImage
+            : undefined,
         awardMode: pool.awardMode,
         fulfilmentMode: pool.fulfilmentMode,
         inventoryKind: pool.inventory.kind,
@@ -6844,12 +6979,29 @@ export class TambikeBackend {
         }),
         items,
       };
+      if (
+        pool.publicPresentation.disclosure === "surprise" &&
+        current?.publicImage
+      ) {
+        this.queueMemberMediaCleanup(
+          current.publicImage.uploadedByUserId,
+          current.publicImage.storageKey,
+          new Date(),
+        );
+      }
       this.giveaways.prizePoolsById.set(id, persisted);
       return persisted;
     });
     const retainedPoolIds = new Set(persistedPools.map((pool) => pool.id));
     for (const pool of giveaway.prizePools) {
       if (retainedPoolIds.has(pool.id)) continue;
+      if (pool.publicImage) {
+        this.queueMemberMediaCleanup(
+          pool.publicImage.uploadedByUserId,
+          pool.publicImage.storageKey,
+          new Date(),
+        );
+      }
       this.giveaways.prizePoolsById.delete(pool.id);
       for (const item of pool.items) this.giveaways.prizeItemsById.delete(item.id);
     }
@@ -6919,7 +7071,9 @@ export class TambikeBackend {
         disclosure: pool.publicDisclosure,
         publicTitle: pool.publicTitle,
         publicDescription: pool.publicDescription,
-        publicImage: pool.publicImage,
+        publicImage: pool.publicImage
+          ? this.toGiveawayPrizeImageSummary(pool.publicImage)
+          : undefined,
       }),
     }));
     return {
@@ -7024,7 +7178,9 @@ export class TambikeBackend {
           disclosure: pool.publicDisclosure,
           publicTitle: pool.publicTitle,
           publicDescription: pool.publicDescription,
-          publicImage: pool.publicImage,
+          publicImage: pool.publicImage
+            ? this.toGiveawayPrizeImageSummary(pool.publicImage)
+            : undefined,
         }).title,
         winnerAlias: award.publicWinnerAlias!,
       }));
@@ -7082,7 +7238,9 @@ export class TambikeBackend {
           ? { description: pool.publicDescription }
           : {}),
       },
-      ...(pool.publicImage ? { publicImage: pool.publicImage } : {}),
+      ...(pool.publicImage
+        ? { publicImage: this.toGiveawayPrizeImageSummary(pool.publicImage) }
+        : {}),
       eligibilityGroupIds: pool.eligibilityGroupIds.length ? [...pool.eligibilityGroupIds] : undefined,
       perRiderLimit: pool.perRiderLimit ?? 1,
       presenceVerificationRequired: pool.presenceVerificationRequired,
@@ -7794,6 +7952,101 @@ export class TambikeBackend {
     };
   }
 
+  private toGiveawayPrizeImageSummary(
+    image: BackendGiveawayPrizeImageRecord,
+  ): GiveawayPrizeImageSummary {
+    return {
+      mediaId: image.mediaId,
+      url: `/giveaway-prize-media/${encodeURIComponent(image.mediaId)}`,
+      width: image.width,
+      height: image.height,
+    };
+  }
+
+  private requireGiveawayPrizePoolAccess(
+    userId: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ) {
+    const user = this.requireUserById(userId);
+    const giveaway = this.requireGiveaway(giveawayId);
+    this.requireGiveawayConfigurator(user, this.requireEvent(giveaway.eventId));
+    const pool = giveaway.prizePools.find(
+      (candidate) => candidate.id === prizePoolId,
+    );
+    if (!pool) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    if (pool.publicDisclosure !== "revealed") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return pool;
+  }
+
+  private giveawayPrizeMediaPersistence(): GiveawayPrizeMediaPersistence {
+    return {
+      authorizePool: async ({ userId, giveawayId, prizePoolId }) => {
+        this.requireGiveawayPrizePoolAccess(userId, giveawayId, prizePoolId);
+      },
+      replaceFinalized: async (input) => {
+        const pool = this.requireGiveawayPrizePoolAccess(
+          input.userId,
+          input.giveawayId,
+          input.prizePoolId,
+        );
+        if (!this.memberMediaCleanupIntents.has(input.storageKey)) {
+          throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+        }
+        if (pool.publicImage) {
+          this.queueMemberMediaCleanup(
+            pool.publicImage.uploadedByUserId,
+            pool.publicImage.storageKey,
+            input.finalizedAt,
+          );
+        }
+        pool.publicImage = {
+          mediaId: input.mediaId,
+          width: input.width,
+          height: input.height,
+          uploadedByUserId: input.userId,
+          storageKey: input.storageKey,
+          mimeType: input.mimeType,
+          finalizedAt: input.finalizedAt,
+        };
+        this.memberMediaCleanupIntents.delete(input.storageKey);
+        return this.toGiveawayPrizeImageSummary(pool.publicImage);
+      },
+      remove: async (input) => {
+        const pool = this.requireGiveawayPrizePoolAccess(
+          input.userId,
+          input.giveawayId,
+          input.prizePoolId,
+        );
+        const image = pool.publicImage;
+        if (!image || image.mediaId !== input.mediaId) {
+          throw new BackendError("NOT_FOUND", "NOT_FOUND");
+        }
+        this.queueMemberMediaCleanup(
+          image.uploadedByUserId,
+          image.storageKey,
+          new Date(),
+        );
+        pool.publicImage = undefined;
+        return image.storageKey;
+      },
+      registerCleanup: async ({ userId, storageKey, cleanupAfter }) => {
+        this.queueMemberMediaCleanup(userId, storageKey, cleanupAfter);
+      },
+      activateCleanup: async ({ storageKey, cleanupAfter }) => {
+        const intent = this.memberMediaCleanupIntents.get(storageKey);
+        if (!intent) {
+          throw new Error("MEMBER_MEDIA_CLEANUP_INTENT_MISSING");
+        }
+        intent.cleanupAfter = cleanupAfter;
+      },
+    };
+  }
+
   private memberMediaPersistence(): MemberMediaPersistence {
     return {
       registerCleanup: async (userId, storageKey, cleanupAfter) => {
@@ -8032,6 +8285,17 @@ export class TambikeBackend {
     if (error instanceof MemberMediaLifecycleError) {
       const code = error.code;
       return new BackendError(code, code);
+    }
+    return error;
+  }
+
+  private toGiveawayPrizeMediaBackendError(error: unknown): unknown {
+    if (error instanceof BackendError) return error;
+    if (error instanceof MemberMediaError) {
+      return new BackendError("INVALID_IMAGE", "INVALID_IMAGE");
+    }
+    if (error instanceof GiveawayPrizeMediaLifecycleError) {
+      return new BackendError(error.code, error.code);
     }
     return error;
   }

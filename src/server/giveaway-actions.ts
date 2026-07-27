@@ -9,10 +9,14 @@ import type {
   SelectManualGiveawayAwardInput,
   GiveawayWinnerPublicationInput,
   GiveawayDeliveryDetailsInput,
+  GiveawayPrizeImageSummary,
   RevokeManualGiveawayEntryInput,
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
 } from "@/features/giveaways/types";
+import type {
+  FinalizeGiveawayPrizeImageInput,
+} from "./giveaway-prize-media/service";
 import { getTambikeBackend } from "./backend";
 import {
   executeGiveawayAction,
@@ -24,6 +28,8 @@ import { readSessionToken } from "./session-cookie";
 type GiveawayClaimTokenIssueInput = {
   rotate?: boolean;
 };
+
+export type ActionResult<T> = GiveawayActionResult<T>;
 
 /**
  * All authenticated giveaway actions share one intentionally narrow failure
@@ -54,6 +60,31 @@ export async function updateGiveawayAction(input: UpdateGiveawayInput) {
   return runGiveawayAction(async (sessionToken) => {
     const backend = await getTambikeBackend();
     return backend.updateGiveaway(sessionToken, input);
+  });
+}
+
+export async function finalizeGiveawayPrizeImageAction(
+  input: FinalizeGiveawayPrizeImageInput,
+): Promise<ActionResult<GiveawayPrizeImageSummary>> {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    return backend.finalizeGiveawayPrizeImage(sessionToken, input);
+  });
+}
+
+export async function deleteGiveawayPrizeImageAction(input: {
+  giveawayId: string;
+  prizePoolId: string;
+  mediaId: string;
+}): Promise<ActionResult<void>> {
+  return runGiveawayAction(async (sessionToken) => {
+    const backend = await getTambikeBackend();
+    await backend.deleteGiveawayPrizeImage(
+      sessionToken,
+      input.giveawayId,
+      input.prizePoolId,
+      input.mediaId,
+    );
   });
 }
 
