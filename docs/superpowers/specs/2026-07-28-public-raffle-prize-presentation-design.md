@@ -1,6 +1,6 @@
 # Public Raffle Prize Presentation Design
 
-**Date:** July 28, 2026  
+**Date:** July 28, 2026
 **Status:** Approved direction; awaiting written-spec review
 
 ## Goal
