@@ -61,6 +61,10 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         title: "Onsite prize",
         awardMode: "first_come",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Prize",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Prize" }],
       },

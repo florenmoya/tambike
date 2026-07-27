@@ -99,6 +99,10 @@ function giveawayInput(
         title: options.delivery ? "Delivered helmet" : "Onsite helmet",
         awardMode: options.randomDraw ? "random_draw" : "first_come",
         fulfilmentMode: options.delivery ? "delivery" : "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Claim test item",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Claim test item" }],
         presenceVerificationRequired: options.presence ?? false,

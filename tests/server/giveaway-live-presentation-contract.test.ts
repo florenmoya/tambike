@@ -83,6 +83,10 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         title: "Synthetic helmet",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Synthetic prize item",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Synthetic prize item" }],
       },

@@ -65,6 +65,10 @@ function scheduledGiveawayInput(
             title: "Direct prize",
             awardMode: "guaranteed",
             fulfilmentMode: "onsite",
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Direct prize",
+            },
             inventory: { kind: "unlimited" },
             items: [],
           },
@@ -75,6 +79,10 @@ function scheduledGiveawayInput(
             title: "Direct prize",
             awardMode: "first_come",
             fulfilmentMode: "onsite",
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Prize item 1",
+            },
             inventory: { kind: "finite", quantity: directItemCount },
             items: directItems,
           },
@@ -111,6 +119,10 @@ function scheduledGiveawayInput(
             title: "Prize",
             awardMode: "random_draw",
             fulfilmentMode: "onsite",
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Prize item",
+            },
             inventory: { kind: "finite", quantity: 1 },
             items: [{ title: "Prize item" }],
           },
