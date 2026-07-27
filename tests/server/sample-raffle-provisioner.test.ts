@@ -8,6 +8,7 @@ import {
   SAMPLE_RAFFLE_WINNER_ALIAS,
   productionSampleRaffleManifest,
   provisionSampleRaffles,
+  validateSampleRaffleDatabaseIdentities,
   validateDirectSampleRaffleLockUrl,
   type SampleRaffleManifest,
   type PrismaSampleRaffleProvisioner,
@@ -267,6 +268,36 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 }
 
 describe("sample raffle provisioner safety", () => {
+  test("rejects inspection and runtime connections that resolve to different servers", () => {
+    expect(() => validateSampleRaffleDatabaseIdentities(
+      {
+        databaseName: "tambike",
+        serverAddress: "10.0.0.10",
+        serverPort: 5432,
+      },
+      {
+        databaseName: "tambike",
+        serverAddress: "10.0.0.11",
+        serverPort: 5432,
+      },
+    )).toThrow("DIRECT_LOCK_REQUIRED");
+  });
+
+  test("accepts inspection and runtime connections that resolve to the same server", () => {
+    expect(() => validateSampleRaffleDatabaseIdentities(
+      {
+        databaseName: "tambike",
+        serverAddress: "10.0.0.10",
+        serverPort: 5432,
+      },
+      {
+        databaseName: "tambike",
+        serverAddress: "10.0.0.10",
+        serverPort: 5432,
+      },
+    )).not.toThrow();
+  });
+
   test("runbook acquires production environment before exact preflight and guarantees secret cleanup", async () => {
     const runbook = await readFile(
       new URL("../../docs/deployment/sample-raffle-provisioning.md", import.meta.url),

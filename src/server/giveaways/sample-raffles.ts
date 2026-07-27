@@ -454,6 +454,43 @@ function parsePostgresDatabaseUrl(
   return { value: trimmed, parsed, databaseName };
 }
 
+export interface SampleRaffleDatabaseIdentity {
+  databaseName: string;
+  serverAddress: string | null;
+  serverPort: number | null;
+}
+
+export function validateSampleRaffleDatabaseIdentities(
+  runtime: SampleRaffleDatabaseIdentity,
+  direct: SampleRaffleDatabaseIdentity,
+) {
+  if (
+    !runtime.databaseName ||
+    !runtime.serverAddress ||
+    runtime.serverPort === null ||
+    runtime.databaseName !== direct.databaseName ||
+    runtime.serverAddress !== direct.serverAddress ||
+    runtime.serverPort !== direct.serverPort
+  ) {
+    throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
+  }
+}
+
+async function readSampleRaffleDatabaseIdentity(
+  pool: Pool,
+): Promise<SampleRaffleDatabaseIdentity> {
+  const result = await pool.query<SampleRaffleDatabaseIdentity>(`
+    SELECT
+      current_database() AS "databaseName",
+      inet_server_addr()::text AS "serverAddress",
+      inet_server_port() AS "serverPort"
+  `);
+  if (result.rows.length !== 1) {
+    throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
+  }
+  return result.rows[0];
+}
+
 export function validateDirectSampleRaffleLockUrl(value: string | undefined) {
   const target = parsePostgresDatabaseUrl(value, "DIRECT_LOCK_REQUIRED");
   const hostname = target.parsed.hostname.toLowerCase();
@@ -482,11 +519,11 @@ async function disconnectAll(steps: Array<() => Promise<void>>) {
   }
 }
 
-export function createPrismaSampleRaffleProvisioner(
+export async function createPrismaSampleRaffleProvisioner(
   runtimeDatabaseUrl: string,
   directDatabaseUrl: string,
   manifest: SampleRaffleManifest = productionSampleRaffleManifest,
-): PrismaSampleRaffleProvisioner {
+): Promise<PrismaSampleRaffleProvisioner> {
   const runtimeTarget = parsePostgresDatabaseUrl(runtimeDatabaseUrl, "DATABASE_TARGET_REQUIRED");
   const directTarget = parsePostgresDatabaseUrl(
     validateDirectSampleRaffleLockUrl(directDatabaseUrl),
@@ -500,6 +537,29 @@ export function createPrismaSampleRaffleProvisioner(
     connectionString: directTarget.value,
     max: 1,
   });
+  const runtimeIdentityPool = new Pool({
+    connectionString: runtimeTarget.value,
+    max: 1,
+  });
+  try {
+    const [runtimeIdentity, directIdentity] = await Promise.all([
+      readSampleRaffleDatabaseIdentity(runtimeIdentityPool),
+      readSampleRaffleDatabaseIdentity(inspectionPool),
+    ]);
+    validateSampleRaffleDatabaseIdentities(runtimeIdentity, directIdentity);
+  } catch (error) {
+    await Promise.allSettled([
+      runtimeIdentityPool.end(),
+      inspectionPool.end(),
+    ]);
+    throw error;
+  }
+  try {
+    await runtimeIdentityPool.end();
+  } catch (error) {
+    await Promise.allSettled([inspectionPool.end()]);
+    throw error;
+  }
   const inspectionPrisma = new PrismaClient({
     adapter: new PrismaPg(inspectionPool, { disposeExternalPool: true }),
   });

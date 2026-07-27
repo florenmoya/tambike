@@ -109,7 +109,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
       };
       const provisionOnce = async () => {
-        const provisioner = createPrismaSampleRaffleProvisioner(
+        const provisioner = await createPrismaSampleRaffleProvisioner(
           databaseUrl,
           databaseUrl,
           manifest,
