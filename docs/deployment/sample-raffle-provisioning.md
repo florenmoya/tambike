@@ -223,7 +223,6 @@ WHERE "id" = 'tambike-cafe-classico'
   }
 
   $publicPrizeInspectionScript = @'
-import { toPublicPrizePresentation } from './src/features/giveaways/public-prize-presentation.ts';
 import { PrismaTambikeBackend } from './src/server/prisma-backend.ts';
 
 async function inspectPublicPrizes() {
@@ -238,11 +237,6 @@ async function inspectPublicPrizes() {
     const ongoing = publicGiveaways.find(
       ({ giveaway }) => giveaway.title === 'Weekend Rider Gear Raffle',
     );
-    const internalSurpriseTitle = 'INTERNAL_SURPRISE_TITLE_MUST_NOT_LEAK';
-    const surprise = toPublicPrizePresentation({
-      disclosure: 'surprise',
-      publicTitle: internalSurpriseTitle,
-    });
 
     return {
       completedPublicPrize:
@@ -256,9 +250,6 @@ async function inspectPublicPrizes() {
             (pool) => !('title' in pool) && !('items' in pool),
           ),
       ),
-      surpriseRedacted:
-        surprise.title === 'Surprise prize' &&
-        !JSON.stringify(surprise).includes(internalSurpriseTitle),
     };
   } finally {
     await backend.disconnect();
@@ -281,15 +272,13 @@ inspectPublicPrizes()
   if (
     $publicPrizeInspection.completedPublicPrize -ne 'Cafe Classico Helmet' -or
     $publicPrizeInspection.ongoingPublicPrize -ne 'Weekend Rider Gear Package' -or
-    $publicPrizeInspection.publicDtoOmitsInternalFields -ne $true -or
-    $publicPrizeInspection.surpriseRedacted -ne $true
+    $publicPrizeInspection.publicDtoOmitsInternalFields -ne $true
   ) {
     throw 'Public prize presentation verification failed.'
   }
 
   Write-Output "completed public prize: $($publicPrizeInspection.completedPublicPrize)"
   Write-Output "ongoing public prize: $($publicPrizeInspection.ongoingPublicPrize)"
-  Write-Output 'surprise redaction check: internal title absent from serialized public DTO'
 } finally {
   try {
     if (Test-Path -LiteralPath $temporaryEnvFile) {
@@ -317,18 +306,27 @@ The allowed preflight states are:
 Every other result is partial or conflicting and stops before the write command.
 Postflight accepts only the exact second state.
 
-The final three output lines are read-only public-contract checks:
+The final two output lines are read-only checks of the two revealed production
+samples:
 
 ```text
 completed public prize: Cafe Classico Helmet
 ongoing public prize: Weekend Rider Gear Package
-surprise redaction check: internal title absent from serialized public DTO
 ```
+
+These revealed samples cannot prove surprise-prize redaction. That contract is
+covered by
+`tests/prisma-integration/sample-raffle-provisioner.integration.test.ts`, which
+creates a disposable surprise raffle through the production backend, publishes
+it, and reads it through `listPublicGiveawaysForEvent`. The test requires the
+exact `{ disclosure: "surprise", title: "Surprise prize" }` presentation, no
+description or image, no internal pool/item fields, and no serialized sentinel
+internal or hidden public copy.
 
 ## Safe receipt
 
 The provisioner command emits one JSON receipt. The enclosing runbook then emits
-the three read-only public-contract lines above. Neither output contains
+the two read-only public-contract lines above. Neither output contains
 credentials, connection strings, sessions, claim payloads, or encryption keys.
 Example receipt without live IDs:
 

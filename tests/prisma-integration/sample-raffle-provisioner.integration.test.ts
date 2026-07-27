@@ -227,6 +227,61 @@ describe("guarded Prisma sample raffle provisioner", () => {
 
       const publicBackend = PrismaTambikeBackend.create(databaseUrl);
       try {
+        const surprise = await publicBackend.createGiveaway(
+          fixture.organizerSession,
+          fixture.eventId,
+          {
+            eventId: fixture.eventId,
+            title: "Disposable Surprise Raffle",
+            kind: "raffle",
+            entryMode: "opt_in",
+            maxEntriesPerRider: 1,
+            mechanics: "Registered riders may enter this disposable surprise raffle once.",
+            terms: "Disposable Prisma redaction contract only.",
+            timeZone: "Asia/Manila",
+            winnerLimits: { perRider: 1, total: 1 },
+            organizerAttestation: true,
+            publicVisibility: "event_page",
+            presenceVerificationRequired: false,
+            eligibilityGroups: [
+              {
+                id: "surprise-active-pass",
+                label: "Active RSVP and pass",
+                weight: 1,
+                conditions: [{ source: "active_rsvp_pass" }],
+              },
+            ],
+            prizePools: [
+              {
+                id: "surprise-prize-pool",
+                title: "SENTINEL_INTERNAL_POOL_TITLE",
+                awardMode: "random_draw",
+                fulfilmentMode: "onsite",
+                publicPresentation: {
+                  disclosure: "surprise",
+                  title: "SENTINEL_HIDDEN_PUBLIC_TITLE",
+                  description: "SENTINEL_HIDDEN_PUBLIC_DESCRIPTION",
+                },
+                inventory: { kind: "finite", quantity: 1 },
+                items: [{ title: "SENTINEL_INTERNAL_ITEM_TITLE" }],
+              },
+            ],
+          },
+        );
+        await publicBackend.submitGiveawayForReview(
+          fixture.organizerSession,
+          surprise.id,
+        );
+        await publicBackend.reviewGiveawayCompliance(
+          fixture.adminSession,
+          surprise.id,
+          { decision: "approved" },
+        );
+        await publicBackend.openGiveaway(
+          fixture.organizerSession,
+          surprise.id,
+        );
+
         const publicGiveaways = await publicBackend.listPublicGiveawaysForEvent(
           fixture.eventId,
         );
@@ -235,6 +290,9 @@ describe("guarded Prisma sample raffle provisioner", () => {
         );
         const ongoingPublic = publicGiveaways.find(
           ({ giveaway }) => giveaway.id === first.ongoing.giveawayId,
+        );
+        const surprisePublic = publicGiveaways.find(
+          ({ giveaway }) => giveaway.id === surprise.id,
         );
 
         expect(completedPublic?.giveaway.prizePools).toEqual([
@@ -259,6 +317,36 @@ describe("guarded Prisma sample raffle provisioner", () => {
             expect(prizePool).not.toHaveProperty("title");
             expect(prizePool).not.toHaveProperty("items");
           }
+        }
+
+        expect(surprisePublic?.giveaway.prizePools).toHaveLength(1);
+        expect(
+          surprisePublic?.giveaway.prizePools[0]?.presentation,
+        ).toEqual({
+          disclosure: "surprise",
+          title: "Surprise prize",
+        });
+        expect(
+          surprisePublic?.giveaway.prizePools[0]?.presentation,
+        ).not.toHaveProperty("description");
+        expect(
+          surprisePublic?.giveaway.prizePools[0]?.presentation,
+        ).not.toHaveProperty("image");
+        expect(surprisePublic?.giveaway.prizePools[0]).not.toHaveProperty(
+          "title",
+        );
+        expect(surprisePublic?.giveaway.prizePools[0]).not.toHaveProperty(
+          "items",
+        );
+        const serializedSurprise = JSON.stringify(surprisePublic);
+        expect(serializedSurprise).not.toContain('"items"');
+        for (const hiddenValue of [
+          "SENTINEL_INTERNAL_POOL_TITLE",
+          "SENTINEL_INTERNAL_ITEM_TITLE",
+          "SENTINEL_HIDDEN_PUBLIC_TITLE",
+          "SENTINEL_HIDDEN_PUBLIC_DESCRIPTION",
+        ]) {
+          expect(serializedSurprise).not.toContain(hiddenValue);
         }
       } finally {
         await publicBackend.disconnect();
