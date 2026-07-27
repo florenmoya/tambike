@@ -6,6 +6,7 @@ import {
   createPrismaSampleRaffleProvisioner,
   provisionSampleRaffles,
   SampleRaffleProvisioningError,
+  productionSampleRaffleManifest,
   toSampleRaffleCliErrorCode,
   validateDirectSampleRaffleLockUrl,
   type PrismaSampleRaffleProvisioner,
@@ -20,6 +21,7 @@ export interface SampleRaffleCliOptions {
   createProvisioner?: (
     runtimeDatabaseUrl: string,
     directDatabaseUrl: string,
+    manifest: typeof productionSampleRaffleManifest,
   ) => PrismaSampleRaffleProvisioner | Promise<PrismaSampleRaffleProvisioner>;
   provision?: typeof provisionSampleRaffles;
 }
@@ -66,7 +68,7 @@ export async function runSampleRaffleCli(options: SampleRaffleCliOptions = {}) {
 
   const provisioner = await (
     options.createProvisioner ?? createPrismaSampleRaffleProvisioner
-  )(runtimeDatabaseUrl, directDatabaseUrl);
+  )(runtimeDatabaseUrl, directDatabaseUrl, productionSampleRaffleManifest);
   try {
     const receipt = await (options.provision ?? provisionSampleRaffles)(
       {
@@ -79,6 +81,7 @@ export async function runSampleRaffleCli(options: SampleRaffleCliOptions = {}) {
         directLockPresent: true,
       },
       provisioner.dependencies,
+      productionSampleRaffleManifest,
     );
     (options.write ?? console.log)(JSON.stringify(receipt));
     return receipt;

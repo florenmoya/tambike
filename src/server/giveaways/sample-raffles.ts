@@ -485,6 +485,7 @@ async function disconnectAll(steps: Array<() => Promise<void>>) {
 export function createPrismaSampleRaffleProvisioner(
   runtimeDatabaseUrl: string,
   directDatabaseUrl: string,
+  manifest: SampleRaffleManifest = productionSampleRaffleManifest,
 ): PrismaSampleRaffleProvisioner {
   const runtimeTarget = parsePostgresDatabaseUrl(runtimeDatabaseUrl, "DATABASE_TARGET_REQUIRED");
   const directTarget = parsePostgresDatabaseUrl(
@@ -521,9 +522,7 @@ export function createPrismaSampleRaffleProvisioner(
     return finishPromise;
   };
 
-  const inspectTarget = async (
-    manifest: SampleRaffleManifest,
-  ): Promise<SampleRaffleTargetInspection> => {
+  const inspectTarget = async (): Promise<SampleRaffleTargetInspection> => {
     const [event, dedicatedWinner, campaigns] = await Promise.all([
       inspectionPrisma.event.findUnique({
         where: { id: manifest.eventId },
@@ -637,9 +636,10 @@ export function createPrismaSampleRaffleProvisioner(
   const dependencies: SampleRaffleProvisionerDependencies = {
     inspectTarget,
     async acquireLock() {
-      await inspectionPrisma.$queryRaw(
-        Prisma.sql`SELECT pg_advisory_lock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0))`,
+      const rows = await inspectionPrisma.$queryRaw<Array<{ locked: string }>>(
+        Prisma.sql`SELECT pg_advisory_lock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0))::text AS locked`,
       );
+      if (rows.length !== 1) throw new Error("ADVISORY_LOCK_ACQUISITION_FAILED");
       lockHeld = true;
       return { id: SAMPLE_RAFFLE_LOCK_KEY };
     },
