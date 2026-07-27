@@ -1,7 +1,7 @@
 # Public Raffle Prize Presentation Design
 
 **Date:** July 28, 2026
-**Status:** Approved direction; awaiting written-spec review
+**Status:** Approved
 
 ## Goal
 
@@ -94,6 +94,11 @@ They do not reuse rider-owned `MotorcyclePhoto` records.
 The existing JPEG, PNG, and WebP validation, 8 MiB upload ceiling, image
 normalization, S3 storage adapter, and cleanup pattern may be extracted and
 reused. Arbitrary remote image URLs are not accepted.
+
+Persisted prize-pool IDs remain stable across organizer configuration saves.
+The configuration writer synchronizes existing pools instead of deleting and
+recreating every pool, so a finalized image cannot become detached from the
+pool it belongs to.
 
 When a pool changes to surprise:
 
@@ -190,6 +195,11 @@ prize identity through their existing authenticated, scoped DTOs.
 
 The server performs redaction before serialization. Client components never
 receive hidden prize data and are not responsible for concealing it.
+
+Prize-image delivery applies the same campaign-visibility check as the public
+raffle DTO. Event-page images may be publicly cached. Images limited to
+registered or eligible riders are private and are never served to an
+unauthorized request.
 
 ## Public event-page design
 
