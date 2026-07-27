@@ -99,6 +99,7 @@ function partialInspection(): SampleRaffleTargetInspection {
       title: COMPLETED_SAMPLE_RAFFLE_TITLE,
       state: "open",
       winnerCount: 0,
+      currentAwards: [],
     }],
   };
 }
@@ -210,6 +211,8 @@ describe("sample raffle provisioner safety", () => {
           adminPassword: "runtime-only",
           winnerPassword: "runtime-only",
           drawEncryptionKeyPresent: true,
+          databaseTargetPresent: true,
+          directLockPresent: true,
         },
         fakeDependencies(),
       ),
@@ -235,7 +238,7 @@ describe("sample raffle provisioner safety", () => {
     delete input[field];
     const dependencies = fakeDependencies();
 
-    await expect(provisionSampleRaffles(input as SampleRaffleProvisioningInput, dependencies))
+    await expect(provisionSampleRaffles(input as unknown as SampleRaffleProvisioningInput, dependencies))
       .rejects.toMatchObject({ code });
     expect(dependencies.calls).toEqual([]);
   });
