@@ -239,6 +239,36 @@ describe("giveaway input validation", () => {
     expect(createGiveawaySchema.safeParse(input).success).toBe(false);
   });
 
+  test("rejects duplicate prize-pool IDs before persistence", () => {
+    const pool = createValidGiveawayInput().prizePools[0];
+    const input = {
+      ...createValidGiveawayInput(),
+      prizePools: [
+        pool,
+        {
+          ...pool,
+          title: "Second logical pool",
+          publicPresentation: {
+            disclosure: "revealed",
+            title: "Second public prize",
+          },
+        },
+      ],
+    };
+
+    const result = createGiveawaySchema.safeParse(input);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["prizePools"],
+          message: "DUPLICATE_PRIZE_POOL_ID",
+        }),
+      );
+    }
+  });
+
   test.each(["random_draw", "first_come", "manual_selection"])(
     "accepts %s pools only when finite item rows match inventory quantity",
     (awardMode) => {

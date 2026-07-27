@@ -176,7 +176,7 @@ const giveawayFieldsSchema = z.object({
 function addCrossFieldIssues(
   input: {
     eligibilityGroups?: Array<{ id: string }>;
-    prizePools?: Array<{ eligibilityGroupIds?: string[] }>;
+    prizePools?: Array<{ id: string; eligibilityGroupIds?: string[] }>;
     entryOpensAt?: string;
     entryClosesAt?: string;
     drawAt?: string | null;
@@ -184,6 +184,17 @@ function addCrossFieldIssues(
   },
   context: z.RefinementCtx,
 ) {
+  if (input.prizePools) {
+    const poolIds = input.prizePools.map((pool) => pool.id);
+    if (new Set(poolIds).size !== poolIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["prizePools"],
+        message: "DUPLICATE_PRIZE_POOL_ID",
+      });
+    }
+  }
+
   const hasPrizePoolGroupReferences = input.prizePools?.some(
     (pool) => (pool.eligibilityGroupIds?.length ?? 0) > 0,
   );
