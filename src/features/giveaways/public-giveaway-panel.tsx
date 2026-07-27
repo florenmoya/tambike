@@ -213,7 +213,6 @@ function OpenGiveawaySpotlight({
           viewerRole,
         }) ? (
           <div className={styles.entryRow}>
-            <p>Log in with your rider account to enter while this raffle is open.</p>
             <Link className={styles.entryAction} href={giveawayEntryLoginHref(eventId)}>
               Log in to enter
             </Link>

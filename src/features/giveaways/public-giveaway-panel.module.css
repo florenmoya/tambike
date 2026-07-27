@@ -384,6 +384,11 @@
     grid-template-columns: 1fr;
   }
 
+  .cardBody {
+    gap: 0.65rem;
+    padding: 0.85rem;
+  }
+
   .schedule {
     grid-template-columns: 1fr;
   }

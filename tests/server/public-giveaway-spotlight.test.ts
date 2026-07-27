@@ -172,6 +172,7 @@ describe("public giveaway spotlight", () => {
       container.querySelector<HTMLAnchorElement>('a[href="/login?next=%2Fevents%2Fevent-1"]')
         ?.textContent,
     ).toContain("Log in to enter");
+    expect(text).not.toContain("Log in with your rider account to enter while this raffle is open.");
 
     const articles = [...container.querySelectorAll("article")];
     expect(articles[0]?.textContent).not.toContain("Verify the draw");
