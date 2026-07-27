@@ -44,6 +44,7 @@ import {
   preserveSurprisePrizePresentationDrafts,
   saveOrganizerGiveawayConfiguration,
   submitCampaignCode,
+  toOrganizerGiveawaySaveUiState,
   toOrganizerGiveawayConfigurationPrizePools,
   toOrganizerGiveawayEditorDraft,
   toOrganizerPrizePoolDisclosureDraft,
@@ -593,6 +594,10 @@ describe("organizer giveaway lifecycle route", () => {
         readWorkspace,
       });
 
+      expect(saved.status).toBe("refreshed");
+      if (saved.status !== "refreshed") {
+        throw new Error("Expected the authoritative workspace refresh to succeed.");
+      }
       expect(saved.giveawayId).toBe("giveaway-1");
       expect(saved.draft.prizePools.map((pool) => pool.id)).toEqual(serverPoolIds);
       expect(saved.persistedPrizePoolIds).toEqual(serverPoolIds);
@@ -603,6 +608,163 @@ describe("organizer giveaway lifecycle route", () => {
       } else {
         expect(create).toHaveBeenCalledOnce();
         expect(update).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  test.each([
+    {
+      operation: "create",
+      campaignId: undefined,
+      savedGiveawayId: "giveaway-created",
+      poolId: "client-pool-new",
+    },
+    {
+      operation: "update",
+      campaignId: "giveaway-1",
+      savedGiveawayId: "giveaway-1",
+      poolId: "server-pool-existing",
+    },
+  ] as const)(
+    "$operation keeps the saved campaign identity and blocks image edits when the post-save refresh fails",
+    async ({ campaignId, savedGiveawayId, poolId }) => {
+      const dom = new JSDOM("<div id=\"root\"></div>", {
+        url: "http://localhost/organizer/events/event-1/giveaways",
+      });
+      vi.stubGlobal("window", dom.window);
+      vi.stubGlobal("document", dom.window.document);
+      vi.stubGlobal("navigator", dom.window.navigator);
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const root = createRoot(dom.window.document.getElementById("root")!);
+      const draft = toOrganizerGiveawayEditorDraft(
+        organizerWorkspaceWithPools([
+          {
+            id: poolId,
+            title: "Private inventory",
+            awardMode: "random_draw",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Private Ducati Helmet" }],
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Weekend Rider Gear Package",
+            },
+          },
+        ]),
+      );
+      const create = vi.fn(async () => ({
+        ok: true as const,
+        data: { id: savedGiveawayId },
+      }));
+      const update = vi.fn(async () => ({
+        ok: true as const,
+        data: undefined,
+      }));
+      const readWorkspace = vi.fn(async () => {
+        if (campaignId) {
+          throw new Error("network unavailable after update");
+        }
+        return {
+          ok: false as const,
+          error: "ACTION_FAILED",
+        };
+      });
+
+      function Harness() {
+        const [ui, setUi] = React.useState<{
+          selectedCampaignId: string | null;
+          notice: string;
+          prizeMediaAvailable: boolean;
+        }>({
+          selectedCampaignId: campaignId ?? null,
+          notice:
+            "Campaign policy was not saved. Check required fields, prize inventory, and allowed campaign stage.",
+          prizeMediaAvailable: true,
+        });
+
+        const save = async () => {
+          try {
+            const outcome = await saveOrganizerGiveawayConfiguration(
+              {
+                eventId: "event-1",
+                campaignId,
+                draft,
+              },
+              {
+                create,
+                update,
+                readWorkspace,
+              },
+            );
+            setUi(toOrganizerGiveawaySaveUiState(outcome));
+          } catch {
+            setUi((current) => ({
+              ...current,
+              notice:
+                "Campaign policy was not saved. Check required fields, prize inventory, and allowed campaign stage.",
+            }));
+          }
+        };
+
+        const builderProps = {
+          draft,
+          onChange: () => undefined,
+          giveawayId: ui.selectedCampaignId ?? undefined,
+          persistedPrizePoolIds: new Set([poolId]),
+          prizeMediaAvailable: ui.prizeMediaAvailable,
+          disabled: false,
+          onPrizeMediaChanged: () => undefined,
+        } as unknown as React.ComponentProps<typeof PrizePoolBuilder>;
+
+        return React.createElement(
+          React.Fragment,
+          null,
+          React.createElement("button", { type: "button", onClick: save }, "Save"),
+          React.createElement(
+            "p",
+            { "data-testid": "selected-campaign" },
+            ui.selectedCampaignId ?? "",
+          ),
+          React.createElement("p", { role: "status" }, ui.notice),
+          React.createElement(PrizePoolBuilder, builderProps),
+        );
+      }
+
+      try {
+        await React.act(async () => {
+          root.render(React.createElement(Harness));
+        });
+        const button = dom.window.document.querySelector("button")!;
+
+        await React.act(async () => {
+          button.click();
+        });
+
+        expect(
+          dom.window.document.querySelector('[data-testid="selected-campaign"]')
+            ?.textContent,
+        ).toBe(savedGiveawayId);
+        expect(
+          dom.window.document.querySelector('[role="status"]')?.textContent,
+        ).toBe(
+          "Campaign saved, but the latest prize details could not be refreshed. Reload before editing prize images.",
+        );
+        expect(dom.window.document.body.textContent).not.toContain(
+          "Campaign policy was not saved",
+        );
+        expect(dom.window.document.body.textContent).toContain(
+          "Reload the latest prize details before editing public images.",
+        );
+        expect(dom.window.document.body.textContent).not.toContain("Upload image");
+        expect(create).toHaveBeenCalledTimes(campaignId ? 0 : 1);
+        expect(update).toHaveBeenCalledTimes(campaignId ? 1 : 0);
+        expect(readWorkspace).toHaveBeenCalledOnce();
+      } finally {
+        await React.act(async () => {
+          root.unmount();
+        });
+        vi.unstubAllGlobals();
+        dom.window.close();
       }
     },
   );
