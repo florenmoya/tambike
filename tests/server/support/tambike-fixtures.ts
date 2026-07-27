@@ -56,7 +56,7 @@ export async function createPublishedTestEvent(
   const event = await backend.createEventDraft(actors.organizer.sessionToken, {
     title: "Fixture Published Event",
     type: "Bike Night",
-    date: "Sat · July 25",
+    date: "July 25, 2099",
     time: "6:00 PM - 9:00 PM",
     expectedRiders: 40,
     perkPreview: "Fixture check-in sticker",

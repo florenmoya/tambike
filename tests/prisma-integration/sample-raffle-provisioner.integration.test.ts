@@ -25,6 +25,7 @@ const completedAuditActions = [
   "GIVEAWAY_COMPLIANCE_REVIEWED",
   "GIVEAWAY_OPENED",
   "GIVEAWAY_MANUAL_ENTRY_GRANTED",
+  "GIVEAWAY_ENTRY_RECONCILED",
   "GIVEAWAY_LOCKED",
   "GIVEAWAY_MANUAL_AWARD_SELECTED",
   "GIVEAWAY_DRAW_PUBLISHED",
@@ -159,7 +160,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         select: {
           status: true,
           awards: {
-            where: { isCurrent: true },
+            orderBy: { id: "asc" },
             select: {
               status: true,
               publicWinnerAlias: true,
@@ -173,6 +174,10 @@ describe("guarded Prisma sample raffle provisioner", () => {
           },
         },
       });
+      const dedicatedWinner = await prisma.user.findUniqueOrThrow({
+        where: { email: manifest.winnerEmail },
+        select: { id: true },
+      });
       expect(completed).toMatchObject({
         status: "completed",
         awards: [{
@@ -182,11 +187,16 @@ describe("guarded Prisma sample raffle provisioner", () => {
         }],
       });
       expect(completed.awards).toHaveLength(1);
-      expect(fixture.riders.map((rider) => rider.userId)).not.toContain(
-        completed.awards[0].winnerUserId,
-      );
+      expect(completed.awards.map((award) => award.winnerUserId)).toEqual([
+        dedicatedWinner.id,
+      ]);
+      for (const rider of fixture.riders) {
+        expect(completed.awards.map((award) => award.winnerUserId)).not.toContain(
+          rider.userId,
+        );
+      }
       expect(completed.auditEvents.map((event) => event.action)).toEqual(
-        expect.arrayContaining([...completedAuditActions]),
+        completedAuditActions,
       );
 
       const ongoing = await prisma.eventGiveaway.findUniqueOrThrow({
@@ -209,7 +219,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         awards: [],
       });
       expect(ongoing.auditEvents.map((event) => event.action)).toEqual(
-        expect.arrayContaining([...ongoingAuditActions]),
+        ongoingAuditActions,
       );
     } finally {
       if (previousEncryptionKey === undefined) {
