@@ -1,7 +1,35 @@
-import { describe, expect, test } from "vitest";
+// @vitest-environment jsdom
+
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { GiveawayState, PublicEventGiveaway } from "../../src/features/giveaways/types";
+import { PublicGiveawayPanel } from "../../src/features/giveaways/public-giveaway-panel";
 import { groupPublicGiveawaysForSpotlight } from "../../src/features/giveaways/public-giveaway-spotlight-state";
+import { listPublicGiveawaysForEventAction } from "../../src/server/giveaway-actions";
+
+vi.mock("../../src/server/giveaway-actions", () => ({
+  listPublicGiveawaysForEventAction: vi.fn(),
+}));
+
+const roots: Root[] = [];
+
+beforeEach(() => {
+  (
+    globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT: boolean;
+    }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+afterEach(() => {
+  for (const root of roots.splice(0)) {
+    act(() => root.unmount());
+  }
+  document.body.replaceChildren();
+  vi.clearAllMocks();
+});
 
 function campaign(id: string, state: GiveawayState): PublicEventGiveaway {
   return {
@@ -56,5 +84,88 @@ describe("public giveaway spotlight", () => {
     expect(groups.primaryOpen).toBeUndefined();
     expect(groups.completed.map(({ giveaway }) => giveaway.id)).toEqual(["completed-1"]);
     expect(groups.additional.map(({ giveaway }) => giveaway.id)).toEqual(["scheduled-1"]);
+  });
+
+  test("renders the open raffle first and keeps winner identity and proof secondary", async () => {
+    const completed = campaign("Completed helmet raffle", "completed");
+    completed.giveaway.prizePools = [
+      {
+        id: "helmet-pool",
+        title: "Helmet prize",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventoryKind: "finite",
+        itemQuantity: 1,
+        presenceVerificationRequired: false,
+        items: [{ id: "helmet", title: "Tambike helmet" }],
+      },
+    ];
+    completed.results = [{ prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." }];
+    completed.drawVerifications = [
+      {
+        giveawayId: "Completed helmet raffle",
+        commitment: "commitment-value",
+        snapshotDigest: "snapshot-digest",
+        snapshotCount: 12,
+        algorithmVersion: "v1",
+        drawDigest: "draw-digest",
+        seed: "revealed-seed",
+      },
+    ];
+
+    const open = campaign("Open jacket raffle", "open");
+    open.giveaway.prizePools = [
+      {
+        id: "jacket-pool",
+        title: "Jacket prize",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventoryKind: "finite",
+        itemQuantity: 1,
+        presenceVerificationRequired: false,
+        items: [{ id: "jacket", title: "Tambike riding jacket" }],
+      },
+    ];
+    open.giveaway.entryOpensAt = "2026-07-27T00:00:00.000Z";
+    open.giveaway.entryClosesAt = "2026-07-30T00:00:00.000Z";
+
+    vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
+      ok: true,
+      code: "OK",
+      data: [completed, open],
+    });
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    await act(async () => {
+      root.render(createElement(PublicGiveawayPanel, { eventId: "event-1" }));
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("See what is open and who won recently.");
+    });
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Open jacket raffle")).toBeLessThan(
+      text.indexOf("Completed helmet raffle"),
+    );
+    expect(text).toContain("Open now");
+    expect(text).toContain("Tambike riding jacket");
+    expect(text).toContain("Recent winner");
+    expect(text).toContain("Rider M.");
+    expect(text).toContain("Winner chose to share this alias.");
+    expect(text).toContain("Verify the draw");
+    expect(
+      container.querySelector<HTMLAnchorElement>('a[href="/login?next=%2Fevents%2Fevent-1"]')
+        ?.textContent,
+    ).toContain("Log in to enter");
+
+    const articles = [...container.querySelectorAll("article")];
+    expect(articles[0]?.textContent).not.toContain("Verify the draw");
+    expect(articles[0]?.textContent).not.toContain("Rider M.");
+    expect(articles[1]?.querySelector("details summary")?.textContent).toBe("How it worked");
   });
 });

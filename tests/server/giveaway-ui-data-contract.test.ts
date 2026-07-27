@@ -686,18 +686,12 @@ describe("giveaway UI data contracts", () => {
 });
 
 describe("giveaway UI data action contracts", () => {
-  test("renders published draw receipts and a rider-controlled winner alias", async () => {
-    const [publicPanel, riderPanel] = await Promise.all([
-      readFile(new URL("../../src/features/giveaways/public-giveaway-panel.tsx", import.meta.url), "utf8"),
-      readFile(
-        new URL("../../src/features/giveaways/rider-giveaway-status-panel.tsx", import.meta.url),
-        "utf8",
-      ),
-    ]);
+  test("keeps the rider draw receipt and winner-alias controls", async () => {
+    const riderPanel = await readFile(
+      new URL("../../src/features/giveaways/rider-giveaway-status-panel.tsx", import.meta.url),
+      "utf8",
+    );
 
-    expect(publicPanel).toContain("Draw receipts");
-    expect(publicPanel).toContain("drawVerifications");
-    expect(publicPanel).not.toContain("opaque entry reference");
     expect(riderPanel).toContain("Your draw receipt");
     expect(riderPanel).toContain("setGiveawayWinnerPublicationAction");
     expect(riderPanel).toContain("Publish alias");

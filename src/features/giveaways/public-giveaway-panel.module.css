@@ -1,0 +1,411 @@
+.section {
+  --raffle-asphalt: #08090b;
+  --raffle-panel: #141318;
+  --raffle-amber: #ffbe45;
+  --raffle-green: #5bdd91;
+  --raffle-chrome: #e7e8ea;
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1.1rem, 2vw, 1.5rem);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.9rem;
+  background: rgba(18, 17, 19, 0.76);
+}
+
+.heading {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.heading > span,
+.prizeLabel,
+.openStatus,
+.winnerHeader,
+.compactStatus {
+  color: var(--raffle-amber);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.heading h2 {
+  max-width: 28ch;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.spotlightGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 0.85rem;
+  align-items: stretch;
+}
+
+.spotlightGrid > :only-child {
+  grid-column: 1 / -1;
+}
+
+.openCard {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+  border: 1px solid color-mix(in srgb, var(--raffle-amber) 38%, transparent);
+  background: var(--raffle-asphalt);
+}
+
+.openCard::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--raffle-amber);
+  content: "";
+}
+
+.winnerCard {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--raffle-green) 30%, transparent);
+  border-top: 3px solid var(--raffle-green);
+  background: var(--raffle-panel);
+}
+
+.cardBody {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  height: 100%;
+  padding: clamp(1rem, 2.4vw, 1.35rem);
+}
+
+.openStatus,
+.winnerHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.openStatus svg,
+.winnerHeader svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.winnerHeader {
+  color: var(--raffle-green);
+}
+
+.campaignTitle {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #fff;
+  font-size: clamp(1.15rem, 2.5vw, 1.65rem);
+  font-weight: 900;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.prizeLabel {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.prizeTitle,
+.winnerPrize,
+.compactPrize {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--raffle-chrome);
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.metadata span {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.schedule {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.schedule > div {
+  min-width: 0;
+  border-left: 2px solid rgba(255, 190, 69, 0.46);
+  padding-left: 0.6rem;
+}
+
+.schedule dt {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.schedule dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.entryRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-top: 1px solid rgba(255, 190, 69, 0.22);
+  padding-top: 0.85rem;
+}
+
+.entryRow p {
+  flex: 1 1 16rem;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.entryAction {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--raffle-amber) 60%, transparent);
+  border-radius: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: var(--raffle-amber);
+  color: #15100a;
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.entryAction:hover {
+  background: #ffd07a;
+}
+
+.entryAction:focus-visible,
+.details summary:focus-visible,
+.receipt summary:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+.winnerList {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.winnerAlias {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--raffle-chrome);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-size: clamp(1.25rem, 2.2vw, 1.5rem);
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.winnerPrivacy {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.details,
+.receipt {
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 0.75rem;
+}
+
+.details summary,
+.receipt summary {
+  display: flex;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.details summary::-webkit-details-marker,
+.receipt summary::-webkit-details-marker {
+  display: none;
+}
+
+.details summary svg,
+.receipt summary svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  transition: transform 160ms ease;
+}
+
+.details[open] > summary svg,
+.receipt[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.detailsBody {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.35rem 0 0.25rem;
+}
+
+.detailsBody p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.proofList {
+  display: grid;
+  gap: 0.55rem;
+  padding-top: 0.35rem;
+}
+
+.receipt {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  padding: 0.3rem 0.65rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.receipt dl {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.35rem 0 0.55rem;
+}
+
+.receipt dt {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.receipt dd {
+  margin: 0.15rem 0 0;
+  overflow-wrap: anywhere;
+  color: rgba(231, 232, 234, 0.82);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.compactGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 0.7rem;
+}
+
+.compactCard {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 0.7rem;
+  padding: 1rem;
+  background: rgba(8, 9, 11, 0.58);
+}
+
+.compactStatus {
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.compactCard .campaignTitle {
+  font-size: 1rem;
+}
+
+.compactWinner {
+  display: grid;
+  gap: 0.35rem;
+  border-left: 2px solid var(--raffle-green);
+  padding-left: 0.65rem;
+}
+
+.compactWinner .winnerAlias {
+  font-size: 1rem;
+}
+
+.loadingSpotlight {
+  display: flex;
+  min-height: 7rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.85rem;
+}
+
+.loadingSpotlight svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--raffle-amber);
+  animation: raffle-spin 900ms linear infinite;
+}
+
+@keyframes raffle-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 899px) {
+  .spotlightGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section *,
+  .section *::before,
+  .section *::after {
+    scroll-behavior: auto;
+    transition-duration: 0.01ms;
+  }
+
+  .loadingSpotlight svg {
+    animation: none;
+  }
+}

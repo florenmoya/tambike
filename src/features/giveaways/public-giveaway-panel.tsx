@@ -1,7 +1,7 @@
 "use client";
 
+import { ChevronDown, CircleCheckBig, LoaderCircle, TicketCheck } from "lucide-react";
 import Link from "next/link";
-import { Gift, LoaderCircle, ShieldCheck, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type {
@@ -16,6 +16,8 @@ import {
   giveawayEntryModeLabel,
   giveawayStateLabel,
 } from "./giveaway-surface-state";
+import { groupPublicGiveawaysForSpotlight } from "./public-giveaway-spotlight-state";
+import styles from "./public-giveaway-panel.module.css";
 
 type PublicGiveawayPanelProps = {
   eventId: string;
@@ -32,12 +34,11 @@ type PublicGiveawayLoadResult = {
   campaigns: PublicEventGiveaway[];
 };
 
-const awardModeLabels = {
-  random_draw: "Random draw",
-  first_come: "First come",
-  guaranteed: "Guaranteed",
-  manual_selection: "Organizer selection",
-} as const;
+type CampaignPresentationProps = {
+  campaign: PublicEventGiveaway;
+  eventId: string;
+  viewerRole: PublicGiveawayViewerRole;
+};
 
 export function giveawayEntryLoginHref(eventId: string) {
   return `/login?next=${encodeURIComponent(`/events/${encodeURIComponent(eventId)}`)}`;
@@ -89,167 +90,231 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
     return null;
   }
 
+  const groups = groupPublicGiveawaysForSpotlight(campaigns);
+  const featuredCompleted = groups.completed[0];
+  const compactCampaigns = [
+    ...groups.additional,
+    ...groups.completed.slice(featuredCompleted ? 1 : 0),
+  ];
+
   return (
     <section
-      className="buy-panel"
+      className={styles.section}
       aria-busy={loadState === "loading"}
       aria-labelledby={`event-giveaways-${eventId}`}
     >
-      <div className="buy-section-title">
-        <span>Event giveaways</span>
-        <h2 id={`event-giveaways-${eventId}`}>Prize route</h2>
-      </div>
+      <header className={styles.heading}>
+        <span>Raffles &amp; prizes</span>
+        <h2 id={`event-giveaways-${eventId}`}>See what is open and who won recently.</h2>
+      </header>
 
       {loadState === "loading" ? (
-        <div className="flex items-center gap-2 py-2 text-sm text-white/72" role="status">
-          <LoaderCircle className="size-4 animate-spin text-[#ffbe45]" aria-hidden="true" />
-          Loading giveaway details…
+        <div className={styles.loadingSpotlight} role="status">
+          <LoaderCircle aria-hidden="true" />
+          Loading raffles…
         </div>
       ) : (
-        <div className="grid gap-3">
-          {campaigns.map(({ giveaway, results, drawVerifications }) => {
-            const entryOpen = formatGiveawayMoment(giveaway.entryOpensAt, giveaway.timeZone);
-            const entryClose = formatGiveawayMoment(giveaway.entryClosesAt, giveaway.timeZone);
-            const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
-
-            return (
-              <article
-                key={giveaway.id}
-                className="overflow-hidden rounded-xl border border-white/10 bg-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 px-4 py-4">
-                  <div className="min-w-0">
-                    <div className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.13em] text-[#ffcf74]">
-                      <Gift className="size-3.5" aria-hidden="true" />
-                      {giveaway.kind}
-                    </div>
-                    <h3 className="m-0 text-lg font-black tracking-tight text-white">{giveaway.title}</h3>
-                    {giveaway.sponsorDisclosure ? (
-                      <p className="mt-2 text-sm text-white/70">{giveaway.sponsorDisclosure}</p>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-[0.1em]">
-                    <span className="rounded-full border border-[#ffbe45]/35 bg-[#ffbe45]/10 px-2.5 py-1 text-[#ffcf74]">
-                      {giveawayStateLabel(giveaway.state)}
-                    </span>
-                    <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-white/72">
-                      {giveawayEntryModeLabel(giveaway.entryMode)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 px-4 py-4">
-                  {entryOpen || entryClose || drawAt ? (
-                    <dl className="grid gap-2 text-sm sm:grid-cols-3">
-                      {entryOpen ? <ScheduleMoment label="Entry opens" value={entryOpen} /> : null}
-                      {entryClose ? <ScheduleMoment label="Entry closes" value={entryClose} /> : null}
-                      {drawAt ? <ScheduleMoment label="Draw" value={drawAt} /> : null}
-                    </dl>
-                  ) : null}
-
-                  {canOfferPublicGiveawayEntryLogin({
-                    state: giveaway.state,
-                    entryMode: giveaway.entryMode,
-                    viewerRole,
-                  }) ? (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#ffbe45]/30 bg-[#ffbe45]/[0.06] px-3 py-3">
-                      <p className="m-0 text-sm text-white/72">
-                        Log in with your rider account to enter while this giveaway is open.
-                      </p>
-                      <Link
-                        className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#ffbe45]/45 bg-[#ffbe45]/10 px-3 text-sm font-bold text-[#ffdc97] transition hover:bg-[#ffbe45]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffbe45]"
-                        href={giveawayEntryLoginHref(eventId)}
-                      >
-                        Log in to enter
-                      </Link>
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-[0.13em] text-white/56">
-                      Prize pools
-                    </span>
-                    <ul className="grid list-none gap-2 p-0 sm:grid-cols-2">
-                      {giveaway.prizePools.map((pool) => (
-                        <li
-                          key={pool.id}
-                          className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-3"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <strong className="text-sm font-extrabold text-white">{pool.title}</strong>
-                            <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.08em] text-white/52">
-                              {awardModeLabels[pool.awardMode]}
-                            </span>
-                          </div>
-                          <p className="mt-1 text-sm text-white/66">{prizePoolSummary(pool)}</p>
-                          {pool.presenceVerificationRequired ? (
-                            <span className="mt-2 inline-flex rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-white/55">
-                              Presence check required
-                            </span>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  {drawVerifications.length > 0 ? (
-                    <div className="rounded-lg border border-sky-300/25 bg-sky-300/[0.06] px-3 py-3">
-                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.13em] text-sky-100">
-                        <ShieldCheck className="size-3.5" aria-hidden="true" />
-                        Draw receipts
-                      </div>
-                      <p className="mb-3 text-sm text-white/68">
-                        Published fairness data for this draw. It contains no entrant list or claim credential.
-                      </p>
-                      <div className="grid gap-2">
-                        {drawVerifications.map((verification, index) => (
-                          <DrawReceipt
-                            key={`${verification.drawDigest}-${verification.seed}`}
-                            verification={verification}
-                            label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {results.length > 0 ? (
-                    <div className="rounded-lg border border-[#20b26b]/30 bg-[#20b26b]/[0.08] px-3 py-3">
-                      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.13em] text-[#8ee6b7]">
-                        <Trophy className="size-3.5" aria-hidden="true" />
-                        Published winner aliases
-                      </div>
-                      <p className="mb-3 text-sm text-white/68">
-                        Only winners who choose a public alias appear here. Everyone else remains private.
-                      </p>
-                      <ul className="grid list-none gap-2 p-0">
-                        {results.map((result) => (
-                          <li
-                            key={`${result.prizePoolTitle}-${result.winnerAlias}`}
-                            className="flex flex-wrap items-center justify-between gap-2 border-t border-[#20b26b]/20 pt-2 text-sm"
-                          >
-                            <span className="text-white/72">{result.prizePoolTitle}</span>
-                            <strong className="font-mono text-xs text-[#b9f1ce]">{result.winnerAlias}</strong>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-
-                  <details className="rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-sm">
-                    <summary className="cursor-pointer font-bold text-white/82">Mechanics and terms</summary>
-                    <div className="grid gap-3 pb-1 pt-3 text-white/70">
-                      <p>{giveaway.mechanics}</p>
-                      <p>{giveaway.terms}</p>
-                    </div>
-                  </details>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+        <>
+          <div className={styles.spotlightGrid}>
+            {groups.primaryOpen ? (
+              <OpenGiveawaySpotlight
+                campaign={groups.primaryOpen}
+                eventId={eventId}
+                viewerRole={viewerRole}
+              />
+            ) : null}
+            {featuredCompleted ? (
+              <CompletedGiveawayResult
+                campaign={featuredCompleted}
+                eventId={eventId}
+                viewerRole={viewerRole}
+              />
+            ) : null}
+          </div>
+          {compactCampaigns.length > 0 ? (
+            <div className={styles.compactGrid}>
+              {compactCampaigns.map((campaign) => (
+                <CompactGiveawayCard
+                  key={campaign.giveaway.id}
+                  campaign={campaign}
+                  eventId={eventId}
+                  viewerRole={viewerRole}
+                />
+              ))}
+            </div>
+          ) : null}
+        </>
       )}
     </section>
+  );
+}
+
+function OpenGiveawaySpotlight({
+  campaign,
+  eventId,
+  viewerRole,
+}: CampaignPresentationProps) {
+  const { giveaway } = campaign;
+  const entryOpen = formatGiveawayMoment(giveaway.entryOpensAt, giveaway.timeZone);
+  const entryClose = formatGiveawayMoment(giveaway.entryClosesAt, giveaway.timeZone);
+  const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
+
+  return (
+    <article className={styles.openCard}>
+      <div className={styles.cardBody}>
+        <div className={styles.openStatus}>
+          <TicketCheck aria-hidden="true" />
+          Open now
+        </div>
+        <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
+        <div>
+          <span className={styles.prizeLabel}>Featured prize</span>
+          <p className={styles.prizeTitle}>{primaryPrizeSummary(campaign)}</p>
+        </div>
+        <div className={styles.metadata}>
+          <span>{giveawayEntryModeLabel(giveaway.entryMode)}</span>
+        </div>
+
+        {entryOpen || entryClose || drawAt ? (
+          <dl className={styles.schedule}>
+            {entryOpen ? <ScheduleMoment label="Entry opens" value={entryOpen} /> : null}
+            {entryClose ? <ScheduleMoment label="Entry closes" value={entryClose} /> : null}
+            {drawAt ? <ScheduleMoment label="Draw" value={drawAt} /> : null}
+          </dl>
+        ) : null}
+
+        {canOfferPublicGiveawayEntryLogin({
+          state: giveaway.state,
+          entryMode: giveaway.entryMode,
+          viewerRole,
+        }) ? (
+          <div className={styles.entryRow}>
+            <p>Log in with your rider account to enter while this raffle is open.</p>
+            <Link className={styles.entryAction} href={giveawayEntryLoginHref(eventId)}>
+              Log in to enter
+            </Link>
+          </div>
+        ) : null}
+
+        <CampaignDetails
+          label="How it works"
+          mechanics={giveaway.mechanics}
+          terms={giveaway.terms}
+        />
+      </div>
+    </article>
+  );
+}
+
+function CompletedGiveawayResult({
+  campaign,
+}: CampaignPresentationProps) {
+  const { giveaway, results, drawVerifications } = campaign;
+
+  return (
+    <article className={styles.winnerCard}>
+      <div className={styles.cardBody}>
+        <div className={styles.winnerHeader}>
+          <CircleCheckBig aria-hidden="true" />
+          Recent winner
+        </div>
+        <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
+        <p className={styles.winnerPrize}>{primaryPrizeSummary(campaign)}</p>
+
+        {results.length > 0 ? (
+          <div className={styles.winnerList}>
+            {results.map((result) => (
+              <p
+                className={styles.winnerAlias}
+                key={`${result.prizePoolTitle}-${result.winnerAlias}`}
+              >
+                {result.winnerAlias}
+              </p>
+            ))}
+            <p className={styles.winnerPrivacy}>Winner chose to share this alias.</p>
+          </div>
+        ) : (
+          <p className={styles.winnerPrivacy}>Winner not publicly listed</p>
+        )}
+
+        <CampaignDetails
+          label="How it worked"
+          mechanics={giveaway.mechanics}
+          terms={giveaway.terms}
+        />
+
+        {drawVerifications.length > 0 ? (
+          <details className={styles.details}>
+            <summary>
+              Verify the draw
+              <ChevronDown aria-hidden="true" />
+            </summary>
+            <div className={styles.proofList}>
+              {drawVerifications.map((verification, index) => (
+                <DrawReceipt
+                  key={`${verification.drawDigest}-${verification.seed}`}
+                  verification={verification}
+                  label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
+                />
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function CompactGiveawayCard({
+  campaign,
+}: CampaignPresentationProps) {
+  const { giveaway, results } = campaign;
+
+  return (
+    <article className={styles.compactCard}>
+      <span className={styles.compactStatus}>{giveawayStateLabel(giveaway.state)}</span>
+      <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
+      <p className={styles.compactPrize}>{primaryPrizeSummary(campaign)}</p>
+      <div className={styles.metadata}>
+        <span>{giveawayEntryModeLabel(giveaway.entryMode)}</span>
+      </div>
+
+      {giveaway.state === "completed" && results[0] ? (
+        <div className={styles.compactWinner}>
+          <p className={styles.winnerAlias}>{results[0].winnerAlias}</p>
+          <p className={styles.winnerPrivacy}>Winner chose to share this alias.</p>
+        </div>
+      ) : null}
+
+      <CampaignDetails
+        label="How it works"
+        mechanics={giveaway.mechanics}
+        terms={giveaway.terms}
+      />
+    </article>
+  );
+}
+
+function CampaignDetails({
+  label,
+  mechanics,
+  terms,
+}: {
+  label: string;
+  mechanics: string;
+  terms: string;
+}) {
+  return (
+    <details className={styles.details}>
+      <summary>
+        {label}
+        <ChevronDown aria-hidden="true" />
+      </summary>
+      <div className={styles.detailsBody}>
+        <p>{mechanics}</p>
+        <p>{terms}</p>
+      </div>
+    </details>
   );
 }
 
@@ -269,13 +334,16 @@ function DrawReceipt({
   ] as const;
 
   return (
-    <details className="rounded-md border border-sky-200/15 bg-black/15 px-3 py-2 text-sm">
-      <summary className="cursor-pointer font-bold text-sky-50">{label}</summary>
-      <dl className="mt-3 grid gap-2">
+    <details className={styles.receipt}>
+      <summary>
+        {label}
+        <ChevronDown aria-hidden="true" />
+      </summary>
+      <dl>
         {rows.map(([rowLabel, value]) => (
-          <div key={rowLabel} className="grid gap-1">
-            <dt className="text-[10px] font-black uppercase tracking-[0.1em] text-white/48">{rowLabel}</dt>
-            <dd className="m-0 break-all font-mono text-xs text-sky-100/90">{value}</dd>
+          <div key={rowLabel}>
+            <dt>{rowLabel}</dt>
+            <dd>{value}</dd>
           </div>
         ))}
       </dl>
@@ -285,11 +353,17 @@ function DrawReceipt({
 
 function ScheduleMoment({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
-      <dt className="text-[10px] font-black uppercase tracking-[0.1em] text-white/54">{label}</dt>
-      <dd className="mt-1 text-sm font-semibold text-white/86">{value}</dd>
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
     </div>
   );
+}
+
+function primaryPrizeSummary(campaign: PublicEventGiveaway) {
+  const pool = campaign.giveaway.prizePools[0];
+  if (!pool) return "Prize details coming soon";
+  return pool.items[0]?.title ?? pool.title ?? prizePoolSummary(pool);
 }
 
 function prizePoolSummary(
