@@ -2,6 +2,7 @@
 
 import { ChevronDown, CircleCheckBig, LoaderCircle, TicketCheck } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 
 import type {
@@ -13,7 +14,6 @@ import { listPublicGiveawaysForEventAction } from "@/server/giveaway-actions";
 
 import {
   formatGiveawayMoment,
-  giveawayEntryModeLabel,
   giveawayStateLabel,
 } from "./giveaway-surface-state";
 import { groupPublicGiveawaysForSpotlight } from "./public-giveaway-spotlight-state";
@@ -107,18 +107,16 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
       aria-labelledby={`event-giveaways-${eventId}`}
     >
       <header className={styles.heading}>
-        <span>Raffles &amp; prizes</span>
-        <h2 id={`event-giveaways-${eventId}`}>See what is open and who won recently.</h2>
+        <span>Raffles</span>
+        <h2 id={`event-giveaways-${eventId}`}>
+          Join the current raffle or see the latest result.
+        </h2>
       </header>
 
       {loadState === "loading" ? (
         <div className={styles.loadingSpotlight} role="status">
-          <div className={styles.loadingOpenCard} aria-hidden="true" />
-          <div className={styles.loadingWinnerCard} aria-hidden="true" />
-          <span className={styles.loadingLabel}>
-            <LoaderCircle aria-hidden="true" />
-            Loading raffles…
-          </span>
+          <LoaderCircle aria-hidden="true" />
+          Loading raffles…
         </div>
       ) : (
         <>
@@ -183,31 +181,30 @@ function OpenGiveawaySpotlight({
   viewerRole,
 }: CampaignPresentationProps) {
   const { giveaway } = campaign;
-  const entryOpen = formatGiveawayMoment(giveaway.entryOpensAt, giveaway.timeZone);
   const entryClose = formatGiveawayMoment(giveaway.entryClosesAt, giveaway.timeZone);
   const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
+  const presentation = primaryPrizePresentation(campaign);
 
   return (
     <article className={styles.openCard}>
       <div className={styles.cardBody}>
         <div className={styles.openStatus}>
           <TicketCheck aria-hidden="true" />
-          Open now
+          Ongoing
         </div>
+        <PrizeImage presentation={presentation} />
+        <p className={styles.prizeTitle}>
+          <span>Win:</span> {presentation.title}
+        </p>
+        {presentation.description ? (
+          <p className={styles.prizeDescription}>{presentation.description}</p>
+        ) : null}
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
-        <div>
-          <span className={styles.prizeLabel}>Featured prize</span>
-          <p className={styles.prizeTitle}>{primaryPrizeSummary(campaign)}</p>
-        </div>
-        <div className={styles.metadata}>
-          <span>{giveawayEntryModeLabel(giveaway.entryMode)}</span>
-        </div>
 
-        {entryOpen || entryClose || drawAt ? (
+        {entryClose || drawAt ? (
           <dl className={styles.schedule}>
-            {entryOpen ? <ScheduleMoment label="Entry opens" value={entryOpen} /> : null}
-            {entryClose ? <ScheduleMoment label="Entry closes" value={entryClose} /> : null}
-            {drawAt ? <ScheduleMoment label="Draw" value={drawAt} /> : null}
+            {entryClose ? <ScheduleMoment label="Entries close:" value={entryClose} /> : null}
+            {drawAt ? <ScheduleMoment label="Draw date:" value={drawAt} /> : null}
           </dl>
         ) : null}
 
@@ -224,7 +221,7 @@ function OpenGiveawaySpotlight({
         ) : null}
 
         <CampaignDetails
-          label="How it works"
+          label="Raffle details"
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
           sponsorDisclosure={giveaway.sponsorDisclosure}
@@ -238,57 +235,51 @@ function CompletedGiveawayResult({
   campaign,
 }: CampaignPresentationProps) {
   const { giveaway, results, drawVerifications } = campaign;
+  const presentation = primaryPrizePresentation(campaign);
 
   return (
     <article className={styles.winnerCard}>
       <div className={styles.cardBody}>
         <div className={styles.winnerHeader}>
           <CircleCheckBig aria-hidden="true" />
-          Recent winner
+          Completed
         </div>
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
-        <p className={styles.winnerPrize}>{primaryPrizeSummary(campaign)}</p>
 
         {results.length > 0 ? (
           <div className={styles.winnerList}>
             {results.map((result, index) => (
-              <p
-                className={styles.winnerAlias}
+              <div
+                className={styles.result}
                 key={`${result.prizeTitle}-${result.winnerAlias}-${index}`}
               >
-                {result.winnerAlias}
-              </p>
+                <p className={styles.winnerAlias}>
+                  <span>Winner:</span> {result.winnerAlias}
+                </p>
+                <p className={styles.winnerPrize}>
+                  <span>Prize won:</span> {result.prizeTitle || presentation.title}
+                </p>
+              </div>
             ))}
-            <p className={styles.winnerPrivacy}>Winner chose to share this alias.</p>
           </div>
         ) : (
-          <p className={styles.winnerPrivacy}>Winner not publicly listed</p>
+          <div className={styles.result}>
+            <p className={styles.winnerAlias}>
+              <span>Winner:</span> Winner not publicly listed
+            </p>
+            <p className={styles.winnerPrize}>
+              <span>Prize won:</span> {presentation.title}
+            </p>
+          </div>
         )}
 
         <CampaignDetails
-          label="How it worked"
+          label="View result"
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
           sponsorDisclosure={giveaway.sponsorDisclosure}
+          drawVerifications={drawVerifications}
         />
-
-        {drawVerifications.length > 0 ? (
-          <details className={styles.details}>
-            <summary>
-              Verify the draw
-              <ChevronDown aria-hidden="true" />
-            </summary>
-            <div className={styles.proofList}>
-              {drawVerifications.map((verification, index) => (
-                <DrawReceipt
-                  key={`${verification.drawDigest}-${verification.seed}`}
-                  verification={verification}
-                  label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
-                />
-              ))}
-            </div>
-          </details>
-        ) : null}
       </div>
     </article>
   );
@@ -296,32 +287,71 @@ function CompletedGiveawayResult({
 
 function CompactGiveawayCard({
   campaign,
+  eventId,
+  viewerRole,
 }: CampaignPresentationProps) {
-  const { giveaway, results } = campaign;
+  const { giveaway, results, drawVerifications } = campaign;
+  const presentation = primaryPrizePresentation(campaign);
+  const isOpen = giveaway.state === "open";
+  const isCompleted = giveaway.state === "completed";
+  const showPrize = !isCompleted;
+  const entryClose = formatGiveawayMoment(giveaway.entryClosesAt, giveaway.timeZone);
+  const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
 
   return (
-    <article className={styles.compactCard}>
+    <article
+      className={`${styles.compactCard} ${
+        isOpen ? styles.compactOpen : isCompleted ? styles.compactCompleted : ""
+      }`}
+    >
       <span className={styles.compactStatus}>
-        {giveaway.state === "open" ? "Open now" : giveawayStateLabel(giveaway.state)}
+        {isOpen ? "Ongoing" : giveawayStateLabel(giveaway.state)}
       </span>
+      {showPrize ? <PrizeImage presentation={presentation} /> : null}
+      {showPrize ? (
+        <p className={styles.compactPrize}>
+          <span>Win:</span> {presentation.title}
+        </p>
+      ) : null}
       <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
-      <p className={styles.compactPrize}>{primaryPrizeSummary(campaign)}</p>
-      <div className={styles.metadata}>
-        <span>{giveawayEntryModeLabel(giveaway.entryMode)}</span>
-      </div>
 
-      {giveaway.state === "completed" && results[0] ? (
-        <div className={styles.compactWinner}>
-          <p className={styles.winnerAlias}>{results[0].winnerAlias}</p>
-          <p className={styles.winnerPrivacy}>Winner chose to share this alias.</p>
+      {showPrize && (entryClose || drawAt) ? (
+        <dl className={styles.schedule}>
+          {entryClose ? <ScheduleMoment label="Entries close:" value={entryClose} /> : null}
+          {drawAt ? <ScheduleMoment label="Draw date:" value={drawAt} /> : null}
+        </dl>
+      ) : null}
+
+      {isOpen &&
+      canOfferPublicGiveawayEntryLogin({
+        state: giveaway.state,
+        entryMode: giveaway.entryMode,
+        viewerRole,
+      }) ? (
+        <div className={styles.entryRow}>
+          <Link className={styles.entryAction} href={giveawayEntryLoginHref(eventId)}>
+            Log in to enter
+          </Link>
+        </div>
+      ) : null}
+
+      {isCompleted ? (
+        <div className={styles.result}>
+          <p className={styles.winnerAlias}>
+            <span>Winner:</span> {results[0]?.winnerAlias ?? "Winner not publicly listed"}
+          </p>
+          <p className={styles.winnerPrize}>
+            <span>Prize won:</span> {results[0]?.prizeTitle || presentation.title}
+          </p>
         </div>
       ) : null}
 
       <CampaignDetails
-        label="How it works"
+        label={isCompleted ? "View result" : "Raffle details"}
         mechanics={giveaway.mechanics}
         terms={giveaway.terms}
         sponsorDisclosure={giveaway.sponsorDisclosure}
+        drawVerifications={isCompleted ? drawVerifications : undefined}
       />
     </article>
   );
@@ -332,11 +362,13 @@ function CampaignDetails({
   mechanics,
   terms,
   sponsorDisclosure,
+  drawVerifications,
 }: {
   label: string;
   mechanics: string;
   terms: string;
   sponsorDisclosure?: string;
+  drawVerifications?: PublicEventGiveaway["drawVerifications"];
 }) {
   const disclosure = sponsorDisclosure?.trim();
 
@@ -350,8 +382,43 @@ function CampaignDetails({
         {disclosure ? <p className={styles.sponsorDisclosure}>{disclosure}</p> : null}
         <p>{mechanics}</p>
         <p>{terms}</p>
+        {drawVerifications && drawVerifications.length > 0 ? (
+          <section className={styles.drawDetails} aria-label="Draw details">
+            <h4>Draw details</h4>
+            <div className={styles.proofList}>
+              {drawVerifications.map((verification, index) => (
+                <DrawReceipt
+                  key={`${verification.drawDigest}-${verification.seed}`}
+                  verification={verification}
+                  label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
     </details>
+  );
+}
+
+function PrizeImage({
+  presentation,
+}: {
+  presentation: ReturnType<typeof primaryPrizePresentation>;
+}) {
+  if (!presentation.image) return null;
+
+  return (
+    <div className={styles.prizeImage}>
+      <Image
+        src={presentation.image.url}
+        alt={presentation.title}
+        width={presentation.image.width}
+        height={presentation.image.height}
+        sizes="(max-width: 899px) 100vw, 60vw"
+        unoptimized
+      />
+    </div>
   );
 }
 
@@ -397,8 +464,13 @@ function ScheduleMoment({ label, value }: { label: string; value: string }) {
   );
 }
 
-function primaryPrizeSummary(campaign: PublicEventGiveaway) {
+function primaryPrizePresentation(campaign: PublicEventGiveaway) {
   const pool = campaign.giveaway.prizePools[0];
-  if (!pool) return "Prize details coming soon";
-  return pool.presentation.title;
+  if (!pool) {
+    return {
+      disclosure: "revealed" as const,
+      title: "Prize details coming soon",
+    };
+  }
+  return pool.presentation;
 }
