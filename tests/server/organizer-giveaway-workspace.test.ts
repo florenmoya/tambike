@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot } from "react-dom/client";
 import * as React from "react";
 
 import { TooltipProvider } from "../../src/components/ui/tooltip";
@@ -12,7 +14,9 @@ import type {
   OrganizerGiveawayOperations,
   OrganizerGiveawayPresentation,
   OrganizerGiveawayWorkspace as OrganizerGiveawayWorkspaceData,
+  GiveawayPrizePoolInput,
 } from "../../src/features/giveaways/types";
+import * as giveawayActions from "../../src/server/giveaway-actions";
 import {
   applyOrganizerGiveawayDraftUpdate,
   acknowledgeOrganizerGiveawayPresentationPublication,
@@ -26,6 +30,7 @@ import {
   createOrganizerGiveawayPresentationRequest,
   getGiveawayPublicationMode,
   OrganizerGiveawayWorkspace,
+  PrizePoolBuilder,
   publishOrganizerGiveawayPresentation,
   readOrganizerGiveawayPresentation,
   resolveGiveawayPresentationLoadFailureState,
@@ -36,6 +41,8 @@ import {
   resolveGiveawaySubmission,
   resolveInitialDrawSubmission,
   resolveManualSelectionSubmission,
+  preserveSurprisePrizePresentationDrafts,
+  saveOrganizerGiveawayConfiguration,
   submitCampaignCode,
   toOrganizerGiveawayConfigurationPrizePools,
   toOrganizerGiveawayEditorDraft,
@@ -46,8 +53,25 @@ import {
   GiveawayPrizeImageUploader,
   performGiveawayPrizeImageRemoval,
   performGiveawayPrizeImageUpload,
+  runGiveawayPrizeImageUpload,
   validateGiveawayPrizeImageFile,
 } from "../../src/features/giveaways/giveaway-prize-image-uploader";
+
+const requireFromOrganizerWorkspaceTest = createRequire(import.meta.url);
+const JSDOM = (
+  requireFromOrganizerWorkspaceTest("jsdom") as {
+    JSDOM: new (
+      html: string,
+      options?: { url?: string },
+    ) => {
+      window: {
+        document: Document;
+        navigator: Navigator;
+        close: () => void;
+      };
+    };
+  }
+).JSDOM;
 
 const organizerGiveawayWorkspaceSourceUrl = new URL(
   "../../src/features/giveaways/organizer-giveaway-workspace.tsx",
@@ -79,6 +103,36 @@ const completedPresentation: OrganizerGiveawayPresentation = {
     },
   ],
 };
+
+function organizerWorkspaceWithPools(
+  prizePools: GiveawayPrizePoolInput[],
+): OrganizerGiveawayWorkspaceData {
+  return {
+    id: "giveaway-1",
+    eventId: "event-1",
+    title: "Rider gear draw",
+    kind: "raffle",
+    state: "draft",
+    complianceStatus: "draft",
+    entryMode: "automatic",
+    maxEntriesPerRider: 1,
+    mechanics: "One entry per eligible rider.",
+    terms: "Claim by the stated deadline.",
+    timeZone: "Asia/Manila",
+    winnerLimits: { perRider: 1, total: prizePools.length },
+    publicVisibility: "event_page",
+    presenceVerificationRequired: false,
+    eligibilityGroups: [
+      {
+        id: "group-1",
+        label: "Registered riders",
+        weight: 1,
+        conditions: [{ source: "active_rsvp_pass" }],
+      },
+    ],
+    prizePools,
+  };
+}
 
 describe("organizer giveaway lifecycle route", () => {
   test("shows the factual lifecycle and treats pause as an operational hold", () => {
@@ -466,6 +520,302 @@ describe("organizer giveaway lifecycle route", () => {
     expect(markup).toContain("Replace image");
     expect(markup).toContain("Remove image");
     expect(markup).not.toContain("storageKey");
+  });
+
+  test.each([
+    {
+      operation: "create",
+      campaignId: undefined,
+      clientPoolIds: ["client-pool-new"],
+      serverPoolIds: ["server-pool-created"],
+    },
+    {
+      operation: "update",
+      campaignId: "giveaway-1",
+      clientPoolIds: ["server-pool-existing", "client-pool-added"],
+      serverPoolIds: ["server-pool-existing", "server-pool-added"],
+    },
+  ] as const)(
+    "$operation save enables uploads only for authoritative server pool IDs",
+    async ({ campaignId, clientPoolIds, serverPoolIds }) => {
+      const basePool: GiveawayPrizePoolInput = {
+        id: clientPoolIds[0],
+        title: "Internal gear inventory",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Private Ducati Helmet" }],
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Weekend Rider Gear Package",
+        },
+      };
+      const clientWorkspace = organizerWorkspaceWithPools(
+        clientPoolIds.map((id, index) => ({
+          ...basePool,
+          id,
+          title: `Client pool ${index + 1}`,
+          items: [{ title: `Client prize ${index + 1}` }],
+        })),
+      );
+      const serverWorkspace = organizerWorkspaceWithPools(
+        serverPoolIds.map((id, index) => ({
+          ...basePool,
+          id,
+          title: `Server pool ${index + 1}`,
+          items: [{ title: `Server prize ${index + 1}` }],
+        })),
+      );
+      const create = vi.fn(async () => ({
+        ok: true as const,
+        data: {
+          id: "giveaway-1",
+          eventId: "event-1",
+          title: "Rider gear draw",
+          state: "draft" as const,
+          complianceStatus: "draft" as const,
+          mechanicsVersion: 1,
+        },
+      }));
+      const update = vi.fn(async () => ({ ok: true as const, data: undefined }));
+      const readWorkspace = vi.fn(async () => ({
+        ok: true as const,
+        data: serverWorkspace,
+      }));
+
+      const saved = await saveOrganizerGiveawayConfiguration({
+        eventId: "event-1",
+        campaignId,
+        draft: toOrganizerGiveawayEditorDraft(clientWorkspace),
+      }, {
+        create,
+        update,
+        readWorkspace,
+      });
+
+      expect(saved.giveawayId).toBe("giveaway-1");
+      expect(saved.draft.prizePools.map((pool) => pool.id)).toEqual(serverPoolIds);
+      expect(saved.persistedPrizePoolIds).toEqual(serverPoolIds);
+      expect(readWorkspace).toHaveBeenCalledWith("giveaway-1");
+      if (campaignId) {
+        expect(update).toHaveBeenCalledOnce();
+        expect(create).not.toHaveBeenCalled();
+      } else {
+        expect(create).toHaveBeenCalledOnce();
+        expect(update).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  test("selecting surprise hides public media without deleting before policy save", async () => {
+    const dom = new JSDOM("<div id=\"root\"></div>", {
+      url: "http://localhost/organizer/events/event-1/giveaways",
+    });
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("navigator", dom.window.navigator);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const deleteImage = vi.spyOn(
+      giveawayActions,
+      "deleteGiveawayPrizeImageAction",
+    );
+    const onPrizeMediaChanged = vi.fn();
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    const draft = toOrganizerGiveawayEditorDraft(organizerWorkspaceWithPools([
+      {
+        id: "server-pool-1",
+        title: "Private inventory",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Private Ducati Helmet" }],
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Weekend Rider Gear Package",
+        },
+        publicImage: {
+          mediaId: "media-1",
+          url: "/giveaway-prize-media/media-1",
+          width: 1200,
+          height: 800,
+        },
+      },
+    ]));
+
+    function Harness() {
+      const [current, setCurrent] = React.useState(draft);
+      return React.createElement(PrizePoolBuilder, {
+        draft: current,
+        onChange: setCurrent,
+        giveawayId: "giveaway-1",
+        persistedPrizePoolIds: new Set(["server-pool-1"]),
+        disabled: false,
+        onPrizeMediaChanged,
+      });
+    }
+
+    try {
+      await React.act(async () => {
+        root.render(React.createElement(Harness));
+      });
+      const surpriseRadio = dom.window.document.querySelectorAll(
+        'input[type="radio"]',
+      )[1] as HTMLInputElement;
+
+      await React.act(async () => {
+        surpriseRadio.click();
+      });
+
+      expect(dom.window.document.body.textContent).toContain("Win: Surprise prize");
+      expect(dom.window.document.body.textContent).not.toContain("Public prize name");
+      expect(dom.window.document.querySelector('img[alt="Current public prize"]')).toBeNull();
+      expect(deleteImage).not.toHaveBeenCalled();
+      expect(onPrizeMediaChanged).not.toHaveBeenCalled();
+    } finally {
+      await React.act(async () => {
+        root.unmount();
+      });
+      deleteImage.mockRestore();
+      vi.unstubAllGlobals();
+      dom.window.close();
+    }
+  });
+
+  test("an in-flight upload reload cannot reverse a local surprise draft", () => {
+    const authoritative = toOrganizerGiveawayEditorDraft(
+      organizerWorkspaceWithPools([
+        {
+          id: "server-pool-1",
+          title: "Private inventory",
+          awardMode: "random_draw",
+          fulfilmentMode: "onsite",
+          inventory: { kind: "finite", quantity: 1 },
+          items: [{ title: "Private Ducati Helmet" }],
+          publicPresentation: {
+            disclosure: "revealed",
+            title: "Weekend Rider Gear Package",
+          },
+          publicImage: {
+            mediaId: "media-new",
+            url: "/giveaway-prize-media/media-new",
+            width: 1200,
+            height: 800,
+          },
+        },
+      ]),
+    );
+    const localSurprise = {
+      ...authoritative,
+      prizePools: [
+        toOrganizerPrizePoolDisclosureDraft(
+          authoritative.prizePools[0]!,
+          "surprise",
+        ),
+      ],
+    };
+
+    const merged = preserveSurprisePrizePresentationDrafts(
+      authoritative,
+      localSurprise,
+    );
+
+    expect(merged.prizePools[0]?.publicPresentation).toEqual({
+      disclosure: "surprise",
+    });
+    expect(merged.prizePools[0]?.publicImage).toBeUndefined();
+  });
+
+  test("presign failure surfaces status without finalize, success, or reload", async () => {
+    const file = new File([new Uint8Array([1])], "prize.png", {
+      type: "image/png",
+    });
+    const finalize = vi.fn();
+    const onChanged = vi.fn();
+    const statuses: string[] = [];
+
+    await expect(runGiveawayPrizeImageUpload({
+      file,
+      giveawayId: "giveaway-1",
+      prizePoolId: "server-pool-1",
+    }, {
+      fetchImpl: vi.fn(async () => new Response(null, { status: 503 })),
+      finalize,
+      onChanged,
+      onStatus: (status) => statuses.push(status),
+    })).resolves.toBe(false);
+
+    expect(finalize).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(statuses.at(-1)).toBe(
+      "Image uploads are temporarily unavailable. Try again shortly.",
+    );
+    expect(statuses).not.toContain("Public prize image updated.");
+  });
+
+  test("finalize and reload failures never report a false upload success", async () => {
+    const file = new File([new Uint8Array([1])], "prize.png", {
+      type: "image/png",
+    });
+    const uploadResponses = () => {
+      let call = 0;
+      return vi.fn(async () => {
+        call += 1;
+        return call === 1
+          ? Response.json({
+              key: "tmp/giveaway-prizes/organizer-1/upload-1",
+              mimeType: "image/png",
+              url: "https://uploads.example.test",
+              fields: { key: "tmp/giveaway-prizes/organizer-1/upload-1" },
+            })
+          : new Response(null, { status: 204 });
+      });
+    };
+
+    const finalizeStatuses: string[] = [];
+    const finalizeReload = vi.fn();
+    await expect(runGiveawayPrizeImageUpload({
+      file,
+      giveawayId: "giveaway-1",
+      prizePoolId: "server-pool-1",
+    }, {
+      fetchImpl: uploadResponses(),
+      finalize: vi.fn(async () => ({ ok: false as const, error: "ACTION_FAILED" })),
+      onChanged: finalizeReload,
+      onStatus: (status) => finalizeStatuses.push(status),
+    })).resolves.toBe(false);
+    expect(finalizeReload).not.toHaveBeenCalled();
+    expect(finalizeStatuses.at(-1)).toBe(
+      "The uploaded image could not be finalized. Try again.",
+    );
+    expect(finalizeStatuses).not.toContain("Public prize image updated.");
+
+    const reloadStatuses: string[] = [];
+    const failedReload = vi.fn(async () => {
+      throw new Error("reload failed");
+    });
+    await expect(runGiveawayPrizeImageUpload({
+      file,
+      giveawayId: "giveaway-1",
+      prizePoolId: "server-pool-1",
+    }, {
+      fetchImpl: uploadResponses(),
+      finalize: vi.fn(async () => ({
+        ok: true as const,
+        data: {
+          mediaId: "media-1",
+          url: "/giveaway-prize-media/media-1",
+          width: 1200,
+          height: 800,
+        },
+      })),
+      onChanged: failedReload,
+      onStatus: (status) => reloadStatuses.push(status),
+    })).resolves.toBe(false);
+    expect(failedReload).toHaveBeenCalledOnce();
+    expect(reloadStatuses.at(-1)).toBe(
+      "The public prize image was uploaded, but the workspace could not be refreshed. Refresh to see it.",
+    );
+    expect(reloadStatuses).not.toContain("Public prize image updated.");
   });
 
   test("wires existing campaign edits through the selected campaign draft dispatcher", async () => {

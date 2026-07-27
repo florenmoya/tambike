@@ -34,7 +34,6 @@ import {
   cancelGiveawayAction,
   createGiveawayAction,
   createGiveawayCampaignCodeAction,
-  deleteGiveawayPrizeImageAction,
   getOrganizerGiveawayPresentationAction,
   getOrganizerGiveawayOperationsAction,
   getOrganizerGiveawayWorkspaceAction,
@@ -93,7 +92,6 @@ import {
 } from "./giveaway-presentation-controller";
 import {
   GiveawayPrizeImageUploader,
-  performGiveawayPrizeImageRemoval,
 } from "./giveaway-prize-image-uploader";
 
 export type GiveawayLifecycleRouteStatus = "complete" | "active" | "hold" | "upcoming";
@@ -494,6 +492,83 @@ export function toOrganizerGiveawayConfigurationPrizePools(
   });
 }
 
+export function preserveSurprisePrizePresentationDrafts(
+  authoritativeDraft: GiveawayEditorDraft,
+  localDraft: GiveawayEditorDraft | undefined,
+): GiveawayEditorDraft {
+  if (!localDraft) return authoritativeDraft;
+  const localPoolsById = new Map(
+    localDraft.prizePools.map((pool) => [pool.id, pool]),
+  );
+  return {
+    ...authoritativeDraft,
+    prizePools: authoritativeDraft.prizePools.map((pool) => {
+      const localPool = localPoolsById.get(pool.id);
+      return localPool?.publicPresentation.disclosure === "surprise"
+        ? toOrganizerPrizePoolDisclosureDraft(pool, "surprise")
+        : pool;
+    }),
+  };
+}
+
+type OrganizerGiveawaySaveResult<T = unknown> =
+  | { ok: true; data: T }
+  | { ok: false; error?: string };
+
+export async function saveOrganizerGiveawayConfiguration(
+  input: {
+    eventId: string;
+    campaignId?: string;
+    draft: GiveawayEditorDraft;
+  },
+  dependencies: {
+    create: (
+      input: CreateGiveawayInput,
+    ) => Promise<OrganizerGiveawaySaveResult<unknown>>;
+    update: (
+      input: UpdateGiveawayInput,
+    ) => Promise<OrganizerGiveawaySaveResult<unknown>>;
+    readWorkspace: (
+      giveawayId: string,
+    ) => Promise<OrganizerGiveawaySaveResult<OrganizerGiveawayWorkspaceData>>;
+  },
+) {
+  const saveResult = input.campaignId
+    ? await dependencies.update(
+        toUpdateGiveawayInput(input.campaignId, input.draft),
+      )
+    : await dependencies.create(toCreateGiveawayInput(input.eventId, input.draft));
+  if (!saveResult.ok) {
+    throw new Error(
+      input.campaignId
+        ? "GIVEAWAY_UPDATE_UNAVAILABLE"
+        : "GIVEAWAY_CREATE_UNAVAILABLE",
+    );
+  }
+
+  const giveawayId = input.campaignId
+    ?? (
+      saveResult.data as {
+        id?: unknown;
+      }
+    )?.id;
+  if (typeof giveawayId !== "string" || !giveawayId) {
+    throw new Error("GIVEAWAY_SAVE_ID_UNAVAILABLE");
+  }
+
+  const workspaceResult = await dependencies.readWorkspace(giveawayId);
+  if (!workspaceResult.ok) {
+    throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
+  }
+  const workspace = workspaceResult.data;
+  return {
+    giveawayId,
+    workspace,
+    draft: toOrganizerGiveawayEditorDraft(workspace),
+    persistedPrizePoolIds: workspace.prizePools.map((pool) => pool.id),
+  };
+}
+
 export function OrganizerGiveawayWorkspace({
   eventId,
   initialCampaigns = [],
@@ -647,13 +722,22 @@ export function OrganizerGiveawayWorkspace({
   }, [eventId, initialCampaigns.length]);
 
   const selectedCampaignIdForConfiguration = selectedCampaign?.id;
-  const reloadCampaignConfiguration = React.useCallback(async (giveawayId: string) => {
+  const reloadCampaignConfiguration = React.useCallback(async (
+    giveawayId: string,
+    options: { preserveLocalSurprise?: boolean } = {},
+  ) => {
     const result = await getOrganizerGiveawayWorkspaceAction(giveawayId);
     if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
     const workspace = result.data as OrganizerGiveawayWorkspaceData;
+    const authoritativeDraft = toOrganizerGiveawayEditorDraft(workspace);
     setDraftsByCampaignId((current) => ({
       ...current,
-      [giveawayId]: toOrganizerGiveawayEditorDraft(workspace),
+      [giveawayId]: options.preserveLocalSurprise
+        ? preserveSurprisePrizePresentationDrafts(
+            authoritativeDraft,
+            current[giveawayId],
+          )
+        : authoritativeDraft,
     }));
     setPersistedPrizePoolIdsByCampaignId((current) => ({
       ...current,
@@ -1076,25 +1160,7 @@ export function OrganizerGiveawayWorkspace({
     setNotice(null);
     startTransition(async () => {
       try {
-        if (!selectedCampaign) {
-          const input = toCreateGiveawayInput(eventId, editorDraft);
-          const result = await createGiveawayAction(input);
-          if (!result.ok) throw new Error("GIVEAWAY_CREATE_UNAVAILABLE");
-          const campaign = result.data as OrganizerGiveawayCampaign;
-          setDraftsByCampaignId((current) => ({ ...current, [campaign.id]: editorDraft }));
-          setPersistedPrizePoolIdsByCampaignId((current) => ({
-            ...current,
-            [campaign.id]: editorDraft.prizePools.map((pool) => pool.id),
-          }));
-          setOperationalEntryModes((current) => ({ ...current, [campaign.id]: editorDraft.entryMode }));
-          setSelectedCampaignId(campaign.id);
-          await refreshCampaigns();
-          await refreshCampaignOperations(campaign.id).catch(() => undefined);
-          setNotice({ tone: "success", text: "Campaign saved as a draft. Submit it for compliance review when the policy is final." });
-          return;
-        }
-
-        if (!selectedDraft) {
+        if (selectedCampaign && !selectedDraft) {
           setNotice({
             tone: "error",
             text: "This campaign's policy details have not loaded yet, so no changes were saved.",
@@ -1102,22 +1168,37 @@ export function OrganizerGiveawayWorkspace({
           return;
         }
 
-        const input = toUpdateGiveawayInput(selectedCampaign.id, selectedDraft);
-        const result = await updateGiveawayAction(input);
-        if (!result.ok) throw new Error("GIVEAWAY_UPDATE_UNAVAILABLE");
-        setDraftsByCampaignId((current) => ({ ...current, [selectedCampaign.id]: selectedDraft }));
+        const saved = await saveOrganizerGiveawayConfiguration({
+          eventId,
+          campaignId: selectedCampaign?.id,
+          draft: selectedDraft ?? editorDraft,
+        }, {
+          create: createGiveawayAction,
+          update: updateGiveawayAction,
+          readWorkspace: getOrganizerGiveawayWorkspaceAction,
+        });
+        setDraftsByCampaignId((current) => ({
+          ...current,
+          [saved.giveawayId]: saved.draft,
+        }));
         setPersistedPrizePoolIdsByCampaignId((current) => ({
           ...current,
-          [selectedCampaign.id]: selectedDraft.prizePools.map((pool) => pool.id),
+          [saved.giveawayId]: saved.persistedPrizePoolIds,
         }));
         setOperationalEntryModes((current) => ({
           ...current,
-          [selectedCampaign.id]: selectedDraft.entryMode,
+          [saved.giveawayId]: saved.workspace.entryMode,
         }));
-        if (selectedDraft.entryMode !== "claim_code") setIssuedCampaignCode(null);
+        setSelectedCampaignId(saved.giveawayId);
+        if (saved.workspace.entryMode !== "claim_code") setIssuedCampaignCode(null);
         await refreshCampaigns();
-        await refreshCampaignOperations(selectedCampaign.id).catch(() => undefined);
-        setNotice({ tone: "success", text: "Campaign policy and terms were saved. Compliance review is required again after policy changes." });
+        await refreshCampaignOperations(saved.giveawayId).catch(() => undefined);
+        setNotice({
+          tone: "success",
+          text: selectedCampaign
+            ? "Campaign policy and terms were saved. Compliance review is required again after policy changes."
+            : "Campaign saved as a draft. Submit it for compliance review when the policy is final.",
+        });
       } catch (error) {
         setNotice({
           tone: "error",
@@ -1544,7 +1625,9 @@ export function OrganizerGiveawayWorkspace({
             }
             onPrizeMediaChanged={() =>
               selectedCampaign
-                ? reloadCampaignConfiguration(selectedCampaign.id).then(() => undefined)
+                ? reloadCampaignConfiguration(selectedCampaign.id, {
+                    preserveLocalSurprise: true,
+                  }).then(() => undefined)
                 : Promise.resolve()
             }
           />
@@ -2644,7 +2727,7 @@ function EligibilityBuilder({ draft, onChange }: { draft: GiveawayEditorDraft; o
   );
 }
 
-function PrizePoolBuilder({
+export function PrizePoolBuilder({
   draft,
   onChange,
   giveawayId,
@@ -2723,19 +2806,8 @@ function PrizePoolBuilder({
                       name={`pool-${pool.id}-disclosure`}
                       checked={publicPresentation.disclosure === "surprise"}
                       onChange={() => {
-                        const currentImage = pool.publicImage;
                         updatePrizePool(onChange, poolIndex, (current) =>
                           toOrganizerPrizePoolDisclosureDraft(current, "surprise"));
-                        if (giveawayId && isPersistedPool && currentImage) {
-                          void performGiveawayPrizeImageRemoval(
-                            {
-                              giveawayId,
-                              prizePoolId: pool.id,
-                              mediaId: currentImage.mediaId,
-                            },
-                            deleteGiveawayPrizeImageAction,
-                          ).catch(() => undefined);
-                        }
                       }}
                     />
                     Keep it a surprise

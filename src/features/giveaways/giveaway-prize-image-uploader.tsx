@@ -191,6 +191,45 @@ export async function performGiveawayPrizeImageRemoval(
   }
 }
 
+function uploadStatusMessage(error: unknown) {
+  return error instanceof GiveawayPrizeImageUploadUiError
+    ? error.message
+    : "The public prize image could not be updated. Try again.";
+}
+
+export async function runGiveawayPrizeImageUpload(
+  input: {
+    file: File;
+    giveawayId: string;
+    prizePoolId: string;
+  },
+  dependencies: {
+    fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    finalize: PrizeImageFinalize;
+    onChanged: () => Promise<void> | void;
+    onStatus: (status: string) => void;
+  },
+) {
+  try {
+    await performGiveawayPrizeImageUpload(input, dependencies);
+  } catch (error) {
+    dependencies.onStatus(uploadStatusMessage(error));
+    return false;
+  }
+
+  try {
+    await dependencies.onChanged();
+  } catch {
+    dependencies.onStatus(
+      "The public prize image was uploaded, but the workspace could not be refreshed. Refresh to see it.",
+    );
+    return false;
+  }
+
+  dependencies.onStatus("Public prize image updated.");
+  return true;
+}
+
 export function GiveawayPrizeImageUploader({
   giveawayId,
   prizePoolId,
@@ -215,24 +254,19 @@ export function GiveawayPrizeImageUploader({
     if (!file || fileError || disabled) return;
     setPending(true);
     try {
-      await performGiveawayPrizeImageUpload(
+      const uploaded = await runGiveawayPrizeImageUpload(
         { file, giveawayId, prizePoolId },
         {
           fetchImpl: fetch,
           finalize: finalizeGiveawayPrizeImageAction,
+          onChanged,
           onStatus: setStatus,
         },
       );
-      await onChanged();
-      setFile(null);
-      if (inputRef.current) inputRef.current.value = "";
-      setStatus("Public prize image updated.");
-    } catch (error) {
-      setStatus(
-        error instanceof GiveawayPrizeImageUploadUiError
-          ? error.message
-          : "The public prize image could not be updated. Try again.",
-      );
+      if (uploaded) {
+        setFile(null);
+        if (inputRef.current) inputRef.current.value = "";
+      }
     } finally {
       setPending(false);
     }
