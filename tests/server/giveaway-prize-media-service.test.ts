@@ -11,6 +11,10 @@ import {
   GiveawayPrizeMediaLifecycleService,
   type GiveawayPrizeMediaPersistence,
 } from "../../src/server/giveaway-prize-media/service";
+import {
+  createGiveawayPrizeMediaDeliveryHandler,
+} from "../../src/app/api/giveaway-prize-media/[mediaId]/route";
+import * as publicPrizeMediaRoute from "../../src/app/giveaway-prize-media/[mediaId]/route";
 import type {
   MemberMediaStore,
   PutMemberMediaObjectInput,
@@ -124,6 +128,9 @@ function giveawayInput(
     mechanics: "Going riders receive one entry.",
     terms: "One prize per rider.",
     timeZone: "Asia/Manila",
+    entryOpensAt: "2099-07-25T10:00:00.000Z",
+    entryClosesAt: "2099-07-25T12:00:00.000Z",
+    drawAt: "2099-07-25T12:30:00.000Z",
     winnerLimits: { perRider: 1, total: 1 },
     organizerAttestation: true,
     publicVisibility: visibility,
@@ -524,6 +531,268 @@ describe("giveaway prize media lifecycle service", () => {
 });
 
 describe("giveaway prize media backend lifecycle", () => {
+  test("treats a finalized image as a material edit while an approved campaign is scheduled", async () => {
+    const context = await createBackendContext();
+    await context.backend.submitGiveawayForReview(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.reviewGiveawayCompliance(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+      { decision: "approved" },
+    );
+    await context.backend.scheduleGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    const beforeAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+
+    await attachPrizeImage(context);
+
+    const workspace = await context.backend.getOrganizerGiveawayWorkspace(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    expect(workspace).toMatchObject({
+      state: "scheduled",
+      complianceStatus: "draft",
+    });
+    const afterAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+    expect(afterAudit.events).toHaveLength(beforeAudit.events.length + 1);
+    expect(afterAudit.events.at(-1)).toMatchObject({
+      action: "GIVEAWAY_UPDATED",
+      targetType: "giveaway",
+      targetId: context.giveaway.id,
+    });
+  });
+
+  test("treats image deletion as a material edit while an approved campaign is paused", async () => {
+    const context = await createBackendContext();
+    const image = await attachPrizeImage(context);
+    await context.backend.submitGiveawayForReview(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.reviewGiveawayCompliance(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+      { decision: "approved" },
+    );
+    await context.backend.openGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.pauseGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    const beforeAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+
+    await context.backend.deleteGiveawayPrizeImage(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+      context.prizePoolId,
+      image.mediaId,
+    );
+
+    const workspace = await context.backend.getOrganizerGiveawayWorkspace(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    expect(workspace).toMatchObject({
+      state: "paused",
+      complianceStatus: "draft",
+    });
+    expect(workspace.prizePools[0]).not.toHaveProperty("publicImage");
+    const afterAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+    expect(afterAudit.events).toHaveLength(beforeAudit.events.length + 1);
+    expect(afterAudit.events.at(-1)?.action).toBe("GIVEAWAY_UPDATED");
+  });
+
+  test("rejects prize image deletion after entrant history exists and preserves approval", async () => {
+    const context = await createBackendContext();
+    const image = await attachPrizeImage(context);
+    await context.backend.registerForEvent(
+      context.actors.rider.sessionToken,
+      context.event.id,
+      { status: "going", attendanceType: "direct" },
+    );
+    await context.backend.submitGiveawayForReview(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.reviewGiveawayCompliance(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+      { decision: "approved" },
+    );
+    await context.backend.openGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.pauseGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    const beforeAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+
+    await expect(
+      context.backend.deleteGiveawayPrizeImage(
+        context.actors.organizer.sessionToken,
+        context.giveaway.id,
+        context.prizePoolId,
+        image.mediaId,
+      ),
+    ).rejects.toMatchObject({
+      code: "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
+    });
+
+    const workspace = await context.backend.getOrganizerGiveawayWorkspace(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    expect(workspace).toMatchObject({
+      state: "paused",
+      complianceStatus: "approved",
+    });
+    expect(workspace.prizePools[0]?.publicImage).toEqual(image);
+    const afterAudit = await context.backend.getAdminGiveawayAudit(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+    );
+    expect(afterAudit.events).toHaveLength(beforeAudit.events.length);
+  });
+
+  test("rejects finalization while entries are open and cleans the uncommitted finalized object", async () => {
+    const context = await createBackendContext();
+    await context.backend.submitGiveawayForReview(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.reviewGiveawayCompliance(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+      { decision: "approved" },
+    );
+    await context.backend.openGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    const upload = await context.backend.createGiveawayPrizeImageUpload(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+      context.prizePoolId,
+      "image/png",
+    );
+    const bytes = await png();
+    context.media.objects.set(upload.key, {
+      body: bytes,
+      contentType: "image/png",
+      contentLength: bytes.byteLength,
+      lastModified: new Date(),
+    });
+
+    await expect(
+      context.backend.finalizeGiveawayPrizeImage(
+        context.actors.organizer.sessionToken,
+        {
+          giveawayId: context.giveaway.id,
+          prizePoolId: context.prizePoolId,
+          tempKey: upload.key,
+          claimedMimeType: "image/png",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GIVEAWAY_STATE" });
+
+    const workspace = await context.backend.getOrganizerGiveawayWorkspace(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    expect(workspace).toMatchObject({
+      state: "open",
+      complianceStatus: "approved",
+    });
+    expect(workspace.prizePools[0]).not.toHaveProperty("publicImage");
+    expect(
+      [...context.media.objects.keys()].some((key) =>
+        key.startsWith(`media/giveaway-prizes/${context.prizePoolId}/`)
+      ),
+    ).toBe(false);
+  });
+
+  test.each([
+    {
+      routeBase: "/api/giveaway-prize-media",
+      factory: createGiveawayPrizeMediaDeliveryHandler,
+    },
+    {
+      routeBase: "/giveaway-prize-media",
+      factory: (
+        publicPrizeMediaRoute as typeof publicPrizeMediaRoute & {
+          createGiveawayPrizeMediaDeliveryHandler?: typeof createGiveawayPrizeMediaDeliveryHandler;
+        }
+      ).createGiveawayPrizeMediaDeliveryHandler,
+    },
+  ])("returns 404 from the $routeBase route for stale surprise-pool media", async ({
+    routeBase,
+    factory,
+  }) => {
+    expect(factory).toBeTypeOf("function");
+    if (!factory) return;
+    const context = await createBackendContext();
+    const image = await attachPrizeImage(context);
+    await context.backend.submitGiveawayForReview(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    await context.backend.reviewGiveawayCompliance(
+      context.actors.admin.sessionToken,
+      context.giveaway.id,
+      { decision: "approved" },
+    );
+    await context.backend.openGiveaway(
+      context.actors.organizer.sessionToken,
+      context.giveaway.id,
+    );
+    const internal = context.backend as unknown as {
+      giveaways: {
+        prizePoolsById: Map<string, { publicDisclosure: "revealed" | "surprise" }>;
+      };
+    };
+    const pool = internal.giveaways.prizePoolsById.get(context.prizePoolId);
+    if (!pool) throw new Error("TEST_PRIZE_POOL_MISSING");
+    pool.publicDisclosure = "surprise";
+    const handler = factory({
+      readSessionToken: vi.fn(async () => null),
+      getBackend: vi.fn(async () => context.backend),
+    });
+
+    const response = await handler(
+      new Request(`http://localhost${routeBase}/${image.mediaId}`),
+      { params: Promise.resolve({ mediaId: image.mediaId }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.text()).toBe("Not found");
+  });
+
   test("preserves an attached image across configuration save, cleans replacement, and removes it in surprise mode", async () => {
     const context = await createBackendContext();
     const first = await attachPrizeImage(context);

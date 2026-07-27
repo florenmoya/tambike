@@ -101,6 +101,7 @@ import {
   type RegistrationInput,
 } from "./backend";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
+import { getGiveawayMaterialUpdateBlocker } from "./giveaways/update-policy";
 import {
   buildPublicDrawVerification,
   createDrawSeedCommitment,
@@ -835,10 +836,19 @@ export class PrismaTambikeBackend {
       select: {
         storageKey: true,
         mimeType: true,
-        prizePool: { select: { giveawayId: true } },
+        prizePool: {
+          select: {
+            giveawayId: true,
+            publicDisclosure: true,
+          },
+        },
       },
     });
-    if (!image || image.mimeType !== "image/webp") {
+    if (
+      !image ||
+      image.mimeType !== "image/webp" ||
+      image.prizePool.publicDisclosure !== "revealed"
+    ) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
     const giveaway = await this.requireGiveawayCampaign(
@@ -981,13 +991,11 @@ export class PrismaTambikeBackend {
       }
       const giveaway = await this.lockGiveawayCampaign(tx, parsed.id);
       this.requireGiveawayConfigurator(user, giveaway.event);
-      if (
-        ["locked", "drawing", "claims_open", "completed", "cancelled", "suspended"].includes(
-          giveaway.status,
-        ) ||
-        giveaway.status === "open"
-      ) {
-        throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+      const lifecycleBlocker = getGiveawayMaterialUpdateBlocker({
+        state: giveaway.status as GiveawayState,
+      });
+      if (lifecycleBlocker) {
+        throw new BackendError(lifecycleBlocker, lifecycleBlocker);
       }
 
       const entryCount = await tx.giveawayEntry.count({ where: { giveawayId: giveaway.id } });
@@ -1072,11 +1080,13 @@ export class PrismaTambikeBackend {
         (nextWinnerLimits !== undefined &&
           (nextWinnerLimits.perRider !== giveaway.maxWinsPerRider ||
             nextWinnerLimits.total !== giveaway.maxWinsTotal));
-      if (hasEntrantHistory && changesEntrantFacingConfiguration) {
-        throw new BackendError(
-          "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
-          "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
-        );
+      const entrantHistoryBlocker = getGiveawayMaterialUpdateBlocker({
+        state: giveaway.status as GiveawayState,
+        hasEntrantHistory,
+        changesEntrantFacingConfiguration,
+      });
+      if (entrantHistoryBlocker) {
+        throw new BackendError(entrantHistoryBlocker, entrantHistoryBlocker);
       }
       const changed = mechanicsChanged || hasConfigurationPatch || coreChanged;
       if (!changed) {
@@ -9510,6 +9520,8 @@ export class PrismaTambikeBackend {
           giveaway: {
             select: {
               id: true,
+              status: true,
+              complianceStatus: true,
               event: {
                 include: {
                   organizer: { select: { userId: true } },
@@ -9531,6 +9543,63 @@ export class PrismaTambikeBackend {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return pool;
+  }
+
+  private async requireGiveawayPrizeMediaMutationAccess(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ) {
+    const pool = await this.requireGiveawayPrizePoolAccess(
+      tx,
+      userId,
+      giveawayId,
+      prizePoolId,
+    );
+    const [entryCount, entryEventCount] = await Promise.all([
+      tx.giveawayEntry.count({ where: { giveawayId } }),
+      tx.giveawayEntryEvent.count({ where: { giveawayId } }),
+    ]);
+    const blocker = getGiveawayMaterialUpdateBlocker({
+      state: pool.giveaway.status as GiveawayState,
+      hasEntrantHistory: entryCount > 0 || entryEventCount > 0,
+      changesEntrantFacingConfiguration: true,
+    });
+    if (blocker) {
+      throw new BackendError(blocker, blocker);
+    }
+    return pool;
+  }
+
+  private async recordGiveawayPrizeMediaUpdate(
+    tx: Prisma.TransactionClient,
+    giveawayId: string,
+    actorUserId: string,
+    operation: "replaced" | "removed",
+  ) {
+    await tx.eventGiveaway.update({
+      where: { id: giveawayId },
+      data: {
+        complianceStatus: "draft",
+        complianceReviewer: { disconnect: true },
+        complianceReviewedAt: null,
+        complianceReviewReason: null,
+      },
+    });
+    await this.auditGiveaway(
+      tx,
+      giveawayId,
+      actorUserId,
+      "GIVEAWAY_UPDATED",
+      "giveaway",
+      giveawayId,
+      {
+        change: "public_prize_image",
+        operation,
+        complianceStatus: "draft",
+      },
+    );
   }
 
   private giveawayPrizeMediaPersistence(): GiveawayPrizeMediaPersistence {
@@ -9557,7 +9626,7 @@ export class PrismaTambikeBackend {
             WHERE "id" = ${input.prizePoolId}
             FOR UPDATE
           `;
-          const pool = await this.requireGiveawayPrizePoolAccess(
+          const pool = await this.requireGiveawayPrizeMediaMutationAccess(
             tx,
             input.userId,
             input.giveawayId,
@@ -9607,6 +9676,12 @@ export class PrismaTambikeBackend {
           await tx.memberMediaCleanupIntent.delete({
             where: { storageKey: input.storageKey },
           });
+          await this.recordGiveawayPrizeMediaUpdate(
+            tx,
+            input.giveawayId,
+            input.userId,
+            "replaced",
+          );
           return this.toGiveawayPrizeImageSummary(image);
         }),
       remove: (input) =>
@@ -9623,7 +9698,7 @@ export class PrismaTambikeBackend {
             WHERE "id" = ${input.prizePoolId}
             FOR UPDATE
           `;
-          const pool = await this.requireGiveawayPrizePoolAccess(
+          const pool = await this.requireGiveawayPrizeMediaMutationAccess(
             tx,
             input.userId,
             input.giveawayId,
@@ -9644,6 +9719,12 @@ export class PrismaTambikeBackend {
             update: { cleanupAfter },
           });
           await tx.giveawayPrizeImage.delete({ where: { id: image.id } });
+          await this.recordGiveawayPrizeMediaUpdate(
+            tx,
+            input.giveawayId,
+            input.userId,
+            "removed",
+          );
           return image.storageKey;
         }),
       registerCleanup: ({ userId, storageKey, cleanupAfter }) =>

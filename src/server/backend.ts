@@ -109,6 +109,7 @@ import {
   PUBLIC_ATTENDEE_PREVIEW_LIMIT,
 } from "./member-profiles/roster-domain";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
+import { getGiveawayMaterialUpdateBlocker } from "./giveaways/update-policy";
 import {
   buildPublicDrawVerification,
   createDrawSeedCommitment,
@@ -1330,6 +1331,9 @@ export class TambikeBackend {
     if (!pool || !image) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
+    if (pool.publicDisclosure !== "revealed") {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
     const giveaway = Array.from(this.giveaways.campaignsById.values()).find(
       (candidate) => candidate.prizePools.some((candidatePool) => candidatePool.id === pool.id),
     );
@@ -1470,11 +1474,11 @@ export class TambikeBackend {
     const giveaway = this.requireGiveaway(parsed.id);
     const event = this.requireEvent(giveaway.eventId);
     this.requireGiveawayConfigurator(user, event);
-    if (["locked", "drawing", "claims_open", "completed", "cancelled", "suspended"].includes(giveaway.state)) {
-      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
-    }
-    if (giveaway.state === "open") {
-      throw new BackendError("INVALID_GIVEAWAY_STATE", "INVALID_GIVEAWAY_STATE");
+    const lifecycleBlocker = getGiveawayMaterialUpdateBlocker({
+      state: giveaway.state,
+    });
+    if (lifecycleBlocker) {
+      throw new BackendError(lifecycleBlocker, lifecycleBlocker);
     }
 
     const patch = parsed as Record<string, unknown>;
@@ -1506,11 +1510,13 @@ export class TambikeBackend {
       (nextWinnerLimits !== undefined &&
         (giveaway.maxWinsPerRider !== nextWinnerLimits.perRider ||
           giveaway.maxWinsTotal !== nextWinnerLimits.total));
-    if (hasEntrantHistory && changesEntrantFacingConfiguration) {
-      throw new BackendError(
-        "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
-        "GIVEAWAY_ENTRY_CONFIGURATION_LOCKED",
-      );
+    const entrantHistoryBlocker = getGiveawayMaterialUpdateBlocker({
+      state: giveaway.state,
+      hasEntrantHistory,
+      changesEntrantFacingConfiguration,
+    });
+    if (entrantHistoryBlocker) {
+      throw new BackendError(entrantHistoryBlocker, entrantHistoryBlocker);
     }
     const hasAwardHistory = giveaway.awards.length > 0;
     if (
@@ -7980,7 +7986,54 @@ export class TambikeBackend {
     if (pool.publicDisclosure !== "revealed") {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    return pool;
+    return { giveaway, pool };
+  }
+
+  private requireGiveawayPrizeMediaMutationAccess(
+    userId: string,
+    giveawayId: string,
+    prizePoolId: string,
+  ) {
+    const access = this.requireGiveawayPrizePoolAccess(
+      userId,
+      giveawayId,
+      prizePoolId,
+    );
+    const blocker = getGiveawayMaterialUpdateBlocker({
+      state: access.giveaway.state,
+      hasEntrantHistory:
+        access.giveaway.entriesByRider.size > 0 ||
+        access.giveaway.entryEvents.length > 0,
+      changesEntrantFacingConfiguration: true,
+    });
+    if (blocker) {
+      throw new BackendError(blocker, blocker);
+    }
+    return access;
+  }
+
+  private recordGiveawayPrizeMediaUpdate(
+    giveaway: GiveawayAggregate,
+    actorUserId: string,
+    operation: "replaced" | "removed",
+  ) {
+    giveaway.updatedAt = new Date().toISOString();
+    giveaway.complianceStatus = "draft";
+    giveaway.complianceReviewerId = undefined;
+    giveaway.complianceReviewedAt = undefined;
+    giveaway.complianceReviewReason = undefined;
+    this.auditGiveaway(
+      giveaway,
+      actorUserId,
+      "GIVEAWAY_UPDATED",
+      "giveaway",
+      giveaway.id,
+      {
+        change: "public_prize_image",
+        operation,
+        complianceStatus: giveaway.complianceStatus,
+      },
+    );
   }
 
   private giveawayPrizeMediaPersistence(): GiveawayPrizeMediaPersistence {
@@ -7989,7 +8042,7 @@ export class TambikeBackend {
         this.requireGiveawayPrizePoolAccess(userId, giveawayId, prizePoolId);
       },
       replaceFinalized: async (input) => {
-        const pool = this.requireGiveawayPrizePoolAccess(
+        const { giveaway, pool } = this.requireGiveawayPrizeMediaMutationAccess(
           input.userId,
           input.giveawayId,
           input.prizePoolId,
@@ -8014,10 +8067,15 @@ export class TambikeBackend {
           finalizedAt: input.finalizedAt,
         };
         this.memberMediaCleanupIntents.delete(input.storageKey);
+        this.recordGiveawayPrizeMediaUpdate(
+          giveaway,
+          input.userId,
+          "replaced",
+        );
         return this.toGiveawayPrizeImageSummary(pool.publicImage);
       },
       remove: async (input) => {
-        const pool = this.requireGiveawayPrizePoolAccess(
+        const { giveaway, pool } = this.requireGiveawayPrizeMediaMutationAccess(
           input.userId,
           input.giveawayId,
           input.prizePoolId,
@@ -8032,6 +8090,11 @@ export class TambikeBackend {
           new Date(),
         );
         pool.publicImage = undefined;
+        this.recordGiveawayPrizeMediaUpdate(
+          giveaway,
+          input.userId,
+          "removed",
+        );
         return image.storageKey;
       },
       registerCleanup: async ({ userId, storageKey, cleanupAfter }) => {
