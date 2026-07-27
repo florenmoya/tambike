@@ -83,11 +83,11 @@ describe("guarded Prisma sample raffle provisioner", () => {
         data: { passwordHash: organizerPasswordHash },
       });
       await prisma.user.upsert({
-        where: { email: "ops@tambike.example" },
+        where: { email: "admin@bayanko.ph" },
         create: {
           id: `integration-sample-raffle-admin-${suffix}`,
           displayName: "Integration Sample Raffle Administrator",
-          email: "ops@tambike.example",
+          email: "admin@bayanko.ph",
           passwordHash: adminPasswordHash,
           role: "admin",
           verificationStatus: "APPROVED",

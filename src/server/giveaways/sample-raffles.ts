@@ -668,7 +668,7 @@ export function createPrismaSampleRaffleProvisioner(
       return { sessionToken: result.sessionToken };
     },
     async authenticateAdmin(password) {
-      const result = await backend.loginWithPassword("ops@tambike.example", password);
+      const result = await backend.loginWithPassword("admin@bayanko.ph", password);
       if (result.user.role !== "admin") {
         throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
       }
