@@ -247,6 +247,30 @@ describe("giveaway prize media delivery route", () => {
     expect(await response.text()).toBe("Not found");
   });
 
+  test("maps a missing finalized storage object to a detail-free 503", async () => {
+    const backend = {
+      getGiveawayPrizeImageMedia: vi.fn(async () => {
+        throw new BackendError(
+          "MEDIA_UNAVAILABLE",
+          "sensitive finalized object detail",
+        );
+      }),
+    };
+    const handler = createGiveawayPrizeMediaDeliveryHandler({
+      readSessionToken: vi.fn(async () => "rider-session"),
+      getBackend: vi.fn(async () => backend),
+    });
+
+    const response = await handler(
+      new Request("http://localhost/api/giveaway-prize-media/media-1"),
+      { params: Promise.resolve({ mediaId: "media-1" }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.text()).toBe("Media unavailable");
+  });
+
   test("maps an unexpected storage failure to a detail-free 503", async () => {
     const backend = {
       getGiveawayPrizeImageMedia: vi.fn(async () => {

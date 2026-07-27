@@ -81,7 +81,7 @@ export function createGiveawayPrizeMediaDeliveryHandler(
         headers,
       });
     } catch (error) {
-      if (error instanceof BackendError) {
+      if (error instanceof BackendError && error.code === "NOT_FOUND") {
         return new Response("Not found", {
           status: 404,
           headers: privateHeaders,

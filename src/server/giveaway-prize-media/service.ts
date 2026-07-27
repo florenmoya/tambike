@@ -302,11 +302,21 @@ export class GiveawayPrizeMediaLifecycleService {
         height: image.height,
       };
     } catch (error) {
-      await persistence.activateCleanup({
-        storageKey,
-        cleanupAfter: this.now(),
-      }).catch(() => undefined);
-      await this.deleteIdempotently(storageKey).catch(() => undefined);
+      let cleanupActivated = false;
+      try {
+        await persistence.activateCleanup({
+          storageKey,
+          cleanupAfter: this.now(),
+        });
+        cleanupActivated = true;
+      } catch {
+        // Persistence may have committed and removed the cleanup intent before
+        // an acknowledgement failure. Without activation, object ownership is
+        // ambiguous, so the recoverable choice is to leave it in storage.
+      }
+      if (cleanupActivated) {
+        await this.deleteIdempotently(storageKey).catch(() => undefined);
+      }
       throw error;
     }
   }

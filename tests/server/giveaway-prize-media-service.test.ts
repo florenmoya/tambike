@@ -455,6 +455,53 @@ describe("giveaway prize media lifecycle service", () => {
     });
   });
 
+  test("does not delete a finalized object when persistence committed before reporting failure", async () => {
+    const tempKey = "tmp/giveaway-prizes/organizer-a/upload-1";
+    const finalKey = "media/giveaway-prizes/pool-1/media-1.webp";
+    const cleanupIntents = new Set<string>();
+    let persistedStorageKey: string | undefined;
+    const lostAcknowledgement = new Error("connection lost after commit");
+    const { store, objects } = fakeStore({
+      [tempKey]: {
+        body: await png(),
+        contentType: "image/png",
+        lastModified: new Date("2026-07-28T04:59:00.000Z"),
+      },
+    });
+    const state = persistence({
+      registerCleanup: vi.fn(async ({ storageKey }) => {
+        cleanupIntents.add(storageKey);
+      }),
+      replaceFinalized: vi.fn(async (input) => {
+        persistedStorageKey = input.storageKey;
+        cleanupIntents.delete(input.storageKey);
+        throw lostAcknowledgement;
+      }),
+      activateCleanup: vi.fn(async ({ storageKey }) => {
+        if (!cleanupIntents.has(storageKey)) {
+          throw new Error("cleanup intent no longer exists");
+        }
+      }),
+    });
+    const service = new GiveawayPrizeMediaLifecycleService(store, {
+      createUuid: () => "media-1",
+      now: () => new Date("2026-07-28T05:00:00.000Z"),
+    });
+
+    await expect(
+      service.finalize("organizer-a", {
+        giveawayId: "giveaway-1",
+        prizePoolId: "pool-1",
+        tempKey,
+        claimedMimeType: "image/png",
+      }, state),
+    ).rejects.toBe(lostAcknowledgement);
+
+    expect(persistedStorageKey).toBe(finalKey);
+    expect(objects.has(finalKey)).toBe(true);
+    expect(store.deleteObject).not.toHaveBeenCalledWith(finalKey);
+  });
+
   test("keeps deletion ownership server-side", async () => {
     const { store } = fakeStore();
     const state = persistence({
