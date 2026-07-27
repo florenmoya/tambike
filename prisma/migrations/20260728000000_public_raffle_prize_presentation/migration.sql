@@ -65,17 +65,22 @@ $$ LANGUAGE plpgsql;
 CREATE FUNCTION "validate_giveaway_prize_image_entrant_configuration"()
 RETURNS TRIGGER AS $$
 DECLARE
-  target_pool_id TEXT;
+  old_pool_id TEXT;
+  new_pool_id TEXT;
   target_giveaway_id TEXT;
 BEGIN
-  target_pool_id := CASE WHEN TG_OP = 'DELETE' THEN OLD."prizePoolId" ELSE NEW."prizePoolId" END;
-  SELECT "giveawayId" INTO target_giveaway_id
-  FROM "GiveawayPrizePool"
-  WHERE "id" = target_pool_id;
+  old_pool_id := CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE OLD."prizePoolId" END;
+  new_pool_id := CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE NEW."prizePoolId" END;
 
-  IF target_giveaway_id IS NOT NULL AND giveaway_has_entrant_history(target_giveaway_id) THEN
-    RAISE EXCEPTION 'Giveaway prize image cannot change after entry history';
-  END IF;
+  FOR target_giveaway_id IN
+    SELECT "giveawayId"
+    FROM "GiveawayPrizePool"
+    WHERE "id" IN (old_pool_id, new_pool_id)
+  LOOP
+    IF giveaway_has_entrant_history(target_giveaway_id) THEN
+      RAISE EXCEPTION 'Giveaway prize image cannot change after entry history';
+    END IF;
+  END LOOP;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
 $$ LANGUAGE plpgsql;

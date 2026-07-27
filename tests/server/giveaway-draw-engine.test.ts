@@ -225,6 +225,20 @@ describe("giveaway input validation", () => {
     expect(createGiveawaySchema.safeParse(surprise).success).toBe(true);
   });
 
+  test("rejects caller-supplied public prize image URLs", () => {
+    const input = createGiveawayInputWithPrizePool({
+      ...createValidGiveawayInput().prizePools[0],
+      publicImage: {
+        mediaId: "untrusted-media",
+        url: "https://untrusted.example/prize.png",
+        width: 1200,
+        height: 800,
+      },
+    });
+
+    expect(createGiveawaySchema.safeParse(input).success).toBe(false);
+  });
+
   test.each(["random_draw", "first_come", "manual_selection"])(
     "accepts %s pools only when finite item rows match inventory quantity",
     (awardMode) => {

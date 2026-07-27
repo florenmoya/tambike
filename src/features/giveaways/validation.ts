@@ -84,15 +84,6 @@ const publicPrizePresentationSchema = z
       : presentation,
   );
 
-const publicPrizeImageSchema = z
-  .object({
-    mediaId: identifier,
-    url: z.url(),
-    width: positiveInteger,
-    height: positiveInteger,
-  })
-  .strict();
-
 const prizePoolSchema = z
   .object({
     id: identifier,
@@ -100,7 +91,6 @@ const prizePoolSchema = z
     awardMode: z.enum(["random_draw", "first_come", "guaranteed", "manual_selection"]),
     fulfilmentMode: z.enum(["onsite", "digital_code", "delivery", "manual_contact"]),
     publicPresentation: publicPrizePresentationSchema,
-    publicImage: publicPrizeImageSchema.optional(),
     inventory: z.discriminatedUnion("kind", [finiteInventorySchema, unlimitedInventorySchema]),
     items: z.array(prizeItemSchema),
     eligibilityGroupIds: z.array(identifier).min(1).optional(),

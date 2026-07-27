@@ -205,6 +205,22 @@ describe("giveaway Prisma schema contract", () => {
     );
   });
 
+  test("guards image reassignment against both the previous and next prize-pool owner", () => {
+    const imageGuard = presentationMigrationSql.slice(
+      presentationMigrationSql.indexOf(
+        'CREATE FUNCTION "validate_giveaway_prize_image_entrant_configuration"()',
+      ),
+      presentationMigrationSql.indexOf(
+        'CREATE TRIGGER "GiveawayPrizeImage_entrant_configuration_guard"',
+      ),
+    );
+
+    expect(imageGuard).toContain('old_pool_id := CASE WHEN TG_OP = \'INSERT\' THEN NULL ELSE OLD."prizePoolId" END');
+    expect(imageGuard).toContain('new_pool_id := CASE WHEN TG_OP = \'DELETE\' THEN NULL ELSE NEW."prizePoolId" END');
+    expect(imageGuard).toContain('WHERE "id" IN (old_pool_id, new_pool_id)');
+    expect(imageGuard).toContain('giveaway_has_entrant_history(target_giveaway_id)');
+  });
+
   test("persists canonical eligibility-cycle timing, direct allocation proof, and RSVP going transitions", () => {
     const models = new Map(Prisma.dmmf.datamodel.models.map((entry) => [entry.name, entry]));
     const entry = models.get("GiveawayEntry");
