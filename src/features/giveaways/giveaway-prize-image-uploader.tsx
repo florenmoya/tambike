@@ -236,19 +236,26 @@ export function GiveawayPrizeImageUploader({
   image,
   disabled,
   onChanged,
+  removeAction = deleteGiveawayPrizeImageAction,
 }: {
   giveawayId: string;
   prizePoolId: string;
   image?: GiveawayPrizeImageSummary;
   disabled: boolean;
   onChanged: () => Promise<void> | void;
+  removeAction?: PrizeImageRemove;
 }): React.JSX.Element {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState("");
+  const [removedMediaIdAwaitingRefresh, setRemovedMediaIdAwaitingRefresh] =
+    useState<string | null>(null);
   const fileError = file ? validateGiveawayPrizeImageFile(file) : null;
+  const staleRemovedImage = image?.mediaId === removedMediaIdAwaitingRefresh;
+  const visibleImage = staleRemovedImage ? undefined : image;
+  const controlsDisabled = disabled || staleRemovedImage;
 
   const upload = async () => {
     if (!file || fileError || disabled) return;
@@ -273,26 +280,36 @@ export function GiveawayPrizeImageUploader({
   };
 
   const remove = async () => {
-    if (!image || disabled) return;
+    if (!visibleImage || controlsDisabled) return;
     setPending(true);
     try {
       await performGiveawayPrizeImageRemoval(
         {
           giveawayId,
           prizePoolId,
-          mediaId: image.mediaId,
+          mediaId: visibleImage.mediaId,
         },
-        deleteGiveawayPrizeImageAction,
+        removeAction,
       );
-      await onChanged();
-      setFile(null);
-      if (inputRef.current) inputRef.current.value = "";
-      setStatus("Public prize image removed.");
     } catch (error) {
       setStatus(
         error instanceof GiveawayPrizeImageUploadUiError
           ? error.message
           : "The public prize image could not be removed. Try again.",
+      );
+      setPending(false);
+      return;
+    }
+
+    setRemovedMediaIdAwaitingRefresh(visibleImage.mediaId);
+    setFile(null);
+    if (inputRef.current) inputRef.current.value = "";
+    try {
+      await onChanged();
+      setStatus("Public prize image removed.");
+    } catch {
+      setStatus(
+        "Public prize image was removed, but the workspace could not be refreshed. Refresh to update this view.",
       );
     } finally {
       setPending(false);
@@ -301,12 +318,12 @@ export function GiveawayPrizeImageUploader({
 
   return (
     <div className="grid gap-3 rounded-lg border bg-background p-3">
-      {image ? (
+      {visibleImage ? (
         <Image
-          src={image.url}
+          src={visibleImage.url}
           alt="Current public prize"
-          width={image.width}
-          height={image.height}
+          width={visibleImage.width}
+          height={visibleImage.height}
           sizes="(max-width: 768px) 100vw, 32rem"
           className="max-h-56 w-full rounded-md object-cover"
           unoptimized
@@ -324,7 +341,7 @@ export function GiveawayPrizeImageUploader({
           id={inputId}
           type="file"
           accept="image/jpeg,image/png,image/webp"
-          disabled={disabled || pending}
+          disabled={controlsDisabled || pending}
           onChange={(event) => {
             const selected = event.currentTarget.files?.[0] ?? null;
             setFile(selected);
@@ -334,7 +351,7 @@ export function GiveawayPrizeImageUploader({
         <Button
           type="button"
           variant="outline"
-          disabled={disabled || pending || !file || Boolean(fileError)}
+          disabled={controlsDisabled || pending || !file || Boolean(fileError)}
           onClick={() => void upload()}
         >
           {pending ? (
@@ -342,13 +359,13 @@ export function GiveawayPrizeImageUploader({
           ) : (
             <ImagePlusIcon data-icon="inline-start" />
           )}
-          {image ? "Replace image" : "Upload image"}
+          {visibleImage ? "Replace image" : "Upload image"}
         </Button>
-        {image ? (
+        {visibleImage ? (
           <Button
             type="button"
             variant="ghost"
-            disabled={disabled || pending}
+            disabled={controlsDisabled || pending}
             onClick={() => void remove()}
           >
             <Trash2Icon data-icon="inline-start" />

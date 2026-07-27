@@ -405,6 +405,22 @@ type OrganizerGiveawayWorkspaceProps = {
    * workspace never reads giveaway data from DemoState.
    */
   initialCampaigns?: OrganizerGiveawayCampaign[];
+  configurationActions?: OrganizerGiveawayConfigurationActions;
+};
+
+type OrganizerGiveawayConfigurationActions = {
+  create: (
+    input: CreateGiveawayInput,
+  ) => Promise<OrganizerGiveawaySaveResult<unknown>>;
+  update: (
+    input: UpdateGiveawayInput,
+  ) => Promise<OrganizerGiveawaySaveResult<unknown>>;
+  readWorkspace: (
+    giveawayId: string,
+  ) => Promise<OrganizerGiveawaySaveResult<OrganizerGiveawayWorkspaceData>>;
+  listCampaigns: (
+    eventId: string,
+  ) => Promise<OrganizerGiveawaySaveResult<OrganizerGiveawayCampaign[]>>;
 };
 
 const entryModeOptions: Array<{ value: GiveawayEntryMode; label: string; detail: string }> = [
@@ -607,9 +623,17 @@ export function toOrganizerGiveawaySaveUiState(
   };
 }
 
+const defaultOrganizerGiveawayConfigurationActions: OrganizerGiveawayConfigurationActions = {
+  create: createGiveawayAction,
+  update: updateGiveawayAction,
+  readWorkspace: getOrganizerGiveawayWorkspaceAction,
+  listCampaigns: listOrganizerGiveawaysAction,
+};
+
 export function OrganizerGiveawayWorkspace({
   eventId,
   initialCampaigns = [],
+  configurationActions = defaultOrganizerGiveawayConfigurationActions,
 }: OrganizerGiveawayWorkspaceProps) {
   const [campaigns, setCampaigns] = React.useState<OrganizerGiveawayCampaign[]>(initialCampaigns);
   const [selectedCampaignId, setSelectedCampaignId] = React.useState<string | null>(
@@ -722,7 +746,7 @@ export function OrganizerGiveawayWorkspace({
 
   const refreshCampaigns = React.useCallback(
     async (preferredCampaign?: OrganizerGiveawayCampaign) => {
-      const result = await listOrganizerGiveawaysAction(eventId);
+      const result = await configurationActions.listCampaigns(eventId);
       if (!result.ok) {
         throw new Error("GIVEAWAY_LIST_UNAVAILABLE");
       }
@@ -746,7 +770,7 @@ export function OrganizerGiveawayWorkspace({
       setConfigurationFailures({});
       return nextCampaigns;
     },
-    [eventId],
+    [configurationActions, eventId],
   );
 
   React.useEffect(() => {
@@ -754,7 +778,7 @@ export function OrganizerGiveawayWorkspace({
     let cancelled = false;
     const loadCampaigns = async () => {
       try {
-        const result = await listOrganizerGiveawaysAction(eventId);
+        const result = await configurationActions.listCampaigns(eventId);
         if (!result.ok) throw new Error("GIVEAWAY_LIST_UNAVAILABLE");
         if (cancelled) return;
         const nextCampaigns = result.data as OrganizerGiveawayCampaign[];
@@ -777,14 +801,14 @@ export function OrganizerGiveawayWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [eventId, initialCampaigns.length]);
+  }, [configurationActions, eventId, initialCampaigns.length]);
 
   const selectedCampaignIdForConfiguration = selectedCampaign?.id;
   const reloadCampaignConfiguration = React.useCallback(async (
     giveawayId: string,
     options: { preserveLocalSurprise?: boolean } = {},
   ) => {
-    const result = await getOrganizerGiveawayWorkspaceAction(giveawayId);
+    const result = await configurationActions.readWorkspace(giveawayId);
     if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
     const workspace = result.data as OrganizerGiveawayWorkspaceData;
     const authoritativeDraft = toOrganizerGiveawayEditorDraft(workspace);
@@ -818,7 +842,7 @@ export function OrganizerGiveawayWorkspace({
       return next;
     });
     return workspace;
-  }, []);
+  }, [configurationActions]);
 
   React.useEffect(() => {
     if (
@@ -834,7 +858,7 @@ export function OrganizerGiveawayWorkspace({
     let cancelled = false;
     void Promise.resolve().then(async () => {
       try {
-        const result = await getOrganizerGiveawayWorkspaceAction(
+        const result = await configurationActions.readWorkspace(
           selectedCampaignIdForConfiguration,
         );
         if (!result.ok) throw new Error("GIVEAWAY_WORKSPACE_UNAVAILABLE");
@@ -870,6 +894,7 @@ export function OrganizerGiveawayWorkspace({
     };
   }, [
     configurationFailures,
+    configurationActions,
     prizeMediaRefreshRequiredByCampaignId,
     selectedCampaignIdForConfiguration,
     selectedDraft,
@@ -1261,21 +1286,21 @@ export function OrganizerGiveawayWorkspace({
           campaignId: selectedCampaign?.id,
           draft: selectedDraft ?? editorDraft,
         }, {
-          create: createGiveawayAction,
-          update: updateGiveawayAction,
-          readWorkspace: getOrganizerGiveawayWorkspaceAction,
+          create: configurationActions.create,
+          update: configurationActions.update,
+          readWorkspace: configurationActions.readWorkspace,
         });
         const saveUiState = toOrganizerGiveawaySaveUiState(saved);
-        const savedCampaign = selectedCampaign ?? {
-          id: saved.giveawayId,
-          eventId,
-          title: editorDraft.title,
-          state: "draft" as const,
-          complianceStatus: "draft" as const,
-          mechanicsVersion: 1,
-        };
         setSelectedCampaignId(saveUiState.selectedCampaignId);
         if (saved.status === "saved_refresh_failed") {
+          const savedCampaign = selectedCampaign ?? {
+            id: saved.giveawayId,
+            eventId,
+            title: editorDraft.title,
+            state: "draft" as const,
+            complianceStatus: "draft" as const,
+            mechanicsVersion: 1,
+          };
           setCampaigns((current) =>
             current.some((campaign) => campaign.id === savedCampaign.id)
               ? current
@@ -1293,6 +1318,14 @@ export function OrganizerGiveawayWorkspace({
           });
           return;
         }
+        const savedCampaign: OrganizerGiveawayCampaign = {
+          id: saved.giveawayId,
+          eventId: saved.workspace.eventId,
+          title: saved.workspace.title,
+          state: saved.workspace.state,
+          complianceStatus: saved.workspace.complianceStatus,
+          mechanicsVersion: selectedCampaign?.mechanicsVersion ?? 1,
+        };
         setDraftsByCampaignId((current) => ({
           ...current,
           [saved.giveawayId]: saved.draft,
@@ -1312,8 +1345,29 @@ export function OrganizerGiveawayWorkspace({
           return next;
         });
         if (saved.workspace.entryMode !== "claim_code") setIssuedCampaignCode(null);
-        await refreshCampaigns(savedCampaign);
+        setCampaigns((current) => {
+          const existingIndex = current.findIndex(
+            (campaign) => campaign.id === savedCampaign.id,
+          );
+          if (existingIndex === -1) return [savedCampaign, ...current];
+          const next = [...current];
+          next[existingIndex] = savedCampaign;
+          return next;
+        });
+        let campaignListRefreshed = true;
+        try {
+          await refreshCampaigns(savedCampaign);
+        } catch {
+          campaignListRefreshed = false;
+        }
         await refreshCampaignOperations(saved.giveawayId).catch(() => undefined);
+        if (!campaignListRefreshed) {
+          setNotice({
+            tone: "warning",
+            text: "Campaign saved and prize details updated, but the campaign list could not be refreshed. You can keep editing this campaign; refresh the page to update the list.",
+          });
+          return;
+        }
         setNotice({
           tone: "success",
           text: selectedCampaign
@@ -1329,7 +1383,7 @@ export function OrganizerGiveawayWorkspace({
         });
       }
     });
-  }, [editorDraft, eventId, refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
+  }, [configurationActions, editorDraft, eventId, refreshCampaignOperations, refreshCampaigns, selectedCampaign, selectedDraft, startTransition]);
 
   const runInitialDraw = React.useCallback(() => {
     if (

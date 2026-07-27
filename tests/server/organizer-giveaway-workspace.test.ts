@@ -769,6 +769,139 @@ describe("organizer giveaway lifecycle route", () => {
     },
   );
 
+  test.each([
+    {
+      operation: "create",
+      campaignId: undefined,
+      savedGiveawayId: "giveaway-created",
+      saveButtonLabel: "Create campaign",
+    },
+    {
+      operation: "update",
+      campaignId: "giveaway-1",
+      savedGiveawayId: "giveaway-1",
+      saveButtonLabel: "Save policy",
+    },
+  ] as const)(
+    "$operation keeps authoritative prize details when only the campaign-list refresh fails",
+    async ({ campaignId, savedGiveawayId, saveButtonLabel }) => {
+      const dom = new JSDOM("<div id=\"root\"></div>", {
+        url: "http://localhost/organizer/events/event-1/giveaways",
+      });
+      vi.stubGlobal("window", dom.window);
+      vi.stubGlobal("document", dom.window.document);
+      vi.stubGlobal("navigator", dom.window.navigator);
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const root = createRoot(dom.window.document.getElementById("root")!);
+      const authoritativeWorkspace = {
+        ...organizerWorkspaceWithPools([
+          {
+            id: "server-pool-authoritative",
+            title: "Authoritative inventory",
+            awardMode: "random_draw",
+            fulfilmentMode: "onsite",
+            inventory: { kind: "finite", quantity: 1 },
+            items: [{ title: "Private Ducati Helmet" }],
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Authoritative public helmet",
+            },
+          },
+        ]),
+        id: savedGiveawayId,
+        title: "Authoritative saved campaign",
+      } satisfies OrganizerGiveawayWorkspaceData;
+      const create = vi.fn(async () => ({
+        ok: true as const,
+        data: { id: savedGiveawayId },
+      }));
+      const update = vi.fn(async () => ({
+        ok: true as const,
+        data: undefined,
+      }));
+      const readWorkspace = vi.fn(async () => ({
+        ok: true as const,
+        data: authoritativeWorkspace,
+      }));
+      const listCampaigns = vi.fn(async () => ({
+        ok: false as const,
+        error: "ACTION_FAILED",
+      }));
+
+      try {
+        await React.act(async () => {
+          root.render(
+            React.createElement(OrganizerGiveawayWorkspace, {
+              eventId: "event-1",
+              initialCampaigns: [
+                {
+                  id: "giveaway-1",
+                  eventId: "event-1",
+                  title: "Original campaign",
+                  state: "draft",
+                  complianceStatus: "draft",
+                  mechanicsVersion: 1,
+                },
+              ],
+              configurationActions: {
+                create,
+                update,
+                readWorkspace,
+                listCampaigns,
+              },
+            }),
+          );
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        if (!campaignId) {
+          const newCampaignButton = dom.window.document.querySelector(
+            'button[aria-label="Create campaign"]',
+          ) as HTMLButtonElement;
+          await React.act(async () => {
+            newCampaignButton.click();
+          });
+        }
+
+        const saveButton = Array.from(
+          dom.window.document.querySelectorAll("button"),
+        ).find((button) => button.textContent?.trim() === saveButtonLabel);
+        expect(saveButton).toBeDefined();
+
+        await React.act(async () => {
+          (saveButton as HTMLButtonElement).click();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        expect(dom.window.document.body.textContent).toContain(
+          "Campaign saved and prize details updated, but the campaign list could not be refreshed. You can keep editing this campaign; refresh the page to update the list.",
+        );
+        expect(dom.window.document.body.textContent).not.toContain(
+          "Campaign policy was not saved",
+        );
+        expect(dom.window.document.body.textContent).toContain(
+          "Authoritative saved campaign",
+        );
+        expect(dom.window.document.body.textContent).toContain(
+          "Authoritative public helmet",
+        );
+        expect(dom.window.document.body.textContent).toContain("Upload image");
+        expect(listCampaigns).toHaveBeenCalledOnce();
+        expect(readWorkspace).toHaveBeenCalledWith(savedGiveawayId);
+        expect(create).toHaveBeenCalledTimes(campaignId ? 0 : 1);
+        expect(update).toHaveBeenCalledTimes(campaignId ? 1 : 0);
+      } finally {
+        await React.act(async () => {
+          root.unmount();
+        });
+        vi.unstubAllGlobals();
+        dom.window.close();
+      }
+    },
+  );
+
   test("selecting surprise hides public media without deleting before policy save", async () => {
     const dom = new JSDOM("<div id=\"root\"></div>", {
       url: "http://localhost/organizer/events/event-1/giveaways",
@@ -978,6 +1111,86 @@ describe("organizer giveaway lifecycle route", () => {
       "The public prize image was uploaded, but the workspace could not be refreshed. Refresh to see it.",
     );
     expect(reloadStatuses).not.toContain("Public prize image updated.");
+  });
+
+  test("a successful image removal with a failed reload hides stale controls without retrying delete", async () => {
+    const dom = new JSDOM("<div id=\"root\"></div>", {
+      url: "http://localhost/organizer/events/event-1/giveaways",
+    });
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("navigator", dom.window.navigator);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    const removeAction = vi.fn(async () => ({
+      ok: true as const,
+      data: undefined,
+    }));
+    const onChanged = vi.fn(async () => {
+      throw new Error("workspace refresh failed");
+    });
+
+    try {
+      await React.act(async () => {
+        root.render(
+          React.createElement(GiveawayPrizeImageUploader, {
+            giveawayId: "giveaway-1",
+            prizePoolId: "server-pool-1",
+            image: {
+              mediaId: "media-1",
+              url: "/giveaway-prize-media/media-1",
+              width: 1200,
+              height: 800,
+            },
+            disabled: false,
+            onChanged,
+            removeAction,
+          }),
+        );
+      });
+      const removeButton = Array.from(
+        dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.includes("Remove image"));
+      expect(removeButton).toBeDefined();
+
+      await React.act(async () => {
+        (removeButton as HTMLButtonElement).click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(removeAction).toHaveBeenCalledOnce();
+      expect(removeAction).toHaveBeenCalledWith({
+        giveawayId: "giveaway-1",
+        prizePoolId: "server-pool-1",
+        mediaId: "media-1",
+      });
+      expect(onChanged).toHaveBeenCalledOnce();
+      expect(dom.window.document.querySelector('img[alt="Current public prize"]')).toBeNull();
+      expect(dom.window.document.body.textContent).not.toContain("Remove image");
+      expect(
+        (
+          dom.window.document.querySelector(
+            'input[type="file"]',
+          ) as HTMLInputElement
+        ).disabled,
+      ).toBe(true);
+      expect(dom.window.document.body.textContent).toContain(
+        "Public prize image was removed, but the workspace could not be refreshed. Refresh to update this view.",
+      );
+      expect(dom.window.document.body.textContent).not.toContain(
+        "The public prize image could not be removed",
+      );
+      expect(dom.window.document.body.textContent).not.toContain(
+        "Public prize image removed.",
+      );
+    } finally {
+      await React.act(async () => {
+        root.unmount();
+      });
+      vi.unstubAllGlobals();
+      dom.window.close();
+    }
   });
 
   test("wires existing campaign edits through the selected campaign draft dispatcher", async () => {
