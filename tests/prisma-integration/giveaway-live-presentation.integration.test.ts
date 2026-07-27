@@ -42,6 +42,10 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         title: "Synthetic helmet",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Synthetic helmet",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Synthetic prize item" }],
       },
@@ -50,6 +54,10 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         title: "Synthetic manual recognition",
         awardMode: "manual_selection",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Synthetic manual recognition",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Synthetic manual prize item" }],
       },
@@ -110,6 +118,24 @@ describe("Prisma live giveaway presentation", () => {
         organizerSession,
         eventId,
         giveawayInput(eventId),
+      );
+      const beforeConfiguration =
+        await backendClients.primary.backend.getOrganizerGiveawayWorkspace(
+          organizerSession,
+          giveaway.id,
+        );
+      await backendClients.primary.backend.updateGiveaway(organizerSession, {
+        id: giveaway.id,
+        eligibilityGroups: beforeConfiguration.eligibilityGroups,
+        prizePools: beforeConfiguration.prizePools,
+      });
+      const afterConfiguration =
+        await backendClients.secondary.backend.getOrganizerGiveawayWorkspace(
+          organizerSession,
+          giveaway.id,
+        );
+      expect(afterConfiguration.prizePools.map((pool) => pool.id)).toEqual(
+        beforeConfiguration.prizePools.map((pool) => pool.id),
       );
       await backendClients.primary.backend.submitGiveawayForReview(organizerSession, giveaway.id);
       await backendClients.primary.backend.reviewGiveawayCompliance(adminSession, giveaway.id, {

@@ -93,6 +93,13 @@ export interface GiveawayPrizeImageSummary {
   height: number;
 }
 
+export interface PublicPrizePresentation {
+  disclosure: GiveawayPrizeDisclosure;
+  title: string;
+  description?: string;
+  image?: GiveawayPrizeImageSummary;
+}
+
 export interface GiveawayPrizePoolBaseInput {
   id: string;
   title: string;
@@ -199,14 +206,12 @@ export type UpdateGiveawayInput = {
 
 export interface PublicGiveawayPrizePoolSummary {
   id: string;
-  title: string;
   awardMode: GiveawayAwardMode;
-  fulfilmentMode: GiveawayFulfilmentMode;
   inventoryKind: GiveawayPrizeInventoryInput["kind"];
   /** Number of authoritative finite item rows, when the pool is finite. */
   itemQuantity?: number;
-  items: Array<Pick<GiveawayPrizeItemInput, "id" | "title" | "description">>;
   presenceVerificationRequired: boolean;
+  presentation: PublicPrizePresentation;
 }
 
 /** Public/event-page data only. It deliberately excludes entrants and operational secrets. */
@@ -232,7 +237,7 @@ export interface PublicGiveawayCampaignSummary {
 
 /** One public winner result. It exists only after the winning rider explicitly opts in. */
 export interface PublicGiveawayResult {
-  prizePoolTitle: string;
+  prizeTitle: string;
   winnerAlias: string;
 }
 

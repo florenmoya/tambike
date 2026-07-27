@@ -27,6 +27,7 @@ import type {
   GiveawayNotification,
   GiveawayNotificationKind,
   GiveawayOperatorCandidate,
+  GiveawayPrizeImageSummary,
   GiveawayPrizePoolInput,
   GiveawayPublicVisibility,
   GiveawayState,
@@ -53,6 +54,7 @@ import type {
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
 } from "@/features/giveaways/types";
+import { toPublicPrizePresentation } from "@/features/giveaways/public-prize-presentation";
 import {
   assertGiveawayLifecycleTransition,
   parseCreateGiveawayInput,
@@ -420,6 +422,10 @@ type GiveawayPrizePoolRecord = {
   id: string;
   position: number;
   title: string;
+  publicDisclosure: "revealed" | "surprise";
+  publicTitle?: string;
+  publicDescription?: string;
+  publicImage?: GiveawayPrizeImageSummary;
   awardMode: "random_draw" | "first_come" | "guaranteed" | "manual_selection";
   fulfilmentMode: GiveawayFulfilmentMode;
   inventoryKind: "finite" | "unlimited";
@@ -6752,17 +6758,27 @@ export class TambikeBackend {
     groups: CreateGiveawayInput["eligibilityGroups"],
     prizePools: CreateGiveawayInput["prizePools"],
   ) {
-    for (const group of giveaway.eligibilityGroups) {
-      this.giveaways.eligibilityGroupsById.delete(group.id);
+    const currentGroupsById = new Map(giveaway.eligibilityGroups.map((group) => [group.id, group]));
+    const currentPoolsById = new Map(giveaway.prizePools.map((pool) => [pool.id, pool]));
+    const ownsGroupId = (id: string) => currentGroupsById.has(id);
+    const ownsPoolId = (id: string) => currentPoolsById.has(id);
+
+    for (const group of groups) {
+      if (this.giveaways.eligibilityGroupsById.has(group.id) && !ownsGroupId(group.id)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
     }
-    for (const pool of giveaway.prizePools) {
-      this.giveaways.prizePoolsById.delete(pool.id);
-      for (const item of pool.items) this.giveaways.prizeItemsById.delete(item.id);
+    for (const pool of prizePools) {
+      if (this.giveaways.prizePoolsById.has(pool.id) && !ownsPoolId(pool.id)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
     }
 
     const groupIdByRequestId = new Map<string, string>();
     const persistedGroups = groups.map<GiveawayEligibilityGroupRecord>((group, position) => {
-      const id = `giveaway-eligibility-group-${this.generateGiveawayUuid()}`;
+      const id = ownsGroupId(group.id)
+        ? group.id
+        : `giveaway-eligibility-group-${this.generateGiveawayUuid()}`;
       groupIdByRequestId.set(group.id, id);
       const persisted: GiveawayEligibilityGroupRecord = {
         id,
@@ -6778,9 +6794,17 @@ export class TambikeBackend {
       this.giveaways.eligibilityGroupsById.set(id, persisted);
       return persisted;
     });
+    const retainedGroupIds = new Set(persistedGroups.map((group) => group.id));
+    for (const group of giveaway.eligibilityGroups) {
+      if (!retainedGroupIds.has(group.id)) this.giveaways.eligibilityGroupsById.delete(group.id);
+    }
 
     const persistedPools = prizePools.map<GiveawayPrizePoolRecord>((pool, position) => {
-      const id = `giveaway-prize-pool-${this.generateGiveawayUuid()}`;
+      const current = currentPoolsById.get(pool.id);
+      const id = current?.id ?? `giveaway-prize-pool-${this.generateGiveawayUuid()}`;
+      for (const item of current?.items ?? []) {
+        this.giveaways.prizeItemsById.delete(item.id);
+      }
       const items = pool.items.map<GiveawayPrizeItemRecord>((item, itemPosition) => {
         const persisted: GiveawayPrizeItemRecord = {
           id: `giveaway-prize-item-${this.generateGiveawayUuid()}`,
@@ -6796,6 +6820,16 @@ export class TambikeBackend {
         id,
         position,
         title: pool.title,
+        publicDisclosure: pool.publicPresentation.disclosure,
+        publicTitle:
+          pool.publicPresentation.disclosure === "revealed"
+            ? pool.publicPresentation.title?.trim()
+            : undefined,
+        publicDescription:
+          pool.publicPresentation.disclosure === "revealed"
+            ? pool.publicPresentation.description?.trim()
+            : undefined,
+        publicImage: current?.publicImage,
         awardMode: pool.awardMode,
         fulfilmentMode: pool.fulfilmentMode,
         inventoryKind: pool.inventory.kind,
@@ -6813,6 +6847,12 @@ export class TambikeBackend {
       this.giveaways.prizePoolsById.set(id, persisted);
       return persisted;
     });
+    const retainedPoolIds = new Set(persistedPools.map((pool) => pool.id));
+    for (const pool of giveaway.prizePools) {
+      if (retainedPoolIds.has(pool.id)) continue;
+      this.giveaways.prizePoolsById.delete(pool.id);
+      for (const item of pool.items) this.giveaways.prizeItemsById.delete(item.id);
+    }
 
     giveaway.eligibilityGroups = persistedGroups;
     giveaway.prizePools = persistedPools;
@@ -6870,18 +6910,17 @@ export class TambikeBackend {
     const mechanics = this.currentGiveawayMechanics(giveaway);
     const prizePools = giveaway.prizePools.map<PublicGiveawayPrizePoolSummary>((pool) => ({
       id: pool.id,
-      title: pool.title,
       awardMode: pool.awardMode,
-      fulfilmentMode: pool.fulfilmentMode,
       inventoryKind: pool.inventoryKind,
       itemQuantity: pool.inventoryKind === "finite" ? pool.items.length : undefined,
-      items: pool.items.map((item) => ({
-        id: item.id,
-        title: item.title,
-        description: item.description,
-      })),
       presenceVerificationRequired:
         giveaway.presenceVerificationRequired || pool.presenceVerificationRequired,
+      presentation: toPublicPrizePresentation({
+        disclosure: pool.publicDisclosure,
+        publicTitle: pool.publicTitle,
+        publicDescription: pool.publicDescription,
+        publicImage: pool.publicImage,
+      }),
     }));
     return {
       id: giveaway.id,
@@ -6981,7 +7020,12 @@ export class TambikeBackend {
           left.award.id.localeCompare(right.award.id),
       )
       .map(({ pool, award }) => ({
-        prizePoolTitle: pool.title,
+        prizeTitle: toPublicPrizePresentation({
+          disclosure: pool.publicDisclosure,
+          publicTitle: pool.publicTitle,
+          publicDescription: pool.publicDescription,
+          publicImage: pool.publicImage,
+        }).title,
         winnerAlias: award.publicWinnerAlias!,
       }));
   }
@@ -7029,6 +7073,16 @@ export class TambikeBackend {
       id: pool.id,
       title: pool.title,
       fulfilmentMode: pool.fulfilmentMode,
+      publicPresentation: {
+        disclosure: pool.publicDisclosure,
+        ...(pool.publicDisclosure === "revealed" && pool.publicTitle
+          ? { title: pool.publicTitle }
+          : {}),
+        ...(pool.publicDisclosure === "revealed" && pool.publicDescription
+          ? { description: pool.publicDescription }
+          : {}),
+      },
+      ...(pool.publicImage ? { publicImage: pool.publicImage } : {}),
       eligibilityGroupIds: pool.eligibilityGroupIds.length ? [...pool.eligibilityGroupIds] : undefined,
       perRiderLimit: pool.perRiderLimit ?? 1,
       presenceVerificationRequired: pool.presenceVerificationRequired,

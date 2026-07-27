@@ -254,7 +254,7 @@ function CompletedGiveawayResult({
             {results.map((result, index) => (
               <p
                 className={styles.winnerAlias}
-                key={`${result.prizePoolTitle}-${result.winnerAlias}-${index}`}
+                key={`${result.prizeTitle}-${result.winnerAlias}-${index}`}
               >
                 {result.winnerAlias}
               </p>
@@ -400,20 +400,5 @@ function ScheduleMoment({ label, value }: { label: string; value: string }) {
 function primaryPrizeSummary(campaign: PublicEventGiveaway) {
   const pool = campaign.giveaway.prizePools[0];
   if (!pool) return "Prize details coming soon";
-  return pool.items[0]?.title ?? pool.title ?? prizePoolSummary(pool);
-}
-
-function prizePoolSummary(
-  pool: PublicEventGiveaway["giveaway"]["prizePools"][number],
-) {
-  if (pool.items.length > 0) {
-    return pool.items.map((item) => item.title).join(" · ");
-  }
-
-  if (pool.inventoryKind === "unlimited") {
-    return "Unlimited prize availability";
-  }
-
-  const quantity = pool.itemQuantity ?? 0;
-  return `${quantity} prize ${quantity === 1 ? "item" : "items"}`;
+  return pool.presentation.title;
 }

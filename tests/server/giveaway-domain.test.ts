@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 
 import type {
   CreateGiveawayInput,
+  GiveawayPrizePoolInput,
+  GiveawayPrizePublicPresentationInput,
   GiveawayManualSelectionCandidate,
   OrganizerGiveawayOperations,
   PublicGiveawayDrawVerification,
@@ -10,6 +12,14 @@ import type {
   SelectManualGiveawayAwardInput,
   UpdateGiveawayInput,
 } from "../../src/features/giveaways/types";
+
+type GiveawayPrizePoolTestInput = GiveawayPrizePoolInput extends infer Pool
+  ? Pool extends GiveawayPrizePoolInput
+    ? Omit<Pool, "publicPresentation"> & {
+        publicPresentation?: GiveawayPrizePublicPresentationInput;
+      }
+    : never
+  : never;
 import { createTambikeTestBackend } from "../../src/server/testing";
 import { createPublishedTestEvent, createTestActors } from "./support/tambike-fixtures";
 
@@ -322,6 +332,7 @@ function automaticGiveawayInput(
         title: "Helmet giveaway",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: { disclosure: "revealed", title: "Tambike helmet" },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Tambike helmet" }],
       },
@@ -332,11 +343,22 @@ function automaticGiveawayInput(
 
 function giveawayInput(
   eventId: string,
-  overrides: Partial<CreateGiveawayInput>,
+  overrides: Omit<Partial<CreateGiveawayInput>, "prizePools"> & {
+    prizePools?: GiveawayPrizePoolTestInput[];
+  },
 ): CreateGiveawayInput {
+  const prizePools = (overrides.prizePools ?? automaticGiveawayInput(eventId).prizePools).map(
+    (pool) => ({
+      ...pool,
+      publicPresentation:
+        pool.publicPresentation ??
+        { disclosure: "revealed" as const, title: pool.items[0]?.title ?? pool.title },
+    }),
+  ) as CreateGiveawayInput["prizePools"];
   return {
     ...automaticGiveawayInput(eventId),
     ...overrides,
+    prizePools,
   } as CreateGiveawayInput;
 }
 
@@ -607,6 +629,10 @@ describe("in-memory event giveaway lifecycle", () => {
         title: "Limited first-come prize",
         awardMode: "first_come",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Frozen winner limit prize",
+        },
         eligibilityGroupIds: ["active-rider"],
         perRiderLimit: 1,
         inventory: { kind: "finite", quantity: 1 },
@@ -651,6 +677,10 @@ describe("in-memory event giveaway lifecycle", () => {
             title: "Limited first-come prize",
             awardMode: "first_come",
             fulfilmentMode: "onsite",
+            publicPresentation: {
+              disclosure: "revealed",
+              title: "Frozen winner limit prize",
+            },
             eligibilityGroupIds: ["active-rider"],
             perRiderLimit: 2,
             inventory: { kind: "finite", quantity: 1 },

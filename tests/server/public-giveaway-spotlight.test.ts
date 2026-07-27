@@ -92,16 +92,14 @@ describe("public giveaway spotlight", () => {
     completed.giveaway.prizePools = [
       {
         id: "helmet-pool",
-        title: "Helmet prize",
         awardMode: "random_draw",
-        fulfilmentMode: "onsite",
         inventoryKind: "finite",
         itemQuantity: 1,
         presenceVerificationRequired: false,
-        items: [{ id: "helmet", title: "Tambike helmet" }],
+        presentation: { disclosure: "revealed", title: "Tambike helmet" },
       },
     ];
-    completed.results = [{ prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." }];
+    completed.results = [{ prizeTitle: "Tambike helmet", winnerAlias: "Rider M." }];
     completed.drawVerifications = [
       {
         giveawayId: "Completed helmet raffle",
@@ -119,13 +117,11 @@ describe("public giveaway spotlight", () => {
     open.giveaway.prizePools = [
       {
         id: "jacket-pool",
-        title: "Jacket prize",
         awardMode: "random_draw",
-        fulfilmentMode: "onsite",
         inventoryKind: "finite",
         itemQuantity: 1,
         presenceVerificationRequired: false,
-        items: [{ id: "jacket", title: "Tambike riding jacket" }],
+        presentation: { disclosure: "revealed", title: "Tambike riding jacket" },
       },
     ];
     open.giveaway.entryOpensAt = "2026-07-27T00:00:00.000Z";
@@ -216,8 +212,8 @@ describe("public giveaway spotlight", () => {
   test("renders repeated public aliases without duplicate React keys", async () => {
     const completed = campaign("Completed duplicate-alias raffle", "completed");
     completed.results = [
-      { prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." },
-      { prizePoolTitle: "Helmet prize", winnerAlias: "Rider M." },
+      { prizeTitle: "Tambike helmet", winnerAlias: "Rider M." },
+      { prizeTitle: "Tambike helmet", winnerAlias: "Rider M." },
     ];
     vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
       ok: true,

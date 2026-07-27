@@ -97,6 +97,7 @@ function giveawayInput(eventId: string, visibility: CreateGiveawayInput["publicV
         title: "Helmet prize",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: { disclosure: "surprise" },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Tambike helmet", description: "One event helmet" }],
         eligibilityGroupIds: ["active-rider"],
@@ -210,6 +211,7 @@ async function createOpenEntryGiveaway(
         title: "Entry prize",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: { disclosure: "revealed", title: "Ride prize" },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Ride prize" }],
         eligibilityGroupIds: ["entry-group"],
@@ -268,6 +270,21 @@ describe("giveaway UI data contracts", () => {
     expect(JSON.stringify(campaigns)).not.toMatch(
       /winnerUserId|awardId|claimReference|claimToken|sourceFact|encrypted|ciphertext|delivery/i,
     );
+    expect(JSON.stringify(campaigns)).not.toContain("Helmet prize");
+    expect(JSON.stringify(campaigns)).not.toContain("Tambike helmet");
+    await expect(
+      backend.getOrganizerGiveawayWorkspace(
+        context.organizer.sessionToken,
+        context.giveaway.id,
+      ),
+    ).resolves.toMatchObject({
+      prizePools: [
+        expect.objectContaining({
+          title: "Helmet prize",
+          items: [expect.objectContaining({ title: "Tambike helmet" })],
+        }),
+      ],
+    });
     await expect(backend.getPublicGiveaway(unpublished.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
@@ -278,7 +295,7 @@ describe("giveaway UI data contracts", () => {
       backend.listPublicGiveawaysForEvent(context.event.id),
     );
     expect(optedIn[0]?.results).toEqual([
-      { prizePoolTitle: "Helmet prize", winnerAlias: "Fixture R." },
+      { prizeTitle: "Surprise prize", winnerAlias: "Fixture R." },
     ]);
 
     await backend.setGiveawayWinnerPublication(context.rider.sessionToken, context.awardId, {
@@ -297,8 +314,48 @@ describe("giveaway UI data contracts", () => {
       backend.listPublicGiveawaysForEvent(context.event.id),
     );
     expect(reopted[0]?.results).toEqual([
-      { prizePoolTitle: "Helmet prize", winnerAlias: "Fixture Rejoined" },
+      { prizeTitle: "Surprise prize", winnerAlias: "Fixture Rejoined" },
     ]);
+  });
+
+  test("keeps persisted prize-pool identity across configuration saves", async () => {
+    const backend = asGiveawayUiDataBackend(await createTambikeTestBackend());
+    const { organizer, admin } = await createTestActors(
+      backend,
+      `giveaway-ui-stable-pool-${++uiFixtureSequence}`,
+    );
+    const event = await createPublishedTestEvent(backend, { organizer, admin }, {
+      title: "Stable prize pool ride",
+      type: "Bike Night",
+      date: "August 22, 2026",
+      time: "7:00 PM - 10:00 PM",
+      locationName: "Stable Pool Grounds",
+      locationAddress: "22 Stable Avenue, Antipolo",
+      area: "Antipolo",
+      expectedRiders: 20,
+      perkPreview: "Stable prize configuration",
+    });
+    const giveaway = await backend.createGiveaway(
+      organizer.sessionToken,
+      event.id,
+      giveawayInput(event.id),
+    );
+
+    const before = await backend.getOrganizerGiveawayWorkspace(
+      organizer.sessionToken,
+      giveaway.id,
+    );
+    await backend.updateGiveaway(organizer.sessionToken, {
+      id: giveaway.id,
+      eligibilityGroups: before.eligibilityGroups,
+      prizePools: before.prizePools,
+    });
+    const after = await backend.getOrganizerGiveawayWorkspace(
+      organizer.sessionToken,
+      giveaway.id,
+    );
+
+    expect(after.prizePools[0]?.id).toBe(before.prizePools[0]?.id);
   });
 
   test("withholds public proof before publication and scopes a rider proof to their own entry", async () => {

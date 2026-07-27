@@ -51,6 +51,7 @@ import type {
   UpdateGiveawayInput,
   VerifyGiveawayClaimInput,
 } from "@/features/giveaways/types";
+import { toPublicPrizePresentation } from "@/features/giveaways/public-prize-presentation";
 import {
   assertGiveawayLifecycleTransition,
   parseCreateGiveawayInput,
@@ -237,6 +238,7 @@ const giveawayConfigurationInclude = {
   prizePools: {
     orderBy: { position: "asc" },
     include: {
+      publicImage: true,
       prizeItems: { orderBy: { position: "asc" } },
       eligibilityGroups: { include: { eligibilityGroup: true } },
     },
@@ -6713,39 +6715,126 @@ export class PrismaTambikeBackend {
     pools: CreateGiveawayInput["prizePools"],
     defaultPresenceVerificationRequired: boolean,
   ) {
+    const [currentGroups, currentPools, referencedGroups, referencedPools] = await Promise.all([
+      tx.giveawayEligibilityGroup.findMany({
+        where: { giveawayId },
+        select: { id: true, position: true },
+      }),
+      tx.giveawayPrizePool.findMany({
+        where: { giveawayId },
+        select: { id: true, position: true },
+      }),
+      groups.length
+        ? tx.giveawayEligibilityGroup.findMany({
+            where: { id: { in: groups.map((group) => group.id) } },
+            select: { id: true, giveawayId: true },
+          })
+        : Promise.resolve([]),
+      pools.length
+        ? tx.giveawayPrizePool.findMany({
+            where: { id: { in: pools.map((pool) => pool.id) } },
+            select: { id: true, giveawayId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    if (
+      referencedGroups.some((group) => group.giveawayId !== giveawayId) ||
+      referencedPools.some((pool) => pool.giveawayId !== giveawayId)
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+
+    const currentGroupIds = new Set(currentGroups.map((group) => group.id));
+    const currentPoolIds = new Set(currentPools.map((pool) => pool.id));
+    const retainedGroupIds = new Set(
+      groups.filter((group) => currentGroupIds.has(group.id)).map((group) => group.id),
+    );
+    const retainedPoolIds = new Set(
+      pools.filter((pool) => currentPoolIds.has(pool.id)).map((pool) => pool.id),
+    );
+    const removedGroupIds = currentGroups
+      .map((group) => group.id)
+      .filter((id) => !retainedGroupIds.has(id));
+    const removedPoolIds = currentPools
+      .map((pool) => pool.id)
+      .filter((id) => !retainedPoolIds.has(id));
+
     await tx.giveawayPrizePoolEligibilityGroup.deleteMany({
       where: { prizePool: { giveawayId } },
     });
     await tx.giveawayPrizeItem.deleteMany({ where: { prizePool: { giveawayId } } });
-    await tx.giveawayPrizePool.deleteMany({ where: { giveawayId } });
     await tx.giveawayEligibilityCondition.deleteMany({ where: { group: { giveawayId } } });
-    await tx.giveawayEligibilityGroup.deleteMany({ where: { giveawayId } });
-
-    const groupIdByRequestId = new Map<string, string>();
-    for (const [position, group] of groups.entries()) {
-      const id = `giveaway-eligibility-group-${randomUUID()}`;
-      groupIdByRequestId.set(group.id, id);
-      await tx.giveawayEligibilityGroup.create({
-        data: {
-          id,
-          giveawayId,
-          position,
-          label: group.label,
-          entryWeight: group.weight,
-          conditions: {
-            create: group.conditions.map((condition) => ({
-              id: `giveaway-eligibility-condition-${randomUUID()}`,
-              source: condition.source as never,
-              perkId: condition.source === "perk_redemption" ? condition.perkId : null,
-              config: this.toJsonValue(condition),
-            })),
-          },
-        },
+    if (removedPoolIds.length) {
+      await tx.giveawayPrizeImage.deleteMany({
+        where: { prizePoolId: { in: removedPoolIds } },
+      });
+      await tx.giveawayPrizePool.deleteMany({
+        where: { id: { in: removedPoolIds }, giveawayId },
+      });
+    }
+    if (removedGroupIds.length) {
+      await tx.giveawayEligibilityGroup.deleteMany({
+        where: { id: { in: removedGroupIds }, giveawayId },
       });
     }
 
+    const temporaryGroupPositionBase =
+      Math.max(groups.length, ...currentGroups.map((group) => group.position)) + 1;
+    const temporaryPoolPositionBase =
+      Math.max(pools.length, ...currentPools.map((pool) => pool.position)) + 1;
+    for (const [temporaryPosition, id] of [...retainedGroupIds].entries()) {
+      await tx.giveawayEligibilityGroup.update({
+        where: { id },
+        data: { position: temporaryGroupPositionBase + temporaryPosition },
+      });
+    }
+    for (const [temporaryPosition, id] of [...retainedPoolIds].entries()) {
+      await tx.giveawayPrizePool.update({
+        where: { id },
+        data: { position: temporaryPoolPositionBase + temporaryPosition },
+      });
+    }
+
+    const groupIdByRequestId = new Map<string, string>();
+    for (const [position, group] of groups.entries()) {
+      const id = currentGroupIds.has(group.id)
+        ? group.id
+        : `giveaway-eligibility-group-${randomUUID()}`;
+      groupIdByRequestId.set(group.id, id);
+      const data = {
+        position,
+        label: group.label,
+        entryWeight: group.weight,
+        enabled: true,
+        conditions: {
+          create: group.conditions.map((condition) => ({
+            id: `giveaway-eligibility-condition-${randomUUID()}`,
+            source: condition.source as never,
+            perkId: condition.source === "perk_redemption" ? condition.perkId : null,
+            config: this.toJsonValue(condition),
+          })),
+        },
+      };
+      if (currentGroupIds.has(id)) {
+        await tx.giveawayEligibilityGroup.update({
+          where: { id },
+          data,
+        });
+      } else {
+        await tx.giveawayEligibilityGroup.create({
+          data: {
+            id,
+            giveawayId,
+            ...data,
+          },
+        });
+      }
+    }
+
     for (const [position, pool] of pools.entries()) {
-      const id = `giveaway-prize-pool-${randomUUID()}`;
+      const id = currentPoolIds.has(pool.id)
+        ? pool.id
+        : `giveaway-prize-pool-${randomUUID()}`;
       const eligibilityGroupIds = (pool.eligibilityGroupIds ?? []).map((requestId) => {
         const persistedId = groupIdByRequestId.get(requestId);
         if (!persistedId) {
@@ -6753,34 +6842,53 @@ export class PrismaTambikeBackend {
         }
         return persistedId;
       });
-      await tx.giveawayPrizePool.create({
-        data: {
-          id,
-          giveawayId,
-          position,
-          title: pool.title,
-          awardMode: pool.awardMode as never,
-          fulfillmentType: pool.fulfilmentMode as never,
-          inventoryLimit: pool.inventory.kind === "finite" ? pool.inventory.quantity : null,
-          maxWinsPerRider: pool.perRiderLimit ?? 1,
-          presenceVerificationRequired:
-            pool.presenceVerificationRequired ?? defaultPresenceVerificationRequired,
-          prizeItems: {
-            create: pool.items.map((item, itemPosition) => ({
-              id: `giveaway-prize-item-${randomUUID()}`,
-              position: itemPosition,
-              title: item.title,
-              description: item.description ?? null,
-            })),
-          },
-          eligibilityGroups: {
-            create: eligibilityGroupIds.map((eligibilityGroupId) => ({
-              id: `giveaway-prize-pool-eligibility-${randomUUID()}`,
-              eligibilityGroupId,
-            })),
-          },
+      const data = {
+        position,
+        title: pool.title,
+        publicDisclosure: pool.publicPresentation.disclosure as never,
+        publicTitle:
+          pool.publicPresentation.disclosure === "revealed"
+            ? (pool.publicPresentation.title?.trim() ?? null)
+            : null,
+        publicDescription:
+          pool.publicPresentation.disclosure === "revealed"
+            ? (pool.publicPresentation.description?.trim() || null)
+            : null,
+        awardMode: pool.awardMode as never,
+        fulfillmentType: pool.fulfilmentMode as never,
+        inventoryLimit: pool.inventory.kind === "finite" ? pool.inventory.quantity : null,
+        maxWinsPerRider: pool.perRiderLimit ?? 1,
+        presenceVerificationRequired:
+          pool.presenceVerificationRequired ?? defaultPresenceVerificationRequired,
+        prizeItems: {
+          create: pool.items.map((item, itemPosition) => ({
+            id: `giveaway-prize-item-${randomUUID()}`,
+            position: itemPosition,
+            title: item.title,
+            description: item.description ?? null,
+          })),
         },
-      });
+        eligibilityGroups: {
+          create: eligibilityGroupIds.map((eligibilityGroupId) => ({
+            id: `giveaway-prize-pool-eligibility-${randomUUID()}`,
+            eligibilityGroupId,
+          })),
+        },
+      };
+      if (currentPoolIds.has(id)) {
+        await tx.giveawayPrizePool.update({
+          where: { id },
+          data,
+        });
+      } else {
+        await tx.giveawayPrizePool.create({
+          data: {
+            id,
+            giveawayId,
+            ...data,
+          },
+        });
+      }
     }
   }
 
@@ -6807,17 +6915,23 @@ export class PrismaTambikeBackend {
     const mechanics = this.currentGiveawayMechanics(giveaway);
     const prizePools = giveaway.prizePools.map<PublicGiveawayPrizePoolSummary>((pool) => ({
       id: pool.id,
-      title: pool.title,
       awardMode: pool.awardMode as PublicGiveawayPrizePoolSummary["awardMode"],
-      fulfilmentMode: pool.fulfillmentType as GiveawayFulfilmentMode,
       inventoryKind: pool.inventoryLimit === null ? "unlimited" : "finite",
       itemQuantity: pool.inventoryLimit === null ? undefined : pool.prizeItems.length,
-      items: pool.prizeItems.map((item) => ({
-        id: item.id,
-        title: item.title,
-        description: item.description ?? undefined,
-      })),
       presenceVerificationRequired: this.requiresGiveawayPresence(giveaway, pool),
+      presentation: toPublicPrizePresentation({
+        disclosure: pool.publicDisclosure,
+        publicTitle: pool.publicTitle ?? undefined,
+        publicDescription: pool.publicDescription ?? undefined,
+        publicImage: pool.publicImage
+          ? {
+              mediaId: pool.publicImage.mediaId,
+              url: `/giveaway-prize-media/${encodeURIComponent(pool.publicImage.mediaId)}`,
+              width: pool.publicImage.width,
+              height: pool.publicImage.height,
+            }
+          : undefined,
+      }),
     }));
     return {
       id: giveaway.id,
@@ -6930,7 +7044,13 @@ export class PrismaTambikeBackend {
         publicWinnerAlias: true,
         winnerAliasOptedInAt: true,
         winnerAliasRevokedAt: true,
-        prizePool: { select: { title: true, position: true } },
+        prizePool: {
+          select: {
+            position: true,
+            publicDisclosure: true,
+            publicTitle: true,
+          },
+        },
       },
       orderBy: { id: "asc" },
     });
@@ -6946,7 +7066,10 @@ export class PrismaTambikeBackend {
           left.id.localeCompare(right.id),
       )
       .map((award) => ({
-        prizePoolTitle: award.prizePool.title,
+        prizeTitle: toPublicPrizePresentation({
+          disclosure: award.prizePool.publicDisclosure,
+          publicTitle: award.prizePool.publicTitle ?? undefined,
+        }).title,
         winnerAlias: award.publicWinnerAlias!,
       }));
   }
@@ -7013,6 +7136,25 @@ export class PrismaTambikeBackend {
       id: pool.id,
       title: pool.title,
       fulfilmentMode: pool.fulfillmentType as GiveawayFulfilmentMode,
+      publicPresentation: {
+        disclosure: pool.publicDisclosure,
+        ...(pool.publicDisclosure === "revealed" && pool.publicTitle
+          ? { title: pool.publicTitle }
+          : {}),
+        ...(pool.publicDisclosure === "revealed" && pool.publicDescription
+          ? { description: pool.publicDescription }
+          : {}),
+      },
+      ...(pool.publicImage
+        ? {
+            publicImage: {
+              mediaId: pool.publicImage.mediaId,
+              url: `/giveaway-prize-media/${encodeURIComponent(pool.publicImage.mediaId)}`,
+              width: pool.publicImage.width,
+              height: pool.publicImage.height,
+            },
+          }
+        : {}),
       eligibilityGroupIds: pool.eligibilityGroups.length
         ? pool.eligibilityGroups.map((link) => link.eligibilityGroupId)
         : undefined,
