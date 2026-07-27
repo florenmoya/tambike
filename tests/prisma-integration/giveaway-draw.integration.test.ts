@@ -38,6 +38,10 @@ function giveawayInput(eventId: string): CreateGiveawayInput {
         title: "Disposable helmet",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Disposable prize item",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Disposable prize item" }],
       },
@@ -72,6 +76,10 @@ function directGiveawayInput(eventId: string): CreateGiveawayInput {
         title: "Disposable first-come prize",
         awardMode: "first_come",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Disposable direct prize item",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Disposable direct prize item" }],
       },
@@ -106,6 +114,10 @@ function manualGiveawayInput(eventId: string): CreateGiveawayInput {
         title: "Disposable manual helmet",
         awardMode: "manual_selection",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Disposable manual prize item",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Disposable manual prize item" }],
       },

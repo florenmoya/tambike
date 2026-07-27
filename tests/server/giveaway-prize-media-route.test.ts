@@ -250,10 +250,9 @@ describe("giveaway prize media delivery route", () => {
   test("maps a missing finalized storage object to a detail-free 503", async () => {
     const backend = {
       getGiveawayPrizeImageMedia: vi.fn(async () => {
-        throw new BackendError(
-          "MEDIA_UNAVAILABLE",
-          "sensitive finalized object detail",
-        );
+        const error = new BackendError("MEDIA_UNAVAILABLE");
+        error.message = "sensitive finalized object detail";
+        throw error;
       }),
     };
     const handler = createGiveawayPrizeMediaDeliveryHandler({
