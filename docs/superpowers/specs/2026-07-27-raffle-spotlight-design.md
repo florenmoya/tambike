@@ -1,6 +1,6 @@
 # Raffle Spotlight Design
 
-**Date:** July 27, 2026  
+**Date:** July 27, 2026
 **Status:** Approved direction
 
 ## Decision
