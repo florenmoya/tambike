@@ -226,6 +226,10 @@ export function completedSampleRaffleInput(
         title: "Helmet",
         awardMode: "manual_selection",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Cafe Classico Helmet",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Cafe Classico Helmet" }],
       },
@@ -258,6 +262,10 @@ export function ongoingSampleRaffleInput(
         title: "Rider gear package",
         awardMode: "random_draw",
         fulfilmentMode: "onsite",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Weekend Rider Gear Package",
+        },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Weekend Rider Gear Package" }],
       },

@@ -221,6 +221,75 @@ WHERE "id" = 'tambike-cafe-classico'
   ) {
     throw 'Postflight did not prove the exact final sample raffle invariants.'
   }
+
+  $publicPrizeInspectionScript = @'
+import { toPublicPrizePresentation } from './src/features/giveaways/public-prize-presentation.ts';
+import { PrismaTambikeBackend } from './src/server/prisma-backend.ts';
+
+async function inspectPublicPrizes() {
+  const backend = PrismaTambikeBackend.create(process.env.DIRECT_URL);
+  try {
+    const publicGiveaways = await backend.listPublicGiveawaysForEvent(
+      'tambike-cafe-classico',
+    );
+    const completed = publicGiveaways.find(
+      ({ giveaway }) => giveaway.title === 'Cafe Classico Helmet Raffle',
+    );
+    const ongoing = publicGiveaways.find(
+      ({ giveaway }) => giveaway.title === 'Weekend Rider Gear Raffle',
+    );
+    const internalSurpriseTitle = 'INTERNAL_SURPRISE_TITLE_MUST_NOT_LEAK';
+    const surprise = toPublicPrizePresentation({
+      disclosure: 'surprise',
+      publicTitle: internalSurpriseTitle,
+    });
+
+    return {
+      completedPublicPrize:
+        completed?.giveaway.prizePools[0]?.presentation.title,
+      ongoingPublicPrize:
+        ongoing?.giveaway.prizePools[0]?.presentation.title,
+      publicDtoOmitsInternalFields: [completed, ongoing].every(
+        (entry) =>
+          entry !== undefined &&
+          entry.giveaway.prizePools.every(
+            (pool) => !('title' in pool) && !('items' in pool),
+          ),
+      ),
+      surpriseRedacted:
+        surprise.title === 'Surprise prize' &&
+        !JSON.stringify(surprise).includes(internalSurpriseTitle),
+    };
+  } finally {
+    await backend.disconnect();
+  }
+}
+
+inspectPublicPrizes()
+  .then((inspection) => process.stdout.write(JSON.stringify(inspection)))
+  .catch(() => {
+    process.stderr.write('READ_ONLY_PUBLIC_PRIZE_INSPECTION_FAILED');
+    process.exitCode = 1;
+  });
+'@
+  $publicPrizeInspectionScript = $publicPrizeInspectionScript -replace '\r?\n', ' '
+  $publicPrizeInspectionJson = & npx tsx --conditions=react-server -e $publicPrizeInspectionScript
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Read-only public prize inspection failed.'
+  }
+  $publicPrizeInspection = (($publicPrizeInspectionJson -join "`n") | ConvertFrom-Json)
+  if (
+    $publicPrizeInspection.completedPublicPrize -ne 'Cafe Classico Helmet' -or
+    $publicPrizeInspection.ongoingPublicPrize -ne 'Weekend Rider Gear Package' -or
+    $publicPrizeInspection.publicDtoOmitsInternalFields -ne $true -or
+    $publicPrizeInspection.surpriseRedacted -ne $true
+  ) {
+    throw 'Public prize presentation verification failed.'
+  }
+
+  Write-Output "completed public prize: $($publicPrizeInspection.completedPublicPrize)"
+  Write-Output "ongoing public prize: $($publicPrizeInspection.ongoingPublicPrize)"
+  Write-Output 'surprise redaction check: internal title absent from serialized public DTO'
 } finally {
   try {
     if (Test-Path -LiteralPath $temporaryEnvFile) {
@@ -248,10 +317,20 @@ The allowed preflight states are:
 Every other result is partial or conflicting and stops before the write command.
 Postflight accepts only the exact second state.
 
+The final three output lines are read-only public-contract checks:
+
+```text
+completed public prize: Cafe Classico Helmet
+ongoing public prize: Weekend Rider Gear Package
+surprise redaction check: internal title absent from serialized public DTO
+```
+
 ## Safe receipt
 
-On success, stdout contains one JSON receipt and no credentials, connection
-strings, sessions, claim payloads, or encryption keys. Example without live IDs:
+The provisioner command emits one JSON receipt. The enclosing runbook then emits
+the three read-only public-contract lines above. Neither output contains
+credentials, connection strings, sessions, claim payloads, or encryption keys.
+Example receipt without live IDs:
 
 ```json
 {

@@ -16,6 +16,7 @@ import {
   closePrismaIntegrationClientPair,
   createPrismaIntegrationClients,
 } from "./clients";
+import { PrismaTambikeBackend } from "../../src/server/prisma-backend";
 import { requirePrismaIntegrationTestDatabaseUrl } from "./environment";
 import { createPrismaEventFixture } from "./fixtures";
 
@@ -223,6 +224,45 @@ describe("guarded Prisma sample raffle provisioner", () => {
       expect(ongoing.auditEvents.map((event) => event.action)).toEqual(
         ongoingAuditActions,
       );
+
+      const publicBackend = PrismaTambikeBackend.create(databaseUrl);
+      try {
+        const publicGiveaways = await publicBackend.listPublicGiveawaysForEvent(
+          fixture.eventId,
+        );
+        const completedPublic = publicGiveaways.find(
+          ({ giveaway }) => giveaway.id === first.completed.giveawayId,
+        );
+        const ongoingPublic = publicGiveaways.find(
+          ({ giveaway }) => giveaway.id === first.ongoing.giveawayId,
+        );
+
+        expect(completedPublic?.giveaway.prizePools).toEqual([
+          expect.objectContaining({
+            presentation: {
+              disclosure: "revealed",
+              title: "Cafe Classico Helmet",
+            },
+          }),
+        ]);
+        expect(ongoingPublic?.giveaway.prizePools).toEqual([
+          expect.objectContaining({
+            presentation: {
+              disclosure: "revealed",
+              title: "Weekend Rider Gear Package",
+            },
+          }),
+        ]);
+        for (const publicGiveaway of [completedPublic, ongoingPublic]) {
+          expect(publicGiveaway).toBeDefined();
+          for (const prizePool of publicGiveaway!.giveaway.prizePools) {
+            expect(prizePool).not.toHaveProperty("title");
+            expect(prizePool).not.toHaveProperty("items");
+          }
+        }
+      } finally {
+        await publicBackend.disconnect();
+      }
     } finally {
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;

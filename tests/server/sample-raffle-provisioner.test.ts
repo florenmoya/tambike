@@ -6,6 +6,8 @@ import {
   COMPLETED_SAMPLE_RAFFLE_TITLE,
   SAMPLE_RAFFLE_EVENT_ID,
   SAMPLE_RAFFLE_WINNER_ALIAS,
+  completedSampleRaffleInput,
+  ongoingSampleRaffleInput,
   productionSampleRaffleManifest,
   provisionSampleRaffles,
   validateSampleRaffleDatabaseIdentities,
@@ -268,6 +270,32 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 }
 
 describe("sample raffle provisioner safety", () => {
+  test("publishes explicit prize names without changing the sample inventory", () => {
+    const completed = completedSampleRaffleInput();
+    const ongoing = ongoingSampleRaffleInput();
+
+    expect(completed.prizePools).toEqual([
+      expect.objectContaining({
+        title: "Helmet",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Cafe Classico Helmet",
+        },
+        items: [{ title: "Cafe Classico Helmet" }],
+      }),
+    ]);
+    expect(ongoing.prizePools).toEqual([
+      expect.objectContaining({
+        title: "Rider gear package",
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Weekend Rider Gear Package",
+        },
+        items: [{ title: "Weekend Rider Gear Package" }],
+      }),
+    ]);
+  });
+
   test("rejects inspection and runtime connections that resolve to different servers", () => {
     expect(() => validateSampleRaffleDatabaseIdentities(
       {
