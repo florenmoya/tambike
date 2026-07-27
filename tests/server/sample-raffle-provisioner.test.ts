@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -265,6 +267,53 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 }
 
 describe("sample raffle provisioner safety", () => {
+  test("runbook acquires production environment before exact preflight and guarantees secret cleanup", async () => {
+    const runbook = await readFile(
+      new URL("../../docs/deployment/sample-raffle-provisioning.md", import.meta.url),
+      "utf8",
+    );
+    const pullIndex = runbook.indexOf(
+      "vercel env pull .env.production.local --environment=production",
+    );
+    const directUrlLoadIndex = runbook.indexOf("$env:DIRECT_URL = (& node", pullIndex);
+    const preflightIndex = runbook.indexOf("$preflightState =", directUrlLoadIndex);
+    const provisionIndex = runbook.indexOf(
+      "npm run provision:sample-raffles -- -- --confirm-production",
+      preflightIndex,
+    );
+    const postflightIndex = runbook.indexOf("$postflightState =", provisionIndex);
+
+    expect(pullIndex).toBeGreaterThan(-1);
+    expect(directUrlLoadIndex).toBeGreaterThan(pullIndex);
+    expect(preflightIndex).toBeGreaterThan(directUrlLoadIndex);
+    expect(provisionIndex).toBeGreaterThan(preflightIndex);
+    expect(postflightIndex).toBeGreaterThan(provisionIndex);
+    expect(runbook).not.toContain("psql");
+    expect(runbook).toContain("import nextEnv from '@next/env';");
+    expect(runbook).toContain("const { loadEnvConfig } = nextEnv;");
+    expect(runbook).toContain("import pg from 'pg';");
+    expect(runbook).toContain("new Client({ connectionString: process.env.DIRECT_URL })");
+    expect(runbook).toContain("finally {");
+    expect(runbook).toContain("Remove-Item -LiteralPath $temporaryEnvFile -Force -ErrorAction Stop");
+    expect(runbook).toContain("Remove-Item -LiteralPath 'Env:DIRECT_URL'");
+    expect(runbook).toContain("Remove-Item -LiteralPath 'Env:TAMBIKE_SAMPLE_RAFFLE_INSPECTION_SQL'");
+
+    for (const invariant of [
+      "snapshot_count",
+      "draw_count",
+      "published_draw_count",
+      "current_award_count",
+      "fulfilled_current_award_count",
+      "exact_published_winner_count",
+      '"winnerAliasOptedInAt"',
+      '"winnerAliasRevokedAt"',
+      "raffle.winner.sample@tambike.ph",
+      "Raffle Sample Rider",
+    ]) {
+      expect(runbook).toContain(invariant);
+    }
+  });
+
   test("CLI requires --confirm-production before constructing a provisioner", async () => {
     const createProvisioner = vi.fn();
     await expect(runSampleRaffleCli({ argv: [], environment: {}, createProvisioner }))
