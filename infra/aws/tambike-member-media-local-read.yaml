@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Development-only read access to existing Tambike member media.
+
+Parameters:
+  VercelTeamSlug:
+    Type: String
+    Description: Exact Vercel team slug used by the team-mode OIDC issuer.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,99}$"
+  VercelProjectName:
+    Type: String
+    Description: Exact Vercel project name present in the OIDC subject claim.
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+  ExistingOidcProviderArn:
+    Type: String
+    Description: Existing team-mode Vercel OIDC provider ARN.
+    AllowedPattern: '^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:oidc-provider/oidc\.vercel\.com/[a-z0-9][a-z0-9-]{0,99}$'
+  ExistingBucketName:
+    Type: String
+    Description: Existing private Tambike member-media bucket.
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+
+Resources:
+  DevelopmentReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Read-only local development access to published Tambike member media.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${OidcProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "oidc.vercel.com/${VercelTeamSlug}:aud": "https://vercel.com/${VercelTeamSlug}",
+                      "oidc.vercel.com/${VercelTeamSlug}:sub": "owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:development"
+                    }
+                  }
+                }
+              ]
+            }
+          - OidcProviderArn: !Ref ExistingOidcProviderArn
+      Policies:
+        - PolicyName: TambikeDevelopmentMemberMediaRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadPublishedMemberMediaObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${ExistingBucketName}/media/*
+      Tags:
+        - Key: Application
+          Value: tambike
+        - Key: Purpose
+          Value: local-member-media-read
+
+Outputs:
+  DevelopmentReadRoleArn:
+    Description: Set this value as AWS_ROLE_ARN only in the local development environment.
+    Value: !GetAtt DevelopmentReadRole.Arn

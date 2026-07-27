@@ -304,6 +304,29 @@ describe("private member media infrastructure contract", () => {
     expect(template).toMatch(/EnablePreviewAccess:[\s\S]*Default: "false"[\s\S]*AllowedValues:[\s\S]*- "false"[\s\S]*- "true"/);
   });
 
+  test("ships a separate development-only role with read-only access to existing media objects", () => {
+    const template = source("infra/aws/tambike-member-media-local-read.yaml");
+
+    expect(template).toContain("Type: AWS::IAM::Role");
+    expect(template).not.toContain("AWS::S3::Bucket");
+    expect(template).not.toContain("AWS::CloudFront");
+    expect(template).toContain("ExistingBucketName:");
+    expect(template).toContain("ExistingOidcProviderArn:");
+    expect(template).toContain("owner:${VercelTeamSlug}:project:${VercelProjectName}:environment:development");
+    expect(template).not.toContain("environment:production");
+    expect(template).not.toContain("environment:preview");
+    expect(template).not.toContain("project:*");
+    expect(template).toContain("sts:AssumeRoleWithWebIdentity");
+    expect(template).toContain("s3:GetObject");
+    expect(template).toContain("arn:${AWS::Partition}:s3:::${ExistingBucketName}/media/*");
+    expect(template).not.toContain("s3:PutObject");
+    expect(template).not.toContain("s3:DeleteObject");
+    expect(template).not.toContain("s3:ListBucket");
+    expect(template).not.toMatch(/^\s*Action:\s*["']?\*["']?\s*$/m);
+    expect(template).not.toMatch(/^\s*- [a-z0-9-]+:\*\s*$/mi);
+    expect(template).toMatch(/DevelopmentReadRoleArn:[\s\S]*Value: !GetAtt DevelopmentReadRole\.Arn/);
+  });
+
   test("derives the trusted provider principal from the current account and exact team issuer", () => {
     const template = source("infra/aws/tambike-member-media.yaml");
     const trust = template.slice(
