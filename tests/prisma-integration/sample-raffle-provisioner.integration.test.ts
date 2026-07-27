@@ -162,6 +162,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
           awards: {
             orderBy: { id: "asc" },
             select: {
+              isCurrent: true,
               status: true,
               publicWinnerAlias: true,
               winnerUserId: true,
@@ -181,6 +182,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
       expect(completed).toMatchObject({
         status: "completed",
         awards: [{
+          isCurrent: true,
           status: "fulfilled",
           publicWinnerAlias: "Raffle Sample Rider",
           winner: { email: manifest.winnerEmail },
