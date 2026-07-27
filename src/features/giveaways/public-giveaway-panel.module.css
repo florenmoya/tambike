@@ -100,8 +100,7 @@
 
 .prizeImage {
   position: relative;
-  width: 100%;
-  max-height: 20rem;
+  width: min(100%, 28rem);
   overflow: hidden;
   aspect-ratio: 4 / 3;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -390,7 +389,7 @@
 }
 
 .compactCard .prizeImage {
-  max-height: 12rem;
+  width: min(100%, 18rem);
 }
 
 .loadingSpotlight {
@@ -422,9 +421,6 @@
     padding: 1rem;
   }
 
-  .prizeImage {
-    max-height: 18rem;
-  }
 }
 
 @media (max-width: 390px) {
@@ -441,9 +437,6 @@
     width: 100%;
   }
 
-  .prizeImage {
-    max-height: 14rem;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

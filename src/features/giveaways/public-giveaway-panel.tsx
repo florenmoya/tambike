@@ -192,7 +192,7 @@ function OpenGiveawaySpotlight({
           <TicketCheck aria-hidden="true" />
           Ongoing
         </div>
-        <PrizeImage presentation={presentation} />
+        <PublicPrizeImage presentation={presentation} />
         <p className={styles.prizeTitle}>
           <span>Win:</span> {presentation.title}
         </p>
@@ -246,32 +246,10 @@ function CompletedGiveawayResult({
         </div>
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
 
-        {results.length > 0 ? (
-          <div className={styles.winnerList}>
-            {results.map((result, index) => (
-              <div
-                className={styles.result}
-                key={`${result.prizeTitle}-${result.winnerAlias}-${index}`}
-              >
-                <p className={styles.winnerAlias}>
-                  <span>Winner:</span> {result.winnerAlias}
-                </p>
-                <p className={styles.winnerPrize}>
-                  <span>Prize won:</span> {result.prizeTitle || presentation.title}
-                </p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className={styles.result}>
-            <p className={styles.winnerAlias}>
-              <span>Winner:</span> Winner not publicly listed
-            </p>
-            <p className={styles.winnerPrize}>
-              <span>Prize won:</span> {presentation.title}
-            </p>
-          </div>
-        )}
+        <PublicGiveawayResultList
+          results={results}
+          presentationTitle={presentation.title}
+        />
 
         <CampaignDetails
           label="View result"
@@ -307,7 +285,7 @@ function CompactGiveawayCard({
       <span className={styles.compactStatus}>
         {isOpen ? "Ongoing" : giveawayStateLabel(giveaway.state)}
       </span>
-      {showPrize ? <PrizeImage presentation={presentation} /> : null}
+      {showPrize ? <PublicPrizeImage presentation={presentation} /> : null}
       {showPrize ? (
         <p className={styles.compactPrize}>
           <span>Win:</span> {presentation.title}
@@ -401,23 +379,80 @@ function CampaignDetails({
   );
 }
 
-function PrizeImage({
+export function PublicPrizeImage({
   presentation,
 }: {
   presentation: ReturnType<typeof primaryPrizePresentation>;
 }) {
-  if (!presentation.image) return null;
+  const image = presentation.image;
+  const imageIdentity = image ? `${image.mediaId}\u0000${image.url}` : undefined;
+  const [failedImageIdentity, setFailedImageIdentity] = useState<string>();
+
+  if (!image || failedImageIdentity === imageIdentity) return null;
 
   return (
     <div className={styles.prizeImage}>
       <Image
-        src={presentation.image.url}
+        key={imageIdentity}
+        src={image.url}
         alt={presentation.title}
-        width={presentation.image.width}
-        height={presentation.image.height}
+        width={image.width}
+        height={image.height}
         sizes="(max-width: 899px) 100vw, 60vw"
         unoptimized
+        onError={() => setFailedImageIdentity(imageIdentity)}
       />
+    </div>
+  );
+}
+
+function publicGiveawayResultKeys(
+  results: PublicEventGiveaway["results"],
+) {
+  const occurrenceByIdentity = new Map<string, number>();
+
+  return results.map((result) => {
+    const identity = JSON.stringify([result.prizeTitle, result.winnerAlias]);
+    const occurrence = occurrenceByIdentity.get(identity) ?? 0;
+    occurrenceByIdentity.set(identity, occurrence + 1);
+    return `${identity}:${occurrence}`;
+  });
+}
+
+export function PublicGiveawayResultList({
+  results,
+  presentationTitle,
+}: {
+  results: PublicEventGiveaway["results"];
+  presentationTitle: string;
+}) {
+  if (results.length === 0) {
+    return (
+      <div className={styles.result}>
+        <p className={styles.winnerAlias}>
+          <span>Winner:</span> Winner not publicly listed
+        </p>
+        <p className={styles.winnerPrize}>
+          <span>Prize won:</span> {presentationTitle}
+        </p>
+      </div>
+    );
+  }
+
+  const resultKeys = publicGiveawayResultKeys(results);
+
+  return (
+    <div className={styles.winnerList}>
+      {results.map((result, index) => (
+        <div className={styles.result} key={resultKeys[index]}>
+          <p className={styles.winnerAlias}>
+            <span>Winner:</span> {result.winnerAlias}
+          </p>
+          <p className={styles.winnerPrize}>
+            <span>Prize won:</span> {result.prizeTitle || presentationTitle}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, createElement } from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { act, createElement, type ComponentType } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -14,6 +17,13 @@ vi.mock("../../src/server/giveaway-actions", () => ({
 }));
 
 const roots: Root[] = [];
+const raffleCss = readFileSync(
+  join(
+    process.cwd(),
+    "src/features/giveaways/public-giveaway-panel.module.css",
+  ),
+  "utf8",
+);
 
 beforeEach(() => {
   (
@@ -53,6 +63,145 @@ function campaign(id: string, state: GiveawayState): PublicEventGiveaway {
 }
 
 describe("public giveaway spotlight", () => {
+  test("removes a failed prize image and tries again when media identity changes", async () => {
+    const panelModule = (await import(
+      "../../src/features/giveaways/public-giveaway-panel"
+    )) as Record<string, unknown>;
+    const prizeImage = panelModule.PublicPrizeImage;
+
+    expect(prizeImage).toBeTypeOf("function");
+    if (typeof prizeImage !== "function") return;
+
+    const PrizeImage = prizeImage as ComponentType<{
+      presentation: {
+        disclosure: "revealed";
+        title: string;
+        image: { mediaId: string; url: string; width: number; height: number };
+      };
+    }>;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    act(() => {
+      root.render(
+        createElement(PrizeImage, {
+          presentation: {
+            disclosure: "revealed",
+            title: "Road helmet",
+            image: {
+              mediaId: "media-1",
+              url: "/api/giveaway-prize-media/media-1",
+              width: 1200,
+              height: 900,
+            },
+          },
+        }),
+      );
+    });
+
+    const failedImage = container.querySelector("img");
+    expect(failedImage).not.toBeNull();
+    act(() => {
+      failedImage?.dispatchEvent(new Event("error"));
+    });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.children).toHaveLength(0);
+
+    act(() => {
+      root.render(
+        createElement(PrizeImage, {
+          presentation: {
+            disclosure: "revealed",
+            title: "Riding jacket",
+            image: {
+              mediaId: "media-2",
+              url: "/api/giveaway-prize-media/media-2",
+              width: 1200,
+              height: 900,
+            },
+          },
+        }),
+      );
+    });
+
+    expect(container.querySelector("img")?.alt).toBe("Riding jacket");
+  });
+
+  test("keeps a restrained four-by-three image box at desktop and mobile widths", () => {
+    const imageRule = raffleCss.match(/\.prizeImage\s*\{[^}]+\}/)?.[0] ?? "";
+    const mobileCss = raffleCss.slice(raffleCss.indexOf("@media (max-width: 390px)"));
+
+    expect(imageRule).toContain("aspect-ratio: 4 / 3");
+    expect(imageRule).toContain("width: min(100%, 28rem)");
+    expect(imageRule).not.toContain("max-height");
+    expect(raffleCss).not.toContain("max-height");
+    expect(mobileCss).toContain(".section");
+    expect(mobileCss).toContain("padding: 0.8rem");
+  });
+
+  test("keeps duplicate result nodes stable when unrelated results are inserted or reordered", async () => {
+    const panelModule = (await import(
+      "../../src/features/giveaways/public-giveaway-panel"
+    )) as Record<string, unknown>;
+    const resultList = panelModule.PublicGiveawayResultList;
+
+    expect(resultList).toBeTypeOf("function");
+    if (typeof resultList !== "function") return;
+
+    type Result = PublicEventGiveaway["results"][number];
+    const ResultList = resultList as ComponentType<{
+      results: Result[];
+      presentationTitle: string;
+    }>;
+    const duplicate = { prizeTitle: "Tambike helmet", winnerAlias: "Rider M." };
+    const firstResults = [
+      duplicate,
+      { prizeTitle: "Riding jacket", winnerAlias: "Rider J." },
+      { ...duplicate },
+    ];
+    const reorderedResults = [
+      { prizeTitle: "Riding boots", winnerAlias: "Rider B." },
+      duplicate,
+      { prizeTitle: "Riding jacket", winnerAlias: "Rider J." },
+      { ...duplicate },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    act(() => {
+      root.render(
+        createElement(ResultList, {
+          results: firstResults,
+          presentationTitle: "Fallback prize",
+        }),
+      );
+    });
+    const before = [...container.querySelectorAll("p")]
+      .filter((paragraph) => paragraph.textContent?.endsWith("Rider M."))
+      .map((paragraph) => paragraph.parentElement);
+
+    act(() => {
+      root.render(
+        createElement(ResultList, {
+          results: reorderedResults,
+          presentationTitle: "Fallback prize",
+        }),
+      );
+    });
+    const after = [...container.querySelectorAll("p")]
+      .filter((paragraph) => paragraph.textContent?.endsWith("Rider M."))
+      .map((paragraph) => paragraph.parentElement);
+
+    expect(before).toHaveLength(2);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
+
   test("leads with the first open raffle and preserves state-group order", () => {
     const groups = groupPublicGiveawaysForSpotlight([
       campaign("completed-1", "completed"),
