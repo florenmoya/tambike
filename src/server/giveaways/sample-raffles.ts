@@ -1,5 +1,9 @@
 import "server-only";
 
+import { Prisma, PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
+
 import type {
   CreateGiveawayInput,
   IssuedGiveawayClaimToken,
@@ -7,6 +11,7 @@ import type {
   PublicGiveawayDrawVerification,
 } from "@/features/giveaways/types";
 import type { PrismaTambikeBackend } from "@/server/prisma-backend";
+import { PrismaTambikeBackend as PrismaTambikeBackendRuntime } from "@/server/prisma-backend";
 
 export const SAMPLE_RAFFLE_EVENT_ID = "tambike-cafe-classico";
 export const COMPLETED_SAMPLE_RAFFLE_TITLE = "Cafe Classico Helmet Raffle";
@@ -51,6 +56,10 @@ export class SampleRaffleProvisioningError extends Error {
     super(code);
     this.name = "SampleRaffleProvisioningError";
   }
+
+  toJSON() {
+    return { code: this.code };
+  }
 }
 
 export interface SampleRaffleProvisioningInput {
@@ -67,12 +76,14 @@ export interface SampleRaffleProvisioningReceipt {
   eventId: string;
   completed: {
     giveawayId: string;
+    title: string;
     state: "completed";
     winnerCount: 1;
     winnerAlias: string;
   };
   ongoing: {
     giveawayId: string;
+    title: string;
     state: "open";
     winnerCount: 0;
   };
@@ -94,10 +105,18 @@ export interface SampleRaffleCompletedAwardInspection {
 }
 
 export interface SampleRaffleCompletedCampaignInspection extends SampleRaffleCampaignInspection {
+  complianceStatus: string;
+  drawCount: number;
+  publishedDrawCount: number;
+  currentAwardCount: number;
+  fulfilledAwardCount: number;
+  publicWinnerAliases: string[];
+  winnerUserId?: string;
   currentAwards: SampleRaffleCompletedAwardInspection[];
 }
 
 export interface SampleRaffleOngoingCampaignInspection extends SampleRaffleCampaignInspection {
+  complianceStatus: string;
   snapshotCount: number;
   drawCount: number;
   awardCount: number;
@@ -107,6 +126,7 @@ export interface SampleRaffleOngoingCampaignInspection extends SampleRaffleCampa
 export interface SampleRaffleTargetInspection {
   eventId: string;
   hostEventValid: boolean;
+  dedicatedWinnerId?: string;
   completedCampaigns: SampleRaffleCompletedCampaignInspection[];
   ongoingCampaigns: SampleRaffleOngoingCampaignInspection[];
 }
@@ -262,6 +282,15 @@ function finalReceipt(
   if (
     completedCampaign.title !== manifest.completedTitle ||
     completedCampaign.state !== "completed" ||
+    completedCampaign.complianceStatus !== "approved" ||
+    completedCampaign.drawCount !== 1 ||
+    completedCampaign.publishedDrawCount !== 1 ||
+    completedCampaign.currentAwardCount !== 1 ||
+    completedCampaign.fulfilledAwardCount !== 1 ||
+    completedCampaign.publicWinnerAliases.length !== 1 ||
+    completedCampaign.publicWinnerAliases[0] !== manifest.winnerAlias ||
+    !inspection.dedicatedWinnerId ||
+    completedCampaign.winnerUserId !== inspection.dedicatedWinnerId ||
     completedCampaign.winnerCount !== 1 ||
     completedCampaign.currentAwards.length !== 1 ||
     completedCampaign.currentAwards[0]?.status !== "fulfilled" ||
@@ -270,6 +299,7 @@ function finalReceipt(
     completedCampaign.winnerAlias !== manifest.winnerAlias ||
     ongoingCampaign.title !== manifest.ongoingTitle ||
     ongoingCampaign.state !== "open" ||
+    ongoingCampaign.complianceStatus !== "approved" ||
     ongoingCampaign.winnerCount !== 0 ||
     ongoingCampaign.snapshotCount !== 0 ||
     ongoingCampaign.drawCount !== 0 ||
@@ -282,12 +312,14 @@ function finalReceipt(
     eventId: manifest.eventId,
     completed: {
       giveawayId: completedCampaign.giveawayId,
+      title: manifest.completedTitle,
       state: "completed",
       winnerCount: 1,
       winnerAlias: manifest.winnerAlias,
     },
     ongoing: {
       giveawayId: ongoingCampaign.giveawayId,
+      title: manifest.ongoingTitle,
       state: "open",
       winnerCount: 0,
     },
@@ -349,7 +381,8 @@ export async function provisionSampleRaffles(
         name: manifest.winnerName,
         password: input.winnerPassword!,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof SampleRaffleProvisioningError) throw error;
       throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
     }
 
@@ -378,7 +411,422 @@ export async function provisionSampleRaffles(
     if (!receipt) throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
     return receipt;
   } finally {
-    await dependencies.releaseLock(lock);
-    await dependencies.finish();
+    try {
+      await dependencies.releaseLock(lock);
+    } finally {
+      await dependencies.finish();
+    }
   }
+}
+
+const SAMPLE_RAFFLE_LOCK_KEY = "tambike:production-sample-raffles:v1";
+const SAMPLE_COMPLETED_SELECTION_KEY = "sample-completed-manual-selection-v1";
+const SAMPLE_COMPLETED_VERIFICATION_KEY = "sample-completed-claim-verification-v1";
+const SAMPLE_COMPLETED_FULFILMENT_KEY = "sample-completed-fulfilment-v1";
+
+export interface PrismaSampleRaffleProvisioner {
+  dependencies: SampleRaffleProvisionerDependencies;
+  close(): Promise<void>;
+}
+
+function parsePostgresDatabaseUrl(
+  value: string | undefined,
+  code: "DATABASE_TARGET_REQUIRED" | "DIRECT_LOCK_REQUIRED",
+) {
+  const trimmed = value?.trim();
+  if (!trimmed) throw new SampleRaffleProvisioningError(code);
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new SampleRaffleProvisioningError(code);
+  }
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
+    throw new SampleRaffleProvisioningError(code);
+  }
+  let databaseName: string;
+  try {
+    databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, "")).trim();
+  } catch {
+    throw new SampleRaffleProvisioningError(code);
+  }
+  if (!databaseName) throw new SampleRaffleProvisioningError(code);
+  return { value: trimmed, parsed, databaseName };
+}
+
+export function validateDirectSampleRaffleLockUrl(value: string | undefined) {
+  const target = parsePostgresDatabaseUrl(value, "DIRECT_LOCK_REQUIRED");
+  const hostname = target.parsed.hostname.toLowerCase();
+  if (
+    hostname.includes("pooler") ||
+    hostname.includes("pgbouncer") ||
+    target.parsed.port === "6543" ||
+    target.parsed.searchParams.get("pgbouncer")?.toLowerCase() === "true" ||
+    target.parsed.searchParams.get("pool_mode")?.toLowerCase() === "transaction"
+  ) {
+    throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
+  }
+  return target.value;
+}
+
+export function toSampleRaffleCliErrorCode(error: unknown) {
+  if (error instanceof SampleRaffleProvisioningError) return error.code;
+  return "SAMPLE_RAFFLE_PROVISIONING_FAILED";
+}
+
+async function disconnectAll(steps: Array<() => Promise<void>>) {
+  const results = await Promise.allSettled(steps.map((step) => step()));
+  const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "SAMPLE_RAFFLE_PROVISIONER_CLOSE_FAILED");
+  }
+}
+
+export function createPrismaSampleRaffleProvisioner(
+  runtimeDatabaseUrl: string,
+  directDatabaseUrl: string,
+): PrismaSampleRaffleProvisioner {
+  const runtimeTarget = parsePostgresDatabaseUrl(runtimeDatabaseUrl, "DATABASE_TARGET_REQUIRED");
+  const directTarget = parsePostgresDatabaseUrl(
+    validateDirectSampleRaffleLockUrl(directDatabaseUrl),
+    "DIRECT_LOCK_REQUIRED",
+  );
+  if (runtimeTarget.databaseName !== directTarget.databaseName) {
+    throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
+  }
+
+  const inspectionPool = new Pool({
+    connectionString: directTarget.value,
+    max: 1,
+  });
+  const inspectionPrisma = new PrismaClient({
+    adapter: new PrismaPg(inspectionPool, { disposeExternalPool: true }),
+  });
+  const backend = PrismaTambikeBackendRuntime.create(runtimeTarget.value);
+  let lockHeld = false;
+  let hostOrganizerUserId: string | undefined;
+  let hostOrganizerEmail: string | undefined;
+  let finishPromise: Promise<void> | undefined;
+  const manualSelectionByGiveaway = new Map<string, {
+    prizePoolId: string;
+    snapshotEntryId: string;
+    winnerUserId: string;
+  }>();
+
+  const finish = () => {
+    finishPromise ??= disconnectAll([
+      () => backend.disconnect(),
+      () => inspectionPrisma.$disconnect(),
+    ]);
+    return finishPromise;
+  };
+
+  const inspectTarget = async (
+    manifest: SampleRaffleManifest,
+  ): Promise<SampleRaffleTargetInspection> => {
+    const [event, dedicatedWinner, campaigns] = await Promise.all([
+      inspectionPrisma.event.findUnique({
+        where: { id: manifest.eventId },
+        select: {
+          status: true,
+          organizer: { select: { userId: true, user: { select: { email: true } } } },
+        },
+      }),
+      inspectionPrisma.user.findUnique({
+        where: { email: manifest.winnerEmail },
+        select: { id: true },
+      }),
+      inspectionPrisma.eventGiveaway.findMany({
+        where: {
+          eventId: manifest.eventId,
+          title: { in: [manifest.completedTitle, manifest.ongoingTitle] },
+        },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          complianceStatus: true,
+          snapshot: { select: { id: true } },
+          draws: {
+            orderBy: { id: "asc" },
+            select: { status: true },
+          },
+          awards: {
+            orderBy: { id: "asc" },
+            select: {
+              status: true,
+              isCurrent: true,
+              winnerUserId: true,
+              publicWinnerAlias: true,
+              winnerAliasOptedInAt: true,
+              winnerAliasRevokedAt: true,
+            },
+          },
+        },
+      }),
+    ]);
+    hostOrganizerUserId = event?.organizer.userId;
+    hostOrganizerEmail = event?.organizer.user.email;
+
+    const completedCampaigns = campaigns
+      .filter((campaign) => campaign.title === manifest.completedTitle)
+      .map((campaign): SampleRaffleCompletedCampaignInspection => {
+        const currentAwards = campaign.awards.filter((award) => award.isCurrent);
+        const publicWinnerAliases = currentAwards
+          .filter((award) =>
+            Boolean(
+              award.publicWinnerAlias &&
+              award.winnerAliasOptedInAt &&
+              !award.winnerAliasRevokedAt,
+            ))
+          .map((award) => award.publicWinnerAlias!)
+          .sort();
+        const winnerIds = [...new Set(currentAwards.map((award) => award.winnerUserId))];
+        return {
+          giveawayId: campaign.id,
+          title: campaign.title,
+          state: campaign.status,
+          complianceStatus: campaign.complianceStatus,
+          winnerCount: currentAwards.length,
+          winnerAlias: publicWinnerAliases.length === 1 ? publicWinnerAliases[0] : undefined,
+          drawCount: campaign.draws.length,
+          publishedDrawCount: campaign.draws.filter((draw) => draw.status === "published").length,
+          currentAwardCount: currentAwards.length,
+          fulfilledAwardCount: currentAwards.filter((award) => award.status === "fulfilled").length,
+          publicWinnerAliases,
+          winnerUserId: winnerIds.length === 1 ? winnerIds[0] : undefined,
+          currentAwards: currentAwards.map((award) => ({
+            status: award.status,
+            winnerAlias: award.publicWinnerAlias ?? undefined,
+            winnerAliasPublished: Boolean(
+              award.publicWinnerAlias &&
+              award.winnerAliasOptedInAt &&
+              !award.winnerAliasRevokedAt,
+            ),
+          })),
+        };
+      });
+
+    const ongoingCampaigns = campaigns
+      .filter((campaign) => campaign.title === manifest.ongoingTitle)
+      .map((campaign): SampleRaffleOngoingCampaignInspection => {
+        const currentAwards = campaign.awards.filter((award) => award.isCurrent);
+        return {
+          giveawayId: campaign.id,
+          title: campaign.title,
+          state: campaign.status,
+          complianceStatus: campaign.complianceStatus,
+          winnerCount: currentAwards.length,
+          snapshotCount: campaign.snapshot ? 1 : 0,
+          drawCount: campaign.draws.length,
+          awardCount: campaign.awards.length,
+          resultCount: campaign.draws.filter((draw) => draw.status === "published").length,
+        };
+      });
+
+    return {
+      eventId: manifest.eventId,
+      hostEventValid: event?.status === "PUBLISHED",
+      dedicatedWinnerId: dedicatedWinner?.id,
+      completedCampaigns,
+      ongoingCampaigns,
+    };
+  };
+
+  const dependencies: SampleRaffleProvisionerDependencies = {
+    inspectTarget,
+    async acquireLock() {
+      await inspectionPrisma.$queryRaw(
+        Prisma.sql`SELECT pg_advisory_lock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0))`,
+      );
+      lockHeld = true;
+      return { id: SAMPLE_RAFFLE_LOCK_KEY };
+    },
+    async releaseLock() {
+      if (!lockHeld) return;
+      const rows = await inspectionPrisma.$queryRaw<Array<{ unlocked: boolean }>>(
+        Prisma.sql`SELECT pg_advisory_unlock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0)) AS unlocked`,
+      );
+      lockHeld = false;
+      if (rows[0]?.unlocked !== true) {
+        throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
+      }
+    },
+    async authenticateOrganizer(password) {
+      if (!hostOrganizerEmail) {
+        throw new SampleRaffleProvisioningError("HOST_EVENT_INVALID");
+      }
+      const result = await backend.loginWithPassword(hostOrganizerEmail, password);
+      if (
+        result.user.role !== "organizer" ||
+        !hostOrganizerUserId ||
+        result.user.id !== hostOrganizerUserId
+      ) {
+        throw new SampleRaffleProvisioningError("HOST_EVENT_INVALID");
+      }
+      return { sessionToken: result.sessionToken };
+    },
+    async authenticateAdmin(password) {
+      const result = await backend.loginWithPassword("ops@tambike.example", password);
+      if (result.user.role !== "admin") {
+        throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+      }
+      return { sessionToken: result.sessionToken };
+    },
+    async ensureWinner(input) {
+      const existing = await inspectionPrisma.user.findUnique({
+        where: { email: input.email },
+        select: { id: true },
+      });
+      const result = existing
+        ? await backend.loginWithPassword(input.email, input.password)
+        : await backend.signUpRider({
+            email: input.email,
+            displayName: input.name,
+            area: "Davao City",
+            password: input.password,
+          });
+      if (result.user.role !== "rider") {
+        throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+      }
+      return { sessionToken: result.sessionToken, riderId: result.user.id };
+    },
+    async ensureWinnerRegistration(winner, eventId) {
+      await backend.registerForEvent(winner.sessionToken, eventId, {
+        status: "going",
+        attendanceType: "direct",
+      });
+    },
+    async createCompletedCampaign(organizer, input) {
+      const campaign = await backend.createGiveaway(organizer.sessionToken, input.eventId, input);
+      return { giveawayId: campaign.id };
+    },
+    async submitCompletedCampaign(organizer, giveawayId) {
+      await backend.submitGiveawayForReview(organizer.sessionToken, giveawayId);
+    },
+    async approveCompletedCampaign(admin, giveawayId) {
+      await backend.reviewGiveawayCompliance(admin.sessionToken, giveawayId, { decision: "approved" });
+    },
+    async openCompletedCampaign(organizer, giveawayId) {
+      await backend.openGiveaway(organizer.sessionToken, giveawayId);
+    },
+    async grantCompletedEntry(organizer, giveawayId, winner) {
+      await backend.grantManualGiveawayEntry(organizer.sessionToken, {
+        giveawayId,
+        riderId: winner.riderId,
+        reason: "Dedicated production sample raffle winner",
+      });
+    },
+    async lockCompletedCampaign(organizer, giveawayId) {
+      await backend.lockGiveaway(organizer.sessionToken, giveawayId);
+      const campaign = await inspectionPrisma.eventGiveaway.findUnique({
+        where: { id: giveawayId },
+        select: {
+          prizePools: {
+            where: { awardMode: "manual_selection" },
+            select: { id: true },
+          },
+        },
+      });
+      if (campaign?.prizePools.length !== 1) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      const prizePoolId = campaign.prizePools[0].id;
+      const candidates = await backend.listGiveawayManualSelectionCandidates(
+        organizer.sessionToken,
+        giveawayId,
+        prizePoolId,
+      );
+      if (candidates.length !== 1) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      const candidate = await inspectionPrisma.giveawaySnapshotEntry.findUnique({
+        where: { id: candidates[0].snapshotEntryId },
+        select: { entry: { select: { riderId: true } } },
+      });
+      if (!candidate) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      manualSelectionByGiveaway.set(giveawayId, {
+        prizePoolId,
+        snapshotEntryId: candidates[0].snapshotEntryId,
+        winnerUserId: candidate.entry.riderId,
+      });
+    },
+    async selectCompletedWinner(organizer, giveawayId, winner) {
+      const selection = manualSelectionByGiveaway.get(giveawayId);
+      if (!selection || selection.winnerUserId !== winner.riderId) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      const draw = await backend.selectManualGiveawayAward(organizer.sessionToken, {
+        giveawayId,
+        prizePoolId: selection.prizePoolId,
+        snapshotEntryId: selection.snapshotEntryId,
+        reason: "Dedicated production sample raffle winner",
+        idempotencyKey: SAMPLE_COMPLETED_SELECTION_KEY,
+      });
+      const awards = await inspectionPrisma.giveawayAward.findMany({
+        where: {
+          giveawayId,
+          drawId: draw.drawId,
+          winnerUserId: winner.riderId,
+          isCurrent: true,
+        },
+        select: { id: true },
+      });
+      if (awards.length !== 1) {
+        throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
+      }
+      return { awardId: awards[0].id, drawId: draw.drawId };
+    },
+    async publishCompletedDraw(organizer, giveawayId, drawId) {
+      return backend.publishGiveawayDraw(organizer.sessionToken, giveawayId, drawId);
+    },
+    async publishWinnerAlias(winner, awardId, alias) {
+      await backend.setGiveawayWinnerPublication(winner.sessionToken, awardId, {
+        published: true,
+        alias,
+      });
+    },
+    async issueClaim(winner, awardId) {
+      return backend.issueGiveawayClaimToken(winner.sessionToken, awardId);
+    },
+    async verifyClaim(admin, claimPayload) {
+      return backend.verifyGiveawayClaim(admin.sessionToken, {
+        payload: claimPayload,
+        method: "manual",
+        idempotencyKey: SAMPLE_COMPLETED_VERIFICATION_KEY,
+      });
+    },
+    async fulfillAward(admin, awardId) {
+      return backend.fulfillGiveawayAward(admin.sessionToken, {
+        awardId,
+        idempotencyKey: SAMPLE_COMPLETED_FULFILMENT_KEY,
+        reference: "sample-display",
+      });
+    },
+    async completeClaims(organizer, giveawayId) {
+      await backend.completeGiveawayClaims(organizer.sessionToken, giveawayId);
+    },
+    async createOngoingCampaign(organizer, input) {
+      const campaign = await backend.createGiveaway(organizer.sessionToken, input.eventId, input);
+      return { giveawayId: campaign.id };
+    },
+    async submitOngoingCampaign(organizer, giveawayId) {
+      await backend.submitGiveawayForReview(organizer.sessionToken, giveawayId);
+    },
+    async approveOngoingCampaign(admin, giveawayId) {
+      await backend.reviewGiveawayCompliance(admin.sessionToken, giveawayId, { decision: "approved" });
+    },
+    async openOngoingCampaign(organizer, giveawayId) {
+      await backend.openGiveaway(organizer.sessionToken, giveawayId);
+    },
+    finish,
+  };
+
+  return {
+    dependencies,
+    close: finish,
+  };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
   COMPLETED_SAMPLE_RAFFLE_TITLE,
@@ -6,15 +6,20 @@ import {
   SAMPLE_RAFFLE_WINNER_ALIAS,
   productionSampleRaffleManifest,
   provisionSampleRaffles,
+  validateDirectSampleRaffleLockUrl,
   type SampleRaffleManifest,
+  type PrismaSampleRaffleProvisioner,
   type SampleRaffleProvisionerDependencies,
   type SampleRaffleProvisioningInput,
+  type SampleRaffleProvisioningReceipt,
   type SampleRaffleTargetInspection,
 } from "@/server/giveaways/sample-raffles";
+import { runSampleRaffleCli } from "../../scripts/provision-sample-raffles";
 
 type FakeOptions = {
   inspection?: SampleRaffleTargetInspection;
   finalInspection?: SampleRaffleTargetInspection;
+  failAt?: keyof SampleRaffleProvisionerDependencies;
 };
 
 type CompletedFinalCampaign = SampleRaffleTargetInspection["completedCampaigns"][number] & {
@@ -66,12 +71,20 @@ function exactFinalInspection(
   return {
     eventId: manifest.eventId,
     hostEventValid: true,
+    dedicatedWinnerId: "sample-winner",
     completedCampaigns: [{
       giveawayId: "completed-sample-raffle",
       title: manifest.completedTitle,
       state: "completed",
+      complianceStatus: "approved",
       winnerCount: 1,
       winnerAlias: manifest.winnerAlias,
+      drawCount: 1,
+      publishedDrawCount: 1,
+      currentAwardCount: 1,
+      fulfilledAwardCount: 1,
+      publicWinnerAliases: [manifest.winnerAlias],
+      winnerUserId: "sample-winner",
       currentAwards: [{
         status: "fulfilled",
         winnerAlias: manifest.winnerAlias,
@@ -82,6 +95,7 @@ function exactFinalInspection(
       giveawayId: "ongoing-sample-raffle",
       title: manifest.ongoingTitle,
       state: "open",
+      complianceStatus: "approved",
       winnerCount: 0,
       snapshotCount: 0,
       drawCount: 0,
@@ -98,7 +112,13 @@ function partialInspection(): SampleRaffleTargetInspection {
       giveawayId: "partial-completed-sample-raffle",
       title: COMPLETED_SAMPLE_RAFFLE_TITLE,
       state: "open",
+      complianceStatus: "approved",
       winnerCount: 0,
+      drawCount: 0,
+      publishedDrawCount: 0,
+      currentAwardCount: 0,
+      fulfilledAwardCount: 0,
+      publicWinnerAliases: [],
       currentAwards: [],
     }],
   };
@@ -110,6 +130,7 @@ function fakeDependencies(options: FakeOptions = {}) {
   const dependencies: SampleRaffleProvisionerDependencies = {
     async inspectTarget(manifest) {
       calls.push("inspectTarget");
+      if (options.failAt === "inspectTarget") throw new Error("inspection failed");
       inspectionCount += 1;
       return options.inspection ?? (
         inspectionCount === 3
@@ -126,6 +147,7 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async authenticateOrganizer() {
       calls.push("authenticateOrganizer");
+      if (options.failAt === "authenticateOrganizer") throw new Error("authentication failed");
       return { sessionToken: "organizer-session" };
     },
     async authenticateAdmin() {
@@ -160,6 +182,7 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async selectCompletedWinner() {
       calls.push("selectCompletedWinner");
+      if (options.failAt === "selectCompletedWinner") throw new Error("draw failed");
       return { awardId: "completed-sample-award", drawId: "completed-sample-draw" };
     },
     async publishCompletedDraw() {
@@ -174,6 +197,7 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async verifyClaim() {
       calls.push("verifyClaim");
+      if (options.failAt === "verifyClaim") throw new Error("verification failed");
     },
     async fulfillAward() {
       calls.push("fulfillAward");
@@ -201,7 +225,82 @@ function fakeDependencies(options: FakeOptions = {}) {
   return Object.assign(dependencies, { calls });
 }
 
+function completeEnvironment() {
+  return {
+    DATABASE_URL: "postgresql://runtime.example.test/tambike",
+    DIRECT_URL: "postgresql://direct.example.test/tambike",
+    GIVEAWAY_DRAW_ENCRYPTION_KEY: "runtime-only",
+    TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD: "organizer-secret",
+    TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD: "admin-secret",
+    TAMBIKE_SAMPLE_RAFFLE_WINNER_PASSWORD: "winner-secret",
+  };
+}
+
+function exactReceipt(): SampleRaffleProvisioningReceipt {
+  return {
+    eventId: SAMPLE_RAFFLE_EVENT_ID,
+    completed: {
+      giveawayId: "completed-sample-raffle",
+      title: COMPLETED_SAMPLE_RAFFLE_TITLE,
+      state: "completed",
+      winnerCount: 1,
+      winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
+    },
+    ongoing: {
+      giveawayId: "ongoing-sample-raffle",
+      title: "Weekend Rider Gear Raffle",
+      state: "open",
+      winnerCount: 0,
+    },
+    changed: true,
+  };
+}
+
+function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): PrismaSampleRaffleProvisioner {
+  void receipt;
+  return {
+    dependencies: fakeDependencies(),
+    async close() {},
+  };
+}
+
 describe("sample raffle provisioner safety", () => {
+  test("CLI requires --confirm-production before constructing a provisioner", async () => {
+    const createProvisioner = vi.fn();
+    await expect(runSampleRaffleCli({ argv: [], environment: {}, createProvisioner }))
+      .rejects.toMatchObject({ code: "PRODUCTION_CONFIRMATION_REQUIRED" });
+    expect(createProvisioner).not.toHaveBeenCalled();
+  });
+
+  test("CLI rejects a non-direct or non-Postgres lock URL", () => {
+    expect(() => validateDirectSampleRaffleLockUrl("https://example.com"))
+      .toThrow("DIRECT_LOCK_REQUIRED");
+  });
+
+  test("CLI output is a safe receipt only", async () => {
+    const lines: string[] = [];
+    await runSampleRaffleCli({
+      argv: ["--confirm-production"],
+      environment: completeEnvironment(),
+      createProvisioner: async () => fakePrismaProvisioner(exactReceipt()),
+      provision: async () => exactReceipt(),
+      write: (line) => lines.push(line),
+    });
+    const output = lines.join("\n");
+    expect(output).toContain("Cafe Classico Helmet Raffle");
+    for (const forbidden of [
+      "organizer-secret",
+      "admin-secret",
+      "winner-secret",
+      "postgresql://",
+      "sessionToken",
+      "qrPayload",
+      "GIVEAWAY_DRAW_ENCRYPTION_KEY",
+    ]) {
+      expect(output).not.toContain(forbidden);
+    }
+  });
+
   test("rejects execution without explicit production confirmation", async () => {
     await expect(
       provisionSampleRaffles(
@@ -287,6 +386,21 @@ describe("sample raffle provisioner safety", () => {
     ["completed winner alias is not published", (inspection: RichTargetInspection) => {
       inspection.completedCampaigns[0].currentAwards[0].winnerAliasPublished = false;
     }],
+    ["completed campaign compliance is not approved", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].complianceStatus = "pending_review";
+    }],
+    ["completed campaign has an extra draw", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].drawCount = 2;
+    }],
+    ["completed campaign draw is not published", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].publishedDrawCount = 0;
+    }],
+    ["completed award belongs to a different winner", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].winnerUserId = "another-rider";
+    }],
+    ["ongoing campaign compliance is not approved", (inspection: RichTargetInspection) => {
+      inspection.ongoingCampaigns[0].complianceStatus = "pending_review";
+    }],
     ["ongoing campaign has a draw snapshot", (inspection: RichTargetInspection) => {
       inspection.ongoingCampaigns[0].snapshotCount = 1;
     }],
@@ -324,6 +438,18 @@ describe("sample raffle provisioner safety", () => {
       completed: { winnerAlias: "Disposable Public Alias" },
       changed: true,
     });
+  });
+
+  test.each([
+    ["authentication", "authenticateOrganizer"],
+    ["draw", "selectCompletedWinner"],
+    ["verification", "verifyClaim"],
+  ] as const)("releases the advisory lock and closes clients after a %s failure", async (_label, failAt) => {
+    const dependencies = fakeDependencies({ failAt });
+
+    await expect(provisionSampleRaffles(validInput(), dependencies)).rejects.toBeDefined();
+    expect(dependencies.calls).toContain("releaseLock");
+    expect(dependencies.calls).toContain("finish");
   });
 });
 
