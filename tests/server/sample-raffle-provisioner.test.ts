@@ -2,10 +2,11 @@ import { describe, expect, test } from "vitest";
 
 import {
   COMPLETED_SAMPLE_RAFFLE_TITLE,
-  ONGOING_SAMPLE_RAFFLE_TITLE,
   SAMPLE_RAFFLE_EVENT_ID,
   SAMPLE_RAFFLE_WINNER_ALIAS,
+  productionSampleRaffleManifest,
   provisionSampleRaffles,
+  type SampleRaffleManifest,
   type SampleRaffleProvisionerDependencies,
   type SampleRaffleProvisioningInput,
   type SampleRaffleTargetInspection,
@@ -13,6 +14,27 @@ import {
 
 type FakeOptions = {
   inspection?: SampleRaffleTargetInspection;
+  finalInspection?: SampleRaffleTargetInspection;
+};
+
+type CompletedFinalCampaign = SampleRaffleTargetInspection["completedCampaigns"][number] & {
+  currentAwards: Array<{
+    status: string;
+    winnerAlias?: string;
+    winnerAliasPublished: boolean;
+  }>;
+};
+
+type OngoingFinalCampaign = SampleRaffleTargetInspection["ongoingCampaigns"][number] & {
+  snapshotCount: number;
+  drawCount: number;
+  awardCount: number;
+  resultCount: number;
+};
+
+type RichTargetInspection = Omit<SampleRaffleTargetInspection, "completedCampaigns" | "ongoingCampaigns"> & {
+  completedCampaigns: CompletedFinalCampaign[];
+  ongoingCampaigns: OngoingFinalCampaign[];
 };
 
 function validInput(): SampleRaffleProvisioningInput {
@@ -22,36 +44,51 @@ function validInput(): SampleRaffleProvisioningInput {
     adminPassword: "runtime-only",
     winnerPassword: "runtime-only",
     drawEncryptionKeyPresent: true,
+    databaseTargetPresent: true,
+    directLockPresent: true,
   };
 }
 
-function emptyInspection(): SampleRaffleTargetInspection {
+function emptyInspection(
+  manifest: SampleRaffleManifest = productionSampleRaffleManifest,
+): SampleRaffleTargetInspection {
   return {
-    eventId: SAMPLE_RAFFLE_EVENT_ID,
+    eventId: manifest.eventId,
     hostEventValid: true,
     completedCampaigns: [],
     ongoingCampaigns: [],
   };
 }
 
-function exactFinalInspection(): SampleRaffleTargetInspection {
+function exactFinalInspection(
+  manifest: SampleRaffleManifest = productionSampleRaffleManifest,
+): RichTargetInspection {
   return {
-    eventId: SAMPLE_RAFFLE_EVENT_ID,
+    eventId: manifest.eventId,
     hostEventValid: true,
     completedCampaigns: [{
       giveawayId: "completed-sample-raffle",
-      title: COMPLETED_SAMPLE_RAFFLE_TITLE,
+      title: manifest.completedTitle,
       state: "completed",
       winnerCount: 1,
-      winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
+      winnerAlias: manifest.winnerAlias,
+      currentAwards: [{
+        status: "fulfilled",
+        winnerAlias: manifest.winnerAlias,
+        winnerAliasPublished: true,
+      }],
     }],
     ongoingCampaigns: [{
       giveawayId: "ongoing-sample-raffle",
-      title: ONGOING_SAMPLE_RAFFLE_TITLE,
+      title: manifest.ongoingTitle,
       state: "open",
       winnerCount: 0,
+      snapshotCount: 0,
+      drawCount: 0,
+      awardCount: 0,
+      resultCount: 0,
     }],
-  };
+  } as RichTargetInspection;
 }
 
 function partialInspection(): SampleRaffleTargetInspection {
@@ -70,10 +107,14 @@ function fakeDependencies(options: FakeOptions = {}) {
   const calls: string[] = [];
   let inspectionCount = 0;
   const dependencies: SampleRaffleProvisionerDependencies = {
-    async inspectTarget() {
+    async inspectTarget(manifest) {
       calls.push("inspectTarget");
       inspectionCount += 1;
-      return options.inspection ?? (inspectionCount === 3 ? exactFinalInspection() : emptyInspection());
+      return options.inspection ?? (
+        inspectionCount === 3
+          ? (options.finalInspection ?? exactFinalInspection(manifest))
+          : emptyInspection(manifest)
+      );
     },
     async acquireLock() {
       calls.push("acquireLock");
@@ -186,6 +227,19 @@ describe("sample raffle provisioner safety", () => {
       .rejects.toMatchObject({ code });
   });
 
+  test.each([
+    ["databaseTargetPresent", "DATABASE_TARGET_REQUIRED"],
+    ["directLockPresent", "DIRECT_LOCK_REQUIRED"],
+  ] as const)("requires an explicit true %s prerequisite before any write activity", async (field, code) => {
+    const input = { ...validInput() } as Record<string, unknown>;
+    delete input[field];
+    const dependencies = fakeDependencies();
+
+    await expect(provisionSampleRaffles(input as SampleRaffleProvisioningInput, dependencies))
+      .rejects.toMatchObject({ code });
+    expect(dependencies.calls).toEqual([]);
+  });
+
   test("rejects a missing draw encryption key before acquiring the write lock", async () => {
     const dependencies = fakeDependencies();
     await expect(
@@ -214,6 +268,59 @@ describe("sample raffle provisioner safety", () => {
     await expect(provisionSampleRaffles(validInput(), dependencies))
       .rejects.toMatchObject({ code: "CONFLICTING_SAMPLE_STATE" });
     expect(dependencies.calls).not.toContain("createCompletedCampaign");
+  });
+
+  test.each([
+    ["completed award is not fulfilled", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].currentAwards[0].status = "verified";
+    }],
+    ["completed campaign has more than one current award", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].currentAwards.push({
+        status: "fulfilled",
+        winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
+        winnerAliasPublished: true,
+      });
+    }],
+    ["completed winner alias is not published", (inspection: RichTargetInspection) => {
+      inspection.completedCampaigns[0].currentAwards[0].winnerAliasPublished = false;
+    }],
+    ["ongoing campaign has a draw snapshot", (inspection: RichTargetInspection) => {
+      inspection.ongoingCampaigns[0].snapshotCount = 1;
+    }],
+    ["ongoing campaign has a draw", (inspection: RichTargetInspection) => {
+      inspection.ongoingCampaigns[0].drawCount = 1;
+    }],
+    ["ongoing campaign has an award", (inspection: RichTargetInspection) => {
+      inspection.ongoingCampaigns[0].awardCount = 1;
+    }],
+    ["ongoing campaign has a published result", (inspection: RichTargetInspection) => {
+      inspection.ongoingCampaigns[0].resultCount = 1;
+    }],
+  ])("rejects a final inspection when the %s", async (_description, mutate) => {
+    const inspection = structuredClone(exactFinalInspection());
+    mutate(inspection);
+    const dependencies = fakeDependencies({ finalInspection: inspection });
+
+    await expect(provisionSampleRaffles(validInput(), dependencies))
+      .rejects.toMatchObject({ code: "FINAL_INVARIANT_FAILED" });
+  });
+
+  test("uses a disposable manifest's winner alias in the exact final receipt", async () => {
+    const manifest: SampleRaffleManifest = {
+      eventId: "disposable-raffle-event",
+      completedTitle: "Disposable Completed Raffle",
+      ongoingTitle: "Disposable Ongoing Raffle",
+      winnerEmail: "disposable.winner@example.invalid",
+      winnerName: "Disposable Winner",
+      winnerAlias: "Disposable Public Alias",
+    };
+    const dependencies = fakeDependencies();
+
+    await expect(provisionSampleRaffles(validInput(), dependencies, manifest)).resolves.toMatchObject({
+      eventId: "disposable-raffle-event",
+      completed: { winnerAlias: "Disposable Public Alias" },
+      changed: true,
+    });
   });
 });
 

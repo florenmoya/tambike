@@ -59,8 +59,8 @@ export interface SampleRaffleProvisioningInput {
   adminPassword?: string;
   winnerPassword?: string;
   drawEncryptionKeyPresent: boolean;
-  databaseTargetPresent?: boolean;
-  directLockPresent?: boolean;
+  databaseTargetPresent: boolean;
+  directLockPresent: boolean;
 }
 
 export interface SampleRaffleProvisioningReceipt {
@@ -69,7 +69,7 @@ export interface SampleRaffleProvisioningReceipt {
     giveawayId: string;
     state: "completed";
     winnerCount: 1;
-    winnerAlias: typeof SAMPLE_RAFFLE_WINNER_ALIAS;
+    winnerAlias: string;
   };
   ongoing: {
     giveawayId: string;
@@ -87,11 +87,28 @@ export interface SampleRaffleCampaignInspection {
   winnerAlias?: string;
 }
 
+export interface SampleRaffleCompletedAwardInspection {
+  status: string;
+  winnerAlias?: string;
+  winnerAliasPublished: boolean;
+}
+
+export interface SampleRaffleCompletedCampaignInspection extends SampleRaffleCampaignInspection {
+  currentAwards: SampleRaffleCompletedAwardInspection[];
+}
+
+export interface SampleRaffleOngoingCampaignInspection extends SampleRaffleCampaignInspection {
+  snapshotCount: number;
+  drawCount: number;
+  awardCount: number;
+  resultCount: number;
+}
+
 export interface SampleRaffleTargetInspection {
   eventId: string;
   hostEventValid: boolean;
-  completedCampaigns: SampleRaffleCampaignInspection[];
-  ongoingCampaigns: SampleRaffleCampaignInspection[];
+  completedCampaigns: SampleRaffleCompletedCampaignInspection[];
+  ongoingCampaigns: SampleRaffleOngoingCampaignInspection[];
 }
 
 export interface SampleRaffleProvisioningLock {
@@ -246,10 +263,18 @@ function finalReceipt(
     completedCampaign.title !== manifest.completedTitle ||
     completedCampaign.state !== "completed" ||
     completedCampaign.winnerCount !== 1 ||
-    completedCampaign.winnerAlias !== SAMPLE_RAFFLE_WINNER_ALIAS ||
+    completedCampaign.currentAwards.length !== 1 ||
+    completedCampaign.currentAwards[0]?.status !== "fulfilled" ||
+    completedCampaign.currentAwards[0]?.winnerAlias !== manifest.winnerAlias ||
+    !completedCampaign.currentAwards[0]?.winnerAliasPublished ||
+    completedCampaign.winnerAlias !== manifest.winnerAlias ||
     ongoingCampaign.title !== manifest.ongoingTitle ||
     ongoingCampaign.state !== "open" ||
-    ongoingCampaign.winnerCount !== 0
+    ongoingCampaign.winnerCount !== 0 ||
+    ongoingCampaign.snapshotCount !== 0 ||
+    ongoingCampaign.drawCount !== 0 ||
+    ongoingCampaign.awardCount !== 0 ||
+    ongoingCampaign.resultCount !== 0
   ) {
     return null;
   }
@@ -259,7 +284,7 @@ function finalReceipt(
       giveawayId: completedCampaign.giveawayId,
       state: "completed",
       winnerCount: 1,
-      winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
+      winnerAlias: manifest.winnerAlias,
     },
     ongoing: {
       giveawayId: ongoingCampaign.giveawayId,
@@ -276,8 +301,8 @@ function hasNoSampleCampaigns(inspection: SampleRaffleTargetInspection) {
 
 function validateInput(input: SampleRaffleProvisioningInput) {
   if (!input.confirmedProduction) throw new SampleRaffleProvisioningError("PRODUCTION_CONFIRMATION_REQUIRED");
-  if (input.databaseTargetPresent === false) throw new SampleRaffleProvisioningError("DATABASE_TARGET_REQUIRED");
-  if (input.directLockPresent === false) throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
+  if (input.databaseTargetPresent !== true) throw new SampleRaffleProvisioningError("DATABASE_TARGET_REQUIRED");
+  if (input.directLockPresent !== true) throw new SampleRaffleProvisioningError("DIRECT_LOCK_REQUIRED");
   if (!hasCredential(input.organizerPassword)) throw new SampleRaffleProvisioningError("ORGANIZER_CREDENTIAL_REQUIRED");
   if (!hasCredential(input.adminPassword)) throw new SampleRaffleProvisioningError("ADMIN_CREDENTIAL_REQUIRED");
   if (!hasCredential(input.winnerPassword)) throw new SampleRaffleProvisioningError("WINNER_CREDENTIAL_REQUIRED");
