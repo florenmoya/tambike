@@ -270,6 +270,57 @@ describe("public giveaway spotlight", () => {
     expect(container.textContent).not.toContain("Log in to enter");
   });
 
+  test("fails closed when legacy public prize pools have no valid presentation", async () => {
+    const internalPoolTitle = "Private sponsor inventory";
+    const internalItemTitle = "Unannounced carbon helmet";
+    const legacyPool = {
+      id: "legacy-pool",
+      title: internalPoolTitle,
+      awardMode: "random_draw",
+      inventoryKind: "finite",
+      itemQuantity: 1,
+      presenceVerificationRequired: false,
+      items: [{ title: internalItemTitle }],
+    } as unknown as PublicEventGiveaway["giveaway"]["prizePools"][number];
+    const malformedPool = {
+      ...legacyPool,
+      id: "malformed-pool",
+      presentation: { disclosure: "revealed", title: "   " },
+    } as unknown as PublicEventGiveaway["giveaway"]["prizePools"][number];
+
+    const open = campaign("Legacy open raffle", "open");
+    open.giveaway.prizePools = [legacyPool];
+    const completed = campaign("Legacy completed raffle", "completed");
+    completed.giveaway.prizePools = [legacyPool];
+    const scheduled = campaign("Legacy scheduled raffle", "scheduled");
+    scheduled.giveaway.prizePools = [legacyPool];
+    const paused = campaign("Malformed paused raffle", "paused");
+    paused.giveaway.prizePools = [malformedPool];
+
+    vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
+      ok: true,
+      code: "OK",
+      data: [open, completed, scheduled, paused],
+    });
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    await act(async () => {
+      root.render(createElement(PublicGiveawayPanel, { eventId: "event-1" }));
+    });
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Legacy open raffle");
+    });
+
+    const text = container.textContent ?? "";
+    expect(text.match(/Prize details unavailable/g)).toHaveLength(4);
+    expect(text).not.toContain(internalPoolTitle);
+    expect(text).not.toContain(internalItemTitle);
+  });
+
   test("renders every open raffle before completed results in plain raffle language", async () => {
     const completed = campaign("Completed helmet raffle", "completed");
     completed.giveaway.sponsorDisclosure = "Supported by Helmet Co.";

@@ -9,6 +9,7 @@ import type {
   GiveawayEntryMode,
   GiveawayState,
   PublicEventGiveaway,
+  PublicPrizePresentation,
 } from "@/features/giveaways/types";
 import { listPublicGiveawaysForEventAction } from "@/server/giveaway-actions";
 
@@ -499,13 +500,75 @@ function ScheduleMoment({ label, value }: { label: string; value: string }) {
   );
 }
 
-function primaryPrizePresentation(campaign: PublicEventGiveaway) {
+function primaryPrizePresentation(
+  campaign: PublicEventGiveaway,
+): PublicPrizePresentation {
   const pool = campaign.giveaway.prizePools[0];
-  if (!pool) {
+  const presentation = pool?.presentation as unknown;
+  const unavailable: PublicPrizePresentation = {
+    disclosure: "revealed",
+    title: "Prize details unavailable",
+  };
+
+  if (!presentation || typeof presentation !== "object") {
+    return unavailable;
+  }
+
+  const publicFields = presentation as Record<string, unknown>;
+  if (publicFields.disclosure === "surprise") {
     return {
-      disclosure: "revealed" as const,
-      title: "Prize details coming soon",
+      disclosure: "surprise",
+      title: "Surprise prize",
     };
   }
-  return pool.presentation;
+
+  if (
+    publicFields.disclosure !== "revealed" ||
+    typeof publicFields.title !== "string" ||
+    !publicFields.title.trim()
+  ) {
+    return unavailable;
+  }
+
+  const description =
+    typeof publicFields.description === "string"
+      ? publicFields.description.trim()
+      : "";
+  const image = toValidPublicPrizeImage(publicFields.image);
+
+  return {
+    disclosure: "revealed",
+    title: publicFields.title.trim(),
+    ...(description ? { description } : {}),
+    ...(image ? { image } : {}),
+  };
+}
+
+function toValidPublicPrizeImage(
+  value: unknown,
+): PublicPrizePresentation["image"] {
+  if (!value || typeof value !== "object") return undefined;
+
+  const image = value as Record<string, unknown>;
+  if (
+    typeof image.mediaId !== "string" ||
+    !image.mediaId.trim() ||
+    typeof image.url !== "string" ||
+    !image.url.trim() ||
+    typeof image.width !== "number" ||
+    !Number.isFinite(image.width) ||
+    image.width <= 0 ||
+    typeof image.height !== "number" ||
+    !Number.isFinite(image.height) ||
+    image.height <= 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    mediaId: image.mediaId,
+    url: image.url,
+    width: image.width,
+    height: image.height,
+  };
 }
