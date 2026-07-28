@@ -20,4 +20,19 @@ describe("Prisma advisory transaction lock contract", () => {
       expect(statement).not.toContain("$queryRaw");
     }
   });
+
+  test("does not run giveaway configuration reads concurrently on one transaction client", () => {
+    const start = prismaBackend.indexOf(
+      "private async replaceGiveawayConfiguration(",
+    );
+    const end = prismaBackend.indexOf(
+      "private currentGiveawayMechanics(",
+      start,
+    );
+    const methodSource = prismaBackend.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(methodSource).not.toContain("Promise.all");
+  });
 });

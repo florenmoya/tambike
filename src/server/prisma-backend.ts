@@ -6871,38 +6871,36 @@ export class PrismaTambikeBackend {
     pools: CreateGiveawayInput["prizePools"],
     defaultPresenceVerificationRequired: boolean,
   ) {
-    const [currentGroups, currentPools, referencedGroups, referencedPools] = await Promise.all([
-      tx.giveawayEligibilityGroup.findMany({
-        where: { giveawayId },
-        select: { id: true, position: true },
-      }),
-      tx.giveawayPrizePool.findMany({
-        where: { giveawayId },
-        select: {
-          id: true,
-          position: true,
-          publicImage: {
-            select: {
-              id: true,
-              uploadedByUserId: true,
-              storageKey: true,
-            },
+    const currentGroups = await tx.giveawayEligibilityGroup.findMany({
+      where: { giveawayId },
+      select: { id: true, position: true },
+    });
+    const currentPools = await tx.giveawayPrizePool.findMany({
+      where: { giveawayId },
+      select: {
+        id: true,
+        position: true,
+        publicImage: {
+          select: {
+            id: true,
+            uploadedByUserId: true,
+            storageKey: true,
           },
         },
-      }),
-      groups.length
-        ? tx.giveawayEligibilityGroup.findMany({
-            where: { id: { in: groups.map((group) => group.id) } },
-            select: { id: true, giveawayId: true },
-          })
-        : Promise.resolve([]),
-      pools.length
-        ? tx.giveawayPrizePool.findMany({
-            where: { id: { in: pools.map((pool) => pool.id) } },
-            select: { id: true, giveawayId: true },
-          })
-        : Promise.resolve([]),
-    ]);
+      },
+    });
+    const referencedGroups = groups.length
+      ? await tx.giveawayEligibilityGroup.findMany({
+          where: { id: { in: groups.map((group) => group.id) } },
+          select: { id: true, giveawayId: true },
+        })
+      : [];
+    const referencedPools = pools.length
+      ? await tx.giveawayPrizePool.findMany({
+          where: { id: { in: pools.map((pool) => pool.id) } },
+          select: { id: true, giveawayId: true },
+        })
+      : [];
     if (
       referencedGroups.some((group) => group.giveawayId !== giveawayId) ||
       referencedPools.some((pool) => pool.giveawayId !== giveawayId)
