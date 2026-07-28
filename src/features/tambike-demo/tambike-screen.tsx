@@ -58,7 +58,10 @@ import type {
   Pass,
   Role,
 } from "./types";
-import type { EventAttendeePreviewData } from "@/features/member-profiles/types";
+import type {
+  EventAttendeePreviewData,
+  RosterIdentity,
+} from "@/features/member-profiles/types";
 
 export type TambikeView =
   | "discovery"
@@ -1112,18 +1115,41 @@ function EventDetail({
 }
 
 function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
-  const { registerForEvent } = useDemo();
+  const { getEventRegistrationRosterIdentity, registerForEvent } = useDemo();
   const router = useRouter();
   const [attendance, setAttendance] = useState<AttendanceType>("direct");
+  const [rosterIdentity, setRosterIdentity] =
+    useState<RosterIdentity | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    let active = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Event changes must re-enter loading state.
+    setRosterIdentity(null);
+    setError("");
+    void getEventRegistrationRosterIdentity(event.id)
+      .then((identity) => {
+        if (active) setRosterIdentity(identity);
+      })
+      .catch((loadError) => {
+        if (active) setError(actionErrorMessage(loadError));
+      });
+    return () => {
+      active = false;
+    };
+  }, [event.id, getEventRegistrationRosterIdentity]);
+
   const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
+    if (rosterIdentity === null) {
+      setError("Your attendance privacy choice is still loading.");
+      return;
+    }
     setError("");
     setIsSubmitting(true);
     try {
-      const passId = await registerForEvent(event.id, attendance, "going");
+      const passId = await registerForEvent(event.id, attendance, "going", rosterIdentity);
       if (passId) {
         onClose();
         router.push(`/passes/${passId}`);
@@ -1178,12 +1204,30 @@ function RsvpModal({ event, onClose }: { event: Event; onClose: () => void }) {
             <span>Not sure / join with club</span>
           </label>
         </fieldset>
+        <fieldset className="attendance-options">
+          <legend>Who’s going</legend>
+          <label>
+            <input
+              type="checkbox"
+              checked={rosterIdentity === "VISIBLE"}
+              disabled={rosterIdentity === null || isSubmitting}
+              onChange={(event) =>
+                setRosterIdentity(event.currentTarget.checked ? "VISIBLE" : "ANONYMOUS")
+              }
+            />
+            <span>Show my name and bike in Who’s going.</span>
+          </label>
+        </fieldset>
         {error && <p className="inline-error" aria-live="polite">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="buy-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="checkout-button" disabled={isSubmitting}>
+          <button
+            type="submit"
+            className="checkout-button"
+            disabled={rosterIdentity === null || isSubmitting}
+          >
             {isSubmitting ? "Creating pass..." : "Get Tambike Pass"}
           </button>
         </div>

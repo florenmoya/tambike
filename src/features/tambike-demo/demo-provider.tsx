@@ -14,6 +14,7 @@ import {
   configureEventRosterAction,
   createEventDraftAction,
   deleteMemberMediaAction,
+  getEventRegistrationRosterIdentityAction,
   getMemberProfileAction,
   getMemberProfileEditorAction,
   issueSelfCheckInQrAction,
@@ -34,6 +35,7 @@ import type {
   MotorcycleShowcase,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
+  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -83,7 +85,11 @@ interface DemoContextValue {
     eventId: string,
     attendanceType: AttendanceType,
     status?: "interested" | "going",
+    rosterIdentity?: RosterIdentity,
   ) => Promise<string | null>;
+  getEventRegistrationRosterIdentity: (
+    eventId: string,
+  ) => Promise<RosterIdentity>;
   configureEventRoster: (eventId: string, enabled: boolean) => Promise<EventAttendeeSummary>;
   listEventAttendees: (
     eventId: string,
@@ -234,6 +240,7 @@ export function DemoProvider({
       eventId: string,
       nextAttendanceType: AttendanceType,
       status: "interested" | "going" = "going",
+      rosterIdentity?: RosterIdentity,
     ) => {
       if (!currentUser) {
         setAuthNotice("Log in to get your Tambike Pass.");
@@ -244,12 +251,18 @@ export function DemoProvider({
         status,
         attendanceType: nextAttendanceType,
         clubName: currentUser.clubName,
+        ...(rosterIdentity ? { rosterIdentity } : {}),
       });
       applyState(result.state);
       setAttendanceType(nextAttendanceType);
       return result.passId;
     },
     [applyState, currentUser],
+  );
+
+  const getEventRegistrationRosterIdentity = useCallback(
+    (eventId: string) => getEventRegistrationRosterIdentityAction(eventId),
+    [],
   );
 
   const configureEventRoster = useCallback(
@@ -335,6 +348,7 @@ export function DemoProvider({
       attendanceType,
       passCreated,
       registerForEvent,
+      getEventRegistrationRosterIdentity,
       configureEventRoster,
       listEventAttendees,
       scannerOutcome,
@@ -364,6 +378,7 @@ export function DemoProvider({
       passCreated,
       passes,
       registerForEvent,
+      getEventRegistrationRosterIdentity,
       configureEventRoster,
       listEventAttendees,
       requireLogin,

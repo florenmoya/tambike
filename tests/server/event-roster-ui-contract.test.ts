@@ -197,43 +197,22 @@ describe("event attendee route and roster presentation", () => {
 });
 
 describe("roster identity controls", () => {
-  test("removes event-specific privacy APIs and controls while preserving roster access", () => {
+  test("offers the Going-only per-event privacy choice while preserving roster access", () => {
     const screen = source("src/features/tambike-demo/tambike-screen.tsx");
     const preview = source("src/features/member-profiles/event-attendee-preview.tsx");
     const provider = source("src/features/tambike-demo/demo-provider.tsx");
     const actions = source("src/server/actions.ts");
 
-    const removedScreenSymbols = [
-      ["ExistingRsvp", "IdentityEditor"].join(""),
-      ["RosterIdentity", "Field"].join(""),
-      ["registrationRoster", "Identity"].join(""),
-    ];
-    const removedScreenCopy = [
-      ["Change for this ", "event"].join(""),
-      "Profile default",
-      "Event roster privacy",
-    ];
-    const removedActionSymbols = [
-      ["updateEvent", "RosterIdentityAction"].join(""),
-      ["getEvent", "RosterIdentityAction"].join(""),
-    ];
-
-    expect(
-      [...removedScreenSymbols, ...removedScreenCopy].filter((removedContract) =>
-        screen.includes(removedContract),
-      ),
-    ).toEqual([]);
-    expect(screen).not.toContain("RosterIdentity");
+    expect(screen).toContain("Show my name and bike in Who’s going.");
+    expect(screen).toContain('type="checkbox"');
+    expect(screen).toContain('rosterIdentity === "VISIBLE"');
     expect(screen).toMatch(
-      /registerForEvent\(event\.id,\s*attendance,\s*"going"\)/,
+      /registerForEvent\(\s*event\.id,\s*attendance,\s*"going",\s*rosterIdentity\s*\)/,
     );
 
-    expect(provider).not.toContain("RosterIdentity");
-    expect(actions).not.toContain("RosterIdentity");
-    for (const removedSymbol of removedActionSymbols) {
-      expect(provider).not.toContain(removedSymbol);
-      expect(actions).not.toContain(removedSymbol);
-    }
+    expect(provider).toContain("getEventRegistrationRosterIdentityAction");
+    expect(provider).toContain("rosterIdentity?: RosterIdentity");
+    expect(actions).toContain("getEventRegistrationRosterIdentityAction");
 
     expect(screen).toContain("<EventAttendeePreview");
     expect(screen).not.toContain("View attendee roster");
