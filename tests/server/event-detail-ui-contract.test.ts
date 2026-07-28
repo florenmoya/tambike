@@ -132,11 +132,16 @@ describe("event detail decision-first UI contract", () => {
     expect(route).not.toContain('"use client"');
   });
 
-  test("keeps the attendee preview to public facepile and roster action", () => {
-    expect(attendeePreviewSource).toContain("styles.facepile");
+  test("keeps the attendee preview to public bike grid and roster action", () => {
+    expect(attendeePreviewSource).toContain("styles.bikeGrid");
+    expect(attendeePreviewSource).toContain("styles.bikeTile");
+    expect(attendeePreviewSource).toContain("rider.bikePhoto.url");
+    expect(attendeePreviewSource).toContain('href={`/riders/${rider.slug}`}');
     expect(attendeePreviewSource).toContain("See who’s going");
     expect(attendeePreviewSource).not.toContain("styles.names");
     expect(attendeePreviewSource).not.toContain("Log in to see riders");
+    expect(attendeePreviewSource).not.toContain("rider.profilePhoto");
+    expect(attendeePreviewSource).not.toMatch(/email|userId|verification|make|model/);
   });
 
   test("uses a compact responsive poster and readable title system", () => {
