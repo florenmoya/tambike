@@ -137,7 +137,7 @@ describe("event detail decision-first UI contract", () => {
     expect(attendeePreviewSource).toContain("styles.bikeTile");
     expect(attendeePreviewSource).toContain("rider.bikePhoto.url");
     expect(attendeePreviewSource).toContain('href={`/riders/${rider.slug}`}');
-    expect(attendeePreviewSource).toContain("See who’s going");
+    expect(attendeePreviewSource).toContain("See more");
     expect(attendeePreviewSource).not.toContain("styles.names");
     expect(attendeePreviewSource).not.toContain("Log in to see riders");
     expect(attendeePreviewSource).not.toContain("rider.profilePhoto");
