@@ -91,7 +91,14 @@ describe("sample raffle presentation refresh route", () => {
     const handler = createSampleRafflePresentationRefreshHandler({
       cronSecret: "exact-secret",
       refresh: async () => {
-        throw new Error("provider detail");
+        throw Object.assign(new Error("provider detail"), {
+          name: "DriverAdapterError",
+          cause: {
+            kind: "postgres",
+            code: "23505",
+            message: "sensitive database detail",
+          },
+        });
       },
     });
 
@@ -101,10 +108,17 @@ describe("sample raffle presentation refresh route", () => {
     expect(await response.json()).toEqual({ error: "REFRESH_FAILED" });
     expect(consoleError).toHaveBeenCalledWith(
       "Sample raffle presentation refresh failed",
-      { code: "Error" },
+      {
+        code: "DriverAdapterError",
+        causeCode: "23505",
+        causeKind: "postgres",
+      },
     );
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
       "provider detail",
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      "sensitive database detail",
     );
     consoleError.mockRestore();
   });

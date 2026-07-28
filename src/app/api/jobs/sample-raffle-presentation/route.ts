@@ -20,12 +20,36 @@ interface SampleRafflePresentationRefreshDependencies {
   refresh(): Promise<SampleRaffleProvisioningReceipt>;
 }
 
-function safeRefreshFailureCode(error: unknown) {
+function safeDiagnosticToken(value: unknown) {
+  return typeof value === "string" && /^[A-Za-z0-9_]+$/.test(value)
+    ? value
+    : undefined;
+}
+
+function safeRefreshFailureDiagnostic(error: unknown) {
   const name =
     error instanceof Error ? error.name : undefined;
-  return name && /^[A-Za-z][A-Za-z0-9]*$/.test(name)
-    ? name
-    : "UnknownError";
+  const cause =
+    typeof error === "object" &&
+    error !== null &&
+    "cause" in error &&
+    typeof error.cause === "object" &&
+    error.cause !== null
+      ? error.cause
+      : undefined;
+  const causeKind =
+    cause && "kind" in cause
+      ? safeDiagnosticToken(cause.kind)
+      : undefined;
+  const causeCode =
+    cause && "code" in cause
+      ? safeDiagnosticToken(cause.code)
+      : undefined;
+  return {
+    code: safeDiagnosticToken(name) ?? "UnknownError",
+    ...(causeKind ? { causeKind } : {}),
+    ...(causeCode ? { causeCode } : {}),
+  };
 }
 
 async function refreshProductionSampleRafflePresentation() {
@@ -85,7 +109,7 @@ export function createSampleRafflePresentationRefreshHandler(
       return Response.json(receipt, { headers: noStoreHeaders });
     } catch (error) {
       console.error("Sample raffle presentation refresh failed", {
-        code: safeRefreshFailureCode(error),
+        ...safeRefreshFailureDiagnostic(error),
       });
       return Response.json(
         { error: "REFRESH_FAILED" },
