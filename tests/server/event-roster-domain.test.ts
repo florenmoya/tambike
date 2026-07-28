@@ -65,6 +65,51 @@ describe("event roster policy helpers", () => {
 });
 
 describe("in-memory organizer-controlled event rosters", () => {
+  test("updates attendance counts only when an RSVP changes status", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "roster-counts");
+    const event = await createPublishedTestEvent(backend, actors);
+    const attendanceCounts = () => {
+      const current = backend
+        .getSnapshot(actors.rider.sessionToken)
+        .events.find((candidate) => candidate.id === event.id);
+      return { going: current?.going, interested: current?.interested };
+    };
+
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
+    });
+    expect(attendanceCounts()).toEqual({ going: 1, interested: 0 });
+
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "ANONYMOUS",
+    });
+    expect(attendanceCounts()).toEqual({ going: 1, interested: 0 });
+
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "interested",
+      attendanceType: "direct",
+    });
+    expect(attendanceCounts()).toEqual({ going: 0, interested: 1 });
+
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "interested",
+      attendanceType: "direct",
+    });
+    expect(attendanceCounts()).toEqual({ going: 0, interested: 1 });
+
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
+    });
+    expect(attendanceCounts()).toEqual({ going: 1, interested: 0 });
+  });
+
   test("defaults to counts-only, authorizes owner/admin changes, and audits booleans only", async () => {
     const backend = await createTambikeTestBackend();
     const actors = await createTestActors(backend, "roster-config");

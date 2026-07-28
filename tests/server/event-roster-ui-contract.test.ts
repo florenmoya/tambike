@@ -209,6 +209,12 @@ describe("roster identity controls", () => {
     expect(screen).toMatch(
       /registerForEvent\(\s*event\.id,\s*attendance,\s*"going",\s*rosterIdentity\s*\)/,
     );
+    expect(screen).toMatch(
+      /registerForEvent\(\s*event\.id,\s*"direct",\s*"interested"\s*\)/,
+    );
+    expect(screen).not.toMatch(
+      /registerForEvent\(\s*event\.id,\s*"direct",\s*"interested",\s*rosterIdentity\s*\)/,
+    );
 
     expect(provider).toContain("getEventRegistrationRosterIdentityAction");
     expect(provider).toContain("rosterIdentity?: RosterIdentity");

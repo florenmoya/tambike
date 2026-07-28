@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import type {
   AttendanceType,
   CheckInConfiguration,
@@ -123,6 +125,8 @@ export async function registerForEventAction(
   const backend = await getTambikeBackend();
   const token = await readRequiredSessionToken();
   const result = await backend.registerForEvent(token, eventId, input);
+  revalidatePath(`/events/${eventId}`);
+  revalidatePath(`/events/${eventId}/attendees`);
   return {
     state: await snapshot(),
     passId: result.pass?.id ?? null,

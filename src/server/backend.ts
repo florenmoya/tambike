@@ -4333,13 +4333,23 @@ export class TambikeBackend {
 
     this.rsvps.set(rsvpKey, rsvp);
     if (input.status === "interested") {
-      event.interested += 1;
+      if (previousRsvp?.status !== "interested") {
+        event.interested += 1;
+        if (previousRsvp?.status === "going") {
+          event.going = Math.max(0, event.going - 1);
+        }
+      }
       this.audit("RSVP_UPDATED", user.id, event.id);
       this.reconcileAutomaticEligibilityForEvent(event.id, user.id);
       return { rsvp, pass: null };
     }
 
-    event.going += 1;
+    if (previousRsvp?.status !== "going") {
+      event.going += 1;
+      if (previousRsvp?.status === "interested") {
+        event.interested = Math.max(0, event.interested - 1);
+      }
+    }
     const pass =
       this.findPassForEventRider(event.id, user.id) ??
       ({
