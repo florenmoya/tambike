@@ -17,7 +17,10 @@ describe("public attendee preview source contract", () => {
     expect(memory).toContain("getPublicEventAttendeePreview(");
     expect(prisma).toContain("getPublicEventAttendeePreview(");
     expect(prisma).toContain('profileVisibility: "PUBLIC"');
-    expect(prisma).toContain('defaultRosterIdentity: "VISIBLE"');
+    expect(prisma).toContain('rosterIdentity: "VISIBLE"');
+    expect(prisma).not.toMatch(
+      /getPublicEventAttendeePreview[\s\S]{0,1200}defaultRosterIdentity:\s*"VISIBLE"/,
+    );
     expect(prisma).toContain('status: "going"');
     expect(actions).not.toMatch(
       /getPublicEventAttendeePreviewAction[\s\S]{0,300}readRequiredSessionToken/,

@@ -4965,8 +4965,8 @@ export class PrismaTambikeBackend {
       eventId,
       status: "going" as const,
       goingAt: { not: null },
+      rosterIdentity: "VISIBLE" as const,
       user: {
-        defaultRosterIdentity: "VISIBLE" as const,
         profileSlug: { not: null },
         profileVisibility: { not: "PRIVATE" as const },
       },
@@ -5045,8 +5045,8 @@ export class PrismaTambikeBackend {
         eventId,
         status: "going",
         goingAt: { not: null },
+        rosterIdentity: "VISIBLE",
         user: {
-          defaultRosterIdentity: "VISIBLE",
           profileSlug: { not: null },
           profileVisibility: "PUBLIC",
           motorcycle: {
@@ -9244,8 +9244,8 @@ export class PrismaTambikeBackend {
               eventId,
               status: "going",
               goingAt: { not: null },
+              rosterIdentity: "VISIBLE",
               user: {
-                defaultRosterIdentity: "VISIBLE",
                 profileSlug: { not: null },
                 profileVisibility: { not: "PRIVATE" },
               },

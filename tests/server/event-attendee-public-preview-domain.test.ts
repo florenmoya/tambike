@@ -107,6 +107,7 @@ async function addPreviewCandidate(input: {
   await input.backend.registerForEvent(rider.sessionToken, input.eventId, {
     status: input.status ?? "going",
     attendanceType: "direct",
+    rosterIdentity: input.identity ?? "VISIBLE",
   });
   return rider;
 }
@@ -130,6 +131,7 @@ describe("public event attendee preview", () => {
     await backend.registerForEvent(actors.rider.sessionToken, event.id, {
       status: "going",
       attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
     });
     await addBikePhoto(actors.rider, "public-rider");
 
@@ -141,6 +143,7 @@ describe("public event attendee preview", () => {
     await backend.registerForEvent(actors.outsider.sessionToken, event.id, {
       status: "going",
       attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
     });
     await addBikePhoto(actors.outsider, "members-rider");
 
@@ -202,6 +205,7 @@ describe("public event attendee preview", () => {
       await backend.registerForEvent(rider.sessionToken, event.id, {
         status: "going",
         attendanceType: "direct",
+        rosterIdentity: "VISIBLE",
       });
       if (index > 0) {
         await addBikePhoto(rider, `public-preview-${index}`);
@@ -215,6 +219,79 @@ describe("public event attendee preview", () => {
       "Public Preview Rider 2",
       "Public Preview Rider 3",
       "Public Preview Rider 4",
+    ]);
+  });
+
+  test("uses the RSVP identity to prioritize visible riders in the four-bike preview", async () => {
+    const { backend, addBikePhoto } = await createPreviewHarness();
+    const actors = await createTestActors(backend, "per-event-preview");
+    const event = await createPublishedTestEvent(backend, actors, {
+      date: "Fri · December 31, 2099",
+    });
+    await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
+      enabled: true,
+    });
+
+    const riders = [];
+    for (let index = 0; index < 7; index += 1) {
+      const rider = await backend.signUpRider({
+        displayName:
+          index === 0 ? "Anonymous Rider" :
+          index === 1 ? "Photo-less Rider" :
+          `Visible Rider ${index - 1}`,
+        email: `per-event-preview-${index}@example.test`,
+        password: "password123",
+        area: "Manila",
+      });
+      riders.push(rider);
+      await backend.updateMemberProfile(rider.sessionToken, {
+        ...visibleProfile,
+        displayName:
+          index === 0 ? "Anonymous Rider" :
+          index === 1 ? "Photo-less Rider" :
+          `Visible Rider ${index - 1}`,
+        visibility: "PUBLIC",
+      });
+      await backend.registerForEvent(rider.sessionToken, event.id, {
+        status: "going",
+        attendanceType: "direct",
+        rosterIdentity: index === 0 ? "ANONYMOUS" : "VISIBLE",
+      });
+      if (index !== 1) {
+        await addBikePhoto(rider, `per-event-preview-${index}`);
+      }
+    }
+
+    const initialPreview = await backend.getPublicEventAttendeePreview(event.id);
+    expect(initialPreview.attendees.map(({ displayName }) => displayName)).toEqual([
+      "Visible Rider 1",
+      "Visible Rider 2",
+      "Visible Rider 3",
+      "Visible Rider 4",
+    ]);
+
+    await backend.updateMemberProfile(riders[2]!.sessionToken, {
+      ...visibleProfile,
+      displayName: "Visible Rider 1",
+      visibility: "PUBLIC",
+      defaultRosterIdentity: "ANONYMOUS",
+    });
+    const profileDefaultChangedPreview = await backend.getPublicEventAttendeePreview(event.id);
+    expect(profileDefaultChangedPreview.attendees.map(({ displayName }) => displayName)).toContain(
+      "Visible Rider 1",
+    );
+
+    await backend.registerForEvent(riders[2]!.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "ANONYMOUS",
+    });
+    const rsvpChangedPreview = await backend.getPublicEventAttendeePreview(event.id);
+    expect(rsvpChangedPreview.attendees.map(({ displayName }) => displayName)).toEqual([
+      "Visible Rider 2",
+      "Visible Rider 3",
+      "Visible Rider 4",
+      "Visible Rider 5",
     ]);
   });
 

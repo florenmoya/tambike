@@ -101,21 +101,21 @@ describe("in-memory organizer-controlled event rosters", () => {
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, { enabled: true });
 
     await backend.updateMemberProfile(actors.rider.sessionToken, visibleProfile);
-    await backend.registerForEvent(actors.rider.sessionToken, event.id, { status: "going", attendanceType: "direct" });
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, { status: "going", attendanceType: "direct", rosterIdentity: "VISIBLE" });
 
     await backend.updateMemberProfile(actors.outsider.sessionToken, { ...visibleProfile, displayName: "Anonymous Rider", defaultRosterIdentity: "ANONYMOUS" });
-    await backend.registerForEvent(actors.outsider.sessionToken, event.id, { status: "going", attendanceType: "direct" });
+    await backend.registerForEvent(actors.outsider.sessionToken, event.id, { status: "going", attendanceType: "direct", rosterIdentity: "ANONYMOUS" });
 
     const privateRider = await backend.signUpRider({ displayName: "Private Rider", email: "private-roster@example.test", password: "password123", area: "Pasig" });
     await backend.updateMemberProfile(privateRider.sessionToken, { ...visibleProfile, displayName: "Private Rider", visibility: "PRIVATE" });
-    await backend.registerForEvent(privateRider.sessionToken, event.id, { status: "going", attendanceType: "direct" });
+    await backend.registerForEvent(privateRider.sessionToken, event.id, { status: "going", attendanceType: "direct", rosterIdentity: "VISIBLE" });
 
     const unpublished = await backend.signUpRider({ displayName: "Unpublished Rider", email: "unpublished-roster@example.test", password: "password123", area: "Pasig" });
-    await backend.registerForEvent(unpublished.sessionToken, event.id, { status: "going", attendanceType: "direct" });
+    await backend.registerForEvent(unpublished.sessionToken, event.id, { status: "going", attendanceType: "direct", rosterIdentity: "VISIBLE" });
 
     const interested = await backend.signUpRider({ displayName: "Interested Rider", email: "interested-roster@example.test", password: "password123", area: "Pasig" });
     await backend.updateMemberProfile(interested.sessionToken, { ...visibleProfile, displayName: "Interested Rider" });
-    await backend.registerForEvent(interested.sessionToken, event.id, { status: "interested", attendanceType: "direct" });
+    await backend.registerForEvent(interested.sessionToken, event.id, { status: "interested", attendanceType: "direct", rosterIdentity: "VISIBLE" });
 
     await expect(backend.listEventAttendees(undefined, event.id, { cursor: "broken", limit: 0 })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     const page = await backend.listEventAttendees(actors.rider.sessionToken, event.id, {});
@@ -196,11 +196,15 @@ describe("in-memory organizer-controlled event rosters", () => {
     await expect(
       backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, event.id),
     ).resolves.toBe("VISIBLE");
-
     await backend.updateMemberProfile(actors.rider.sessionToken, { ...visibleProfile, defaultRosterIdentity: "ANONYMOUS" });
     await expect(
       backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, event.id),
     ).resolves.toBe("VISIBLE");
+    await backend.configureEventRoster(actors.organizer.sessionToken, event.id, { enabled: true });
+    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
+      summary: { visibleCount: 1, anonymousCount: 0 },
+      attendees: [{ slug: "visible-rider" }],
+    });
 
     const preserved = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
       status: "going",
@@ -214,6 +218,10 @@ describe("in-memory organizer-controlled event rosters", () => {
       rosterIdentity: "ANONYMOUS",
     });
     expect(hidden.rsvp.rosterIdentity).toBe("ANONYMOUS");
+    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
+      summary: { visibleCount: 0, anonymousCount: 1 },
+      attendees: [],
+    });
 
     const interested = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
       status: "interested",
@@ -247,7 +255,11 @@ describe("in-memory organizer-controlled event rosters", () => {
         displayName: `Paged Rider ${index}`,
         defaultRosterIdentity: index === 3 ? "ANONYMOUS" : "VISIBLE",
       });
-      await backend.registerForEvent(rider.sessionToken, event.id, { status: "going", attendanceType: "direct" });
+      await backend.registerForEvent(rider.sessionToken, event.id, {
+        status: "going",
+        attendanceType: "direct",
+        rosterIdentity: index === 3 ? "ANONYMOUS" : "VISIBLE",
+      });
     }
 
     const first = await backend.listEventAttendees(actors.rider.sessionToken, event.id, { limit: 2 });

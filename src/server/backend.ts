@@ -4419,7 +4419,7 @@ export class TambikeBackend {
           if (!entry.user) return false;
           return classifyRosterEntry({
             enabled,
-            rosterIdentity: entry.user.defaultRosterIdentity ?? "ANONYMOUS",
+            rosterIdentity: entry.rsvp.rosterIdentity ?? "ANONYMOUS",
             profileSlug: entry.user.profileSlug,
             profileVisibility: entry.user.profileVisibility ?? "PRIVATE",
           }) === "VISIBLE";
@@ -4493,7 +4493,7 @@ export class TambikeBackend {
         (entry): entry is typeof entry & { user: BackendUser } =>
           Boolean(
             entry.user &&
-              entry.user.defaultRosterIdentity === "VISIBLE" &&
+              entry.rsvp.rosterIdentity === "VISIBLE" &&
               entry.user.profileSlug &&
               entry.user.profileVisibility === "PUBLIC",
           ),
@@ -7976,7 +7976,7 @@ export class TambikeBackend {
           if (!user) return false;
           return Boolean(rsvp.goingAt) && classifyRosterEntry({
             enabled,
-            rosterIdentity: user.defaultRosterIdentity ?? "ANONYMOUS",
+            rosterIdentity: rsvp.rosterIdentity ?? "ANONYMOUS",
             profileSlug: user.profileSlug,
             profileVisibility: user.profileVisibility ?? "PRIVATE",
           }) === "VISIBLE";
