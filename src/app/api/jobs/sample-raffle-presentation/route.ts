@@ -33,6 +33,10 @@ function safeInternalFailureMessage(value: unknown) {
 }
 
 function safeRefreshFailureDiagnostic(error: unknown) {
+  const errorRecord =
+    typeof error === "object" && error !== null
+      ? error
+      : undefined;
   const name =
     error instanceof Error ? error.name : undefined;
   const message =
@@ -40,12 +44,26 @@ function safeRefreshFailureDiagnostic(error: unknown) {
       ? safeInternalFailureMessage(error.message)
       : undefined;
   const cause =
-    typeof error === "object" &&
-    error !== null &&
-    "cause" in error &&
-    typeof error.cause === "object" &&
-    error.cause !== null
-      ? error.cause
+    errorRecord &&
+    "cause" in errorRecord &&
+    typeof errorRecord.cause === "object" &&
+    errorRecord.cause !== null
+      ? errorRecord.cause
+      : undefined;
+  const errorCode =
+    errorRecord && "code" in errorRecord
+      ? safeDiagnosticToken(errorRecord.code)
+      : undefined;
+  const meta =
+    errorRecord &&
+    "meta" in errorRecord &&
+    typeof errorRecord.meta === "object" &&
+    errorRecord.meta !== null
+      ? errorRecord.meta
+      : undefined;
+  const metaCode =
+    meta && "code" in meta
+      ? safeDiagnosticToken(meta.code)
       : undefined;
   const causeKind =
     cause && "kind" in cause
@@ -58,6 +76,8 @@ function safeRefreshFailureDiagnostic(error: unknown) {
   return {
     code: safeDiagnosticToken(name) ?? "UnknownError",
     ...(message ? { message } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(metaCode ? { metaCode } : {}),
     ...(causeKind ? { causeKind } : {}),
     ...(causeCode ? { causeCode } : {}),
   };

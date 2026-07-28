@@ -146,4 +146,37 @@ describe("sample raffle presentation refresh route", () => {
     );
     consoleError.mockRestore();
   });
+
+  test("logs only safe Prisma error codes from a database failure", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const handler = createSampleRafflePresentationRefreshHandler({
+      cronSecret: "exact-secret",
+      refresh: async () => {
+        throw Object.assign(new Error("sensitive Prisma detail"), {
+          name: "PrismaClientKnownRequestError",
+          code: "P2010",
+          meta: {
+            code: "P0001",
+            message: "sensitive trigger detail",
+          },
+        });
+      },
+    });
+
+    const response = await handler(request("Bearer exact-secret"));
+
+    expect(response.status).toBe(500);
+    expect(consoleError).toHaveBeenCalledWith(
+      "Sample raffle presentation refresh failed",
+      {
+        code: "PrismaClientKnownRequestError",
+        errorCode: "P2010",
+        metaCode: "P0001",
+      },
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("sensitive");
+    consoleError.mockRestore();
+  });
 });
