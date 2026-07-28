@@ -403,7 +403,7 @@ describe("sample raffle provisioner safety", () => {
     const directUrlLoadIndex = runbook.indexOf("$env:DIRECT_URL = (& node", pullIndex);
     const preflightIndex = runbook.indexOf("$preflightState =", directUrlLoadIndex);
     const provisionIndex = runbook.indexOf(
-      "npm run provision:sample-raffles -- -- --confirm-production",
+      "https://tambike.bayanko.ph/api/jobs/sample-raffle-presentation",
       preflightIndex,
     );
     const postflightIndex = runbook.indexOf("$postflightState =", provisionIndex);
@@ -418,7 +418,10 @@ describe("sample raffle provisioner safety", () => {
     expect(runbook).toContain("const { loadEnvConfig } = nextEnv;");
     expect(runbook).toContain("import pg from 'pg';");
     expect(runbook).toContain("new Client({ connectionString: process.env.DIRECT_URL })");
-    expect(runbook).toContain("vercel env run --environment=production --");
+    expect(runbook).toContain(
+      "'x-tambike-sample-raffle-refresh': 'cafe-classico-public-v1'",
+    );
+    expect(runbook).toContain("Authorization: 'Bearer ' + secret");
     expect(runbook).toContain("finally {");
     expect(runbook).toContain("Remove-Item -LiteralPath $temporaryEnvFile -Force -ErrorAction Stop");
     expect(runbook).toContain("Remove-Item -LiteralPath 'Env:DIRECT_URL'");
@@ -554,7 +557,16 @@ describe("sample raffle provisioner safety", () => {
       finalInspection: exactFinalInspection(),
     });
 
-    await expect(provisionSampleRaffles(validInput(), dependencies))
+    await expect(provisionSampleRaffles(
+      {
+        ...validInput(),
+        organizerPassword: undefined,
+        adminPassword: undefined,
+        winnerPassword: undefined,
+        drawEncryptionKeyPresent: false,
+      },
+      dependencies,
+    ))
       .resolves.toMatchObject({
         eventId: SAMPLE_RAFFLE_EVENT_ID,
         completed: { winnerAlias: "Cafe Classico Rider" },

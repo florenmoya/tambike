@@ -12,16 +12,22 @@ campaigns. Any partial or conflicting lifecycle fails closed.
 
 ## Requirements
 
-The linked Vercel production environment must contain these variable names.
-Never paste or print their values:
+Refreshing the exact existing lifecycle requires these linked Vercel production
+variables. Never paste or print their values:
 
 ```text
 DATABASE_URL or SUPABASE_DATABASE_URL
 DIRECT_URL
-GIVEAWAY_DRAW_ENCRYPTION_KEY
 AWS_REGION
 AWS_ROLE_ARN
 S3_BUCKET_NAME
+CRON_SECRET
+```
+
+Creating the lifecycle for the first time also requires:
+
+```text
+GIVEAWAY_DRAW_ENCRYPTION_KEY
 TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD
 TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD
 TAMBIKE_SAMPLE_RAFFLE_WINNER_PASSWORD
@@ -35,9 +41,10 @@ npm i -g vercel
 vercel --version
 ```
 
-The media upload runs through `vercel env run --environment=production` so the
-child process receives a short-lived `VERCEL_OIDC_TOKEN`. Do not create or
-store persistent AWS credentials.
+The refresh request runs inside the deployed Vercel function, where the media
+upload receives a short-lived `VERCEL_OIDC_TOKEN`. Do not create or store
+persistent AWS credentials. The protected refresh endpoint only accepts the
+exact production cron authorization and one-purpose confirmation header.
 
 ## Prize photo sources
 
@@ -65,7 +72,8 @@ Run the following block from the repository root in a clean PowerShell. It:
    inspection process through the environment rather than the command line;
 4. fails closed unless the target campaigns are absent or have the exact
    refreshable lifecycle;
-5. runs the production-confirmed command with short-lived Vercel OIDC;
+5. calls the protected production refresh function, which receives short-lived
+   Vercel OIDC;
 6. proves the exact lifecycle, public copy, winner alias, and managed media; and
 7. removes the temporary file and process-level database variables even when a
    preflight, provision, or postflight command fails.
@@ -76,6 +84,7 @@ $requiredCleanShellNames = @(
   'DATABASE_URL',
   'SUPABASE_DATABASE_URL',
   'DIRECT_URL',
+  'CRON_SECRET',
   'GIVEAWAY_DRAW_ENCRYPTION_KEY',
   'TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD',
   'TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD',
@@ -296,10 +305,11 @@ WHERE "id" = 'tambike-cafe-classico'
     throw 'Sample raffle state is partial or conflicting; no write was attempted.'
   }
 
-  vercel env run --environment=production -- npm run provision:sample-raffles -- -- --confirm-production
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Sample raffle provisioning failed.'
+  $refreshReceiptJson = & node --input-type=module -e "import nextEnv from '@next/env'; const { loadEnvConfig } = nextEnv; loadEnvConfig(process.cwd(), false); const secret = process.env.CRON_SECRET?.trim(); if (!secret) { process.stderr.write('CRON_AUTHORIZATION_REQUIRED'); process.exit(1); } const response = await fetch('https://tambike.bayanko.ph/api/jobs/sample-raffle-presentation', { method: 'POST', headers: { Authorization: 'Bearer ' + secret, 'x-tambike-sample-raffle-refresh': 'cafe-classico-public-v1' } }); const body = await response.text(); if (!response.ok) { process.stderr.write('SAMPLE_RAFFLE_REFRESH_FAILED'); process.exit(1); } process.stdout.write(body);"
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($refreshReceiptJson -join "`n"))) {
+    throw 'Sample raffle refresh failed.'
   }
+  $refreshReceipt = (($refreshReceiptJson -join "`n") | ConvertFrom-Json)
 
   $postflightState = Invoke-PostgresRow $sampleStateSql
   if (
@@ -445,7 +455,7 @@ internal or hidden public copy.
 
 ## Safe receipt
 
-The provisioner command emits one JSON receipt. The enclosing runbook then emits
+The protected refresh endpoint emits one JSON receipt. The enclosing runbook then emits
 the two read-only public-contract lines above. Neither output contains
 credentials, connection strings, sessions, claim payloads, or encryption keys.
 Example receipt without live IDs:

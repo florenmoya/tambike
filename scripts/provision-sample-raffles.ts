@@ -52,19 +52,15 @@ export async function runSampleRaffleCli(options: SampleRaffleCliOptions = {}) {
     "DATABASE_TARGET_REQUIRED",
   );
   const directDatabaseUrl = validateDirectSampleRaffleLockUrl(environment.DIRECT_URL);
-  const organizerPassword = requireValue(
-    environment.TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD,
-    "ORGANIZER_CREDENTIAL_REQUIRED",
+  const organizerPassword =
+    environment.TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD?.trim() || undefined;
+  const adminPassword =
+    environment.TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD?.trim() || undefined;
+  const winnerPassword =
+    environment.TAMBIKE_SAMPLE_RAFFLE_WINNER_PASSWORD?.trim() || undefined;
+  const drawEncryptionKeyPresent = Boolean(
+    environment.GIVEAWAY_DRAW_ENCRYPTION_KEY?.trim(),
   );
-  const adminPassword = requireValue(
-    environment.TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD,
-    "ADMIN_CREDENTIAL_REQUIRED",
-  );
-  const winnerPassword = requireValue(
-    environment.TAMBIKE_SAMPLE_RAFFLE_WINNER_PASSWORD,
-    "WINNER_CREDENTIAL_REQUIRED",
-  );
-  requireValue(environment.GIVEAWAY_DRAW_ENCRYPTION_KEY, "DRAW_ENCRYPTION_KEY_REQUIRED");
 
   const provisioner = await (
     options.createProvisioner ?? createPrismaSampleRaffleProvisioner
@@ -76,7 +72,7 @@ export async function runSampleRaffleCli(options: SampleRaffleCliOptions = {}) {
         organizerPassword,
         adminPassword,
         winnerPassword,
-        drawEncryptionKeyPresent: true,
+        drawEncryptionKeyPresent,
         databaseTargetPresent: true,
         directLockPresent: true,
       },
