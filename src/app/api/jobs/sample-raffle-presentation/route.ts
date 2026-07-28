@@ -26,9 +26,19 @@ function safeDiagnosticToken(value: unknown) {
     : undefined;
 }
 
+function safeInternalFailureMessage(value: unknown) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]+$/.test(value)
+    ? value
+    : undefined;
+}
+
 function safeRefreshFailureDiagnostic(error: unknown) {
   const name =
     error instanceof Error ? error.name : undefined;
+  const message =
+    error instanceof Error
+      ? safeInternalFailureMessage(error.message)
+      : undefined;
   const cause =
     typeof error === "object" &&
     error !== null &&
@@ -47,6 +57,7 @@ function safeRefreshFailureDiagnostic(error: unknown) {
       : undefined;
   return {
     code: safeDiagnosticToken(name) ?? "UnknownError",
+    ...(message ? { message } : {}),
     ...(causeKind ? { causeKind } : {}),
     ...(causeCode ? { causeCode } : {}),
   };

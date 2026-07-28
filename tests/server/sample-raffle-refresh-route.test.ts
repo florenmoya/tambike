@@ -122,4 +122,28 @@ describe("sample raffle presentation refresh route", () => {
     );
     consoleError.mockRestore();
   });
+
+  test("logs an explicit safe internal failure token without exposing prose", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const handler = createSampleRafflePresentationRefreshHandler({
+      cronSecret: "exact-secret",
+      refresh: async () => {
+        throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
+      },
+    });
+
+    const response = await handler(request("Bearer exact-secret"));
+
+    expect(response.status).toBe(500);
+    expect(consoleError).toHaveBeenCalledWith(
+      "Sample raffle presentation refresh failed",
+      {
+        code: "Error",
+        message: "ADVISORY_LOCK_RELEASE_FAILED",
+      },
+    );
+    consoleError.mockRestore();
+  });
 });

@@ -7,12 +7,14 @@ import {
   SAMPLE_RAFFLE_EVENT_ID,
   SAMPLE_RAFFLE_WINNER_ALIAS,
   completedSampleRaffleInput,
+  createDedicatedSampleRaffleLock,
   ongoingSampleRaffleInput,
   productionSampleRaffleManifest,
   provisionSampleRaffles,
   validateSampleRaffleDatabaseIdentities,
   validateDirectSampleRaffleLockUrl,
   type SampleRaffleManifest,
+  type SampleRaffleLockClient,
   type PrismaSampleRaffleProvisioner,
   type SampleRaffleProvisionerDependencies,
   type SampleRaffleProvisioningInput,
@@ -20,6 +22,66 @@ import {
   type SampleRaffleTargetInspection,
 } from "@/server/giveaways/sample-raffles";
 import { runSampleRaffleCli } from "../../scripts/provision-sample-raffles";
+
+describe("dedicated sample raffle advisory lock", () => {
+  test("keeps the session lock on its own client through unlock and close", async () => {
+    const events: string[] = [];
+    const client: SampleRaffleLockClient = {
+      connect: vi.fn(async () => {
+        events.push("connect");
+      }),
+      query: vi.fn(async (sql) => {
+        events.push(sql.includes("unlock") ? "unlock" : "lock");
+        return sql.includes("unlock")
+          ? { rows: [{ unlocked: true }] }
+          : { rows: [{ locked: true }] };
+      }),
+      end: vi.fn(async () => {
+        events.push("end");
+      }),
+    };
+    const lock = createDedicatedSampleRaffleLock(
+      "postgresql://direct.example.test:5432/tambike",
+      () => client,
+    );
+
+    await lock.acquire();
+    events.push("normal-prisma-work");
+    await lock.release();
+    await lock.close();
+
+    expect(events).toEqual([
+      "connect",
+      "lock",
+      "normal-prisma-work",
+      "unlock",
+      "end",
+    ]);
+  });
+
+  test("ends the dedicated client when advisory unlock fails", async () => {
+    const client: SampleRaffleLockClient = {
+      connect: vi.fn(async () => undefined),
+      query: vi.fn(async (sql) => ({
+        rows: sql.includes("unlock")
+          ? [{ unlocked: false }]
+          : [{ locked: true }],
+      })),
+      end: vi.fn(async () => undefined),
+    };
+    const lock = createDedicatedSampleRaffleLock(
+      "postgresql://direct.example.test:5432/tambike",
+      () => client,
+    );
+
+    await lock.acquire();
+
+    await expect(lock.release()).rejects.toThrow(
+      "ADVISORY_LOCK_RELEASE_FAILED",
+    );
+    expect(client.end).toHaveBeenCalledTimes(1);
+  });
+});
 
 type FakeOptions = {
   inspection?: SampleRaffleTargetInspection;

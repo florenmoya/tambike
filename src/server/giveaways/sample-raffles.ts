@@ -4,7 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
+import { Client as PgClient, Pool } from "pg";
 
 import type {
   CreateGiveawayInput,
@@ -592,11 +592,107 @@ export interface PrismaSampleRaffleProvisioner {
   close(): Promise<void>;
 }
 
+export interface SampleRaffleLockClient {
+  connect(): Promise<void>;
+  query(
+    sql: string,
+    values?: unknown[],
+  ): Promise<{ rows: Array<Record<string, unknown>> }>;
+  end(): Promise<void>;
+}
+
+export interface DedicatedSampleRaffleLock {
+  acquire(): Promise<void>;
+  release(): Promise<void>;
+  close(): Promise<void>;
+}
+
+export function createDedicatedSampleRaffleLock(
+  connectionString: string,
+  createClient: (connectionString: string) => SampleRaffleLockClient =
+    (value) =>
+      new PgClient({ connectionString: value }) as unknown as SampleRaffleLockClient,
+): DedicatedSampleRaffleLock {
+  let client: SampleRaffleLockClient | undefined;
+  let acquired = false;
+
+  const closeClient = async () => {
+    const activeClient = client;
+    client = undefined;
+    acquired = false;
+    if (activeClient) await activeClient.end();
+  };
+
+  return {
+    async acquire() {
+      if (client) throw new Error("ADVISORY_LOCK_ACQUISITION_FAILED");
+      const activeClient = createClient(connectionString);
+      client = activeClient;
+      try {
+        await activeClient.connect();
+        const result = await activeClient.query(
+          "SELECT pg_advisory_lock(hashtextextended($1, 0)) AS locked",
+          [SAMPLE_RAFFLE_LOCK_KEY],
+        );
+        if (result.rows.length !== 1) {
+          throw new Error("ADVISORY_LOCK_ACQUISITION_FAILED");
+        }
+        acquired = true;
+      } catch (error) {
+        try {
+          await closeClient();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "ADVISORY_LOCK_ACQUISITION_FAILED",
+          );
+        }
+        throw error;
+      }
+    },
+    async release() {
+      const activeClient = client;
+      if (!activeClient) return;
+      let releaseFailure: unknown;
+      try {
+        if (acquired) {
+          const result = await activeClient.query(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+            [SAMPLE_RAFFLE_LOCK_KEY],
+          );
+          if (result.rows[0]?.unlocked !== true) {
+            throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
+          }
+        }
+      } catch (error) {
+        releaseFailure = error;
+      }
+      try {
+        await closeClient();
+      } catch (cleanupError) {
+        if (releaseFailure) {
+          throw new AggregateError(
+            [releaseFailure, cleanupError],
+            "ADVISORY_LOCK_RELEASE_FAILED",
+          );
+        }
+        throw cleanupError;
+      }
+      if (releaseFailure) throw releaseFailure;
+    },
+    async close() {
+      if (!client) return;
+      await closeClient();
+    },
+  };
+}
+
 export interface PrismaSampleRafflePresentationOptions {
   fetchPhoto?: (url: string) => Promise<Response>;
   normalizePhoto?: typeof normalizeMemberImage;
   mediaStore?: Pick<MemberMediaStore, "putObject" | "deleteObject">;
   trustedExistingActorSessions?: boolean;
+  createLockClient?: (connectionString: string) => SampleRaffleLockClient;
 }
 
 function parsePostgresDatabaseUrl(
@@ -735,7 +831,10 @@ export async function createPrismaSampleRaffleProvisioner(
     adapter: new PrismaPg(inspectionPool, { disposeExternalPool: true }),
   });
   const backend = PrismaTambikeBackendRuntime.create(runtimeTarget.value);
-  let lockHeld = false;
+  const dedicatedLock = createDedicatedSampleRaffleLock(
+    directTarget.value,
+    presentationOptions.createLockClient,
+  );
   let hostOrganizerUserId: string | undefined;
   let hostOrganizerEmail: string | undefined;
   let authenticatedOrganizerUserId: string | undefined;
@@ -763,6 +862,7 @@ export async function createPrismaSampleRaffleProvisioner(
       }
       try {
         await disconnectAll([
+          () => dedicatedLock.close(),
           () => backend.disconnect(),
           () => inspectionPrisma.$disconnect(),
         ]);
@@ -1245,22 +1345,11 @@ export async function createPrismaSampleRaffleProvisioner(
   const dependencies: SampleRaffleProvisionerDependencies = {
     inspectTarget,
     async acquireLock() {
-      const rows = await inspectionPrisma.$queryRaw<Array<{ locked: string }>>(
-        Prisma.sql`SELECT pg_advisory_lock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0))::text AS locked`,
-      );
-      if (rows.length !== 1) throw new Error("ADVISORY_LOCK_ACQUISITION_FAILED");
-      lockHeld = true;
+      await dedicatedLock.acquire();
       return { id: SAMPLE_RAFFLE_LOCK_KEY };
     },
     async releaseLock() {
-      if (!lockHeld) return;
-      const rows = await inspectionPrisma.$queryRaw<Array<{ unlocked: boolean }>>(
-        Prisma.sql`SELECT pg_advisory_unlock(hashtextextended(${SAMPLE_RAFFLE_LOCK_KEY}, 0)) AS unlocked`,
-      );
-      lockHeld = false;
-      if (rows[0]?.unlocked !== true) {
-        throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
-      }
+      await dedicatedLock.release();
     },
     async archiveExistingLifecycle({ inspection, manifest: archiveManifest }) {
       const completed = inspection.completedCampaigns[0];
