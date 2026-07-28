@@ -57,4 +57,17 @@ describe("Prisma advisory transaction lock contract", () => {
       "GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS",
     );
   });
+
+  test("configures a bounded default for other complex backend transactions", () => {
+    const createStart = prismaBackend.indexOf("static create(");
+    const disconnectStart = prismaBackend.indexOf(
+      "async disconnect()",
+      createStart,
+    );
+    const createSource = prismaBackend.slice(createStart, disconnectStart);
+
+    expect(createSource).toContain("transactionOptions");
+    expect(createSource).toContain("timeout: 30_000");
+    expect(createSource).toContain("maxWait: 5_000");
+  });
 });

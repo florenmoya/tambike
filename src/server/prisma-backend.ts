@@ -465,7 +465,16 @@ export class PrismaTambikeBackend {
   ) {
     const pool = createPrismaPgPool(databaseUrl);
     const adapter = new PrismaPg(pool, { disposeExternalPool: true });
-    return new PrismaTambikeBackend(new PrismaClient({ adapter }), options);
+    return new PrismaTambikeBackend(
+      new PrismaClient({
+        adapter,
+        transactionOptions: {
+          maxWait: 5_000,
+          timeout: 30_000,
+        },
+      }),
+      options,
+    );
   }
 
   async disconnect() {

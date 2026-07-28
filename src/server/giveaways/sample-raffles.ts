@@ -1372,7 +1372,7 @@ export async function createPrismaSampleRaffleProvisioner(
       }
     }, {
       maxWait: 5_000,
-      timeout: 30_000,
+      timeout: 60_000,
     });
   };
 

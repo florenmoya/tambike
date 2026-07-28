@@ -447,6 +447,15 @@ describe("sample raffle provisioner safety", () => {
     },
   );
 
+  test("allows the two-image presentation transaction a bounded production window", async () => {
+    const source = await readFile(
+      "src/server/giveaways/sample-raffles.ts",
+      "utf8",
+    );
+
+    expect(source).toContain("timeout: 60_000");
+  });
+
   test("publishes explicit prize names without changing the sample inventory", () => {
     const completed = completedSampleRaffleInput();
     const ongoing = ongoingSampleRaffleInput();
