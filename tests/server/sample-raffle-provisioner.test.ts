@@ -418,6 +418,7 @@ describe("sample raffle provisioner safety", () => {
     expect(runbook).toContain("const { loadEnvConfig } = nextEnv;");
     expect(runbook).toContain("import pg from 'pg';");
     expect(runbook).toContain("new Client({ connectionString: process.env.DIRECT_URL })");
+    expect(runbook).toContain("vercel env run --environment=production --");
     expect(runbook).toContain("finally {");
     expect(runbook).toContain("Remove-Item -LiteralPath $temporaryEnvFile -Force -ErrorAction Stop");
     expect(runbook).toContain("Remove-Item -LiteralPath 'Env:DIRECT_URL'");
@@ -433,7 +434,14 @@ describe("sample raffle provisioner safety", () => {
       '"winnerAliasOptedInAt"',
       '"winnerAliasRevokedAt"',
       "raffle.winner.sample@tambike.ph",
-      "Raffle Sample Rider",
+      "Cafe Classico Rider",
+      "A full-face helmet for safer everyday rides.",
+      "Helmet, riding gloves, and Tambike gear for your next ride.",
+      '"GiveawayPrizeImage"',
+      "sample-raffle-helmet-photo-v1",
+      "sample-raffle-gear-photo-v1",
+      "15928222",
+      "15625079",
     ]) {
       expect(runbook).toContain(invariant);
     }

@@ -1,13 +1,14 @@
 # Production sample raffle provisioning
 
-This command provisions exactly two sample campaigns on the published host event
+This command provisions or refreshes exactly two sample campaigns on the published host event
 **Tambike at Cafe Classico** (`tambike-cafe-classico`):
 
-- `Cafe Classico Helmet Raffle` — completed, with one published and fulfilled sample winner
+- `Cafe Classico Helmet Raffle` — completed, with one published and fulfilled winner
 - `Weekend Rider Gear Raffle` — open, with no snapshot, draw, award, or winner
 
-The command is idempotent only when both campaigns already satisfy the complete
-final invariants. Any partial or conflicting sample campaign fails closed.
+When the exact lifecycle already exists, the command refreshes only its public
+copy, winner alias, and missing managed prize media. It never creates duplicate
+campaigns. Any partial or conflicting lifecycle fails closed.
 
 ## Requirements
 
@@ -18,6 +19,9 @@ Never paste or print their values:
 DATABASE_URL or SUPABASE_DATABASE_URL
 DIRECT_URL
 GIVEAWAY_DRAW_ENCRYPTION_KEY
+AWS_REGION
+AWS_ROLE_ARN
+S3_BUCKET_NAME
 TAMBIKE_SAMPLE_RAFFLE_ORGANIZER_PASSWORD
 TAMBIKE_SAMPLE_RAFFLE_ADMIN_PASSWORD
 TAMBIKE_SAMPLE_RAFFLE_WINNER_PASSWORD
@@ -31,6 +35,26 @@ npm i -g vercel
 vercel --version
 ```
 
+The media upload runs through `vercel env run --environment=production` so the
+child process receives a short-lived `VERCEL_OIDC_TOKEN`. Do not create or
+store persistent AWS credentials.
+
+## Prize photo sources
+
+The provisioner downloads these free-to-use Pexels photos only when the exact
+prize pool has no managed image, normalizes them to WebP, and stores them under
+Tambike's private giveaway-prize namespace:
+
+- Cafe Classico Helmet — Andrés Chirrisco,
+  [Pexels photo 15928222](https://www.pexels.com/photo/photo-of-a-motorcycle-helmet-15928222/),
+  managed media ID `sample-raffle-helmet-photo-v1`
+- Weekend Rider Gear Package — Labskiii,
+  [Pexels photo 15625079](https://www.pexels.com/photo/man-wearing-a-safety-helmet-15625079/),
+  managed media ID `sample-raffle-gear-photo-v1`
+
+The public event page serves the resulting `GiveawayPrizeImage` records through
+Tambike. It never hotlinks Pexels.
+
 ## Preflight, execution, postflight, and guaranteed cleanup
 
 Run the following block from the repository root in a clean PowerShell. It:
@@ -39,9 +63,10 @@ Run the following block from the repository root in a clean PowerShell. It:
 2. pulls production configuration before any database command;
 3. loads `DIRECT_URL` without displaying it and passes it to the read-only Node
    inspection process through the environment rather than the command line;
-4. fails closed unless the target campaigns are absent or already exactly final;
-5. runs the production-confirmed command;
-6. proves the exact final relational state; and
+4. fails closed unless the target campaigns are absent or have the exact
+   refreshable lifecycle;
+5. runs the production-confirmed command with short-lived Vercel OIDC;
+6. proves the exact lifecycle, public copy, winner alias, and managed media; and
 7. removes the temporary file and process-level database variables even when a
    preflight, provision, or postflight command fails.
 
@@ -103,11 +128,52 @@ WITH target_campaigns AS (
       JOIN "User" u ON u."id" = a."winnerUserId"
       WHERE a."giveawayId" = g."id"
         AND a."isCurrent" = TRUE
-        AND a."publicWinnerAlias" = 'Raffle Sample Rider'
+        AND a."publicWinnerAlias" IS NOT NULL
         AND a."winnerAliasOptedInAt" IS NOT NULL
         AND a."winnerAliasRevokedAt" IS NULL
         AND u."email" = 'raffle.winner.sample@tambike.ph'
-    ) AS exact_published_winner_count
+    ) AS exact_published_winner_count,
+    (SELECT a."publicWinnerAlias"
+      FROM "GiveawayAward" a
+      JOIN "User" u ON u."id" = a."winnerUserId"
+      WHERE a."giveawayId" = g."id"
+        AND a."isCurrent" = TRUE
+        AND a."winnerAliasOptedInAt" IS NOT NULL
+        AND a."winnerAliasRevokedAt" IS NULL
+        AND u."email" = 'raffle.winner.sample@tambike.ph'
+      LIMIT 1
+    ) AS public_winner_alias,
+    (SELECT mv."mechanics"
+      FROM "GiveawayMechanicsVersion" mv
+      WHERE mv."giveawayId" = g."id"
+      ORDER BY mv."version" DESC
+      LIMIT 1
+    ) AS mechanics,
+    (SELECT mv."terms"
+      FROM "GiveawayMechanicsVersion" mv
+      WHERE mv."giveawayId" = g."id"
+      ORDER BY mv."version" DESC
+      LIMIT 1
+    ) AS terms,
+    (SELECT p."publicTitle"
+      FROM "GiveawayPrizePool" p
+      WHERE p."giveawayId" = g."id"
+      ORDER BY p."position"
+      LIMIT 1
+    ) AS public_title,
+    (SELECT p."publicDescription"
+      FROM "GiveawayPrizePool" p
+      WHERE p."giveawayId" = g."id"
+      ORDER BY p."position"
+      LIMIT 1
+    ) AS public_description,
+    (SELECT i."mediaId"
+      FROM "GiveawayPrizePool" p
+      JOIN "GiveawayPrizeImage" i ON i."prizePoolId" = p."id"
+      WHERE p."giveawayId" = g."id"
+      ORDER BY p."position"
+      LIMIT 1
+    ) AS public_image_media_id
   FROM "EventGiveaway" g
   WHERE g."eventId" = 'tambike-cafe-classico'
     AND g."title" IN (
@@ -140,13 +206,36 @@ summary AS (
         AND current_award_count = 0
         AND fulfilled_current_award_count = 0
         AND exact_published_winner_count = 0
-    ) AS exact_ongoing_count
+    ) AS exact_ongoing_count,
+    COUNT(*) FILTER (
+      WHERE "title" = 'Cafe Classico Helmet Raffle'
+        AND status = 'completed'
+        AND compliance_status = 'approved'
+        AND public_winner_alias = 'Cafe Classico Rider'
+        AND mechanics = 'One eligible rider was selected from valid entries.'
+        AND terms = 'The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.'
+        AND public_title = 'Cafe Classico Helmet'
+        AND public_description = 'A full-face helmet for safer everyday rides.'
+        AND public_image_media_id IS NOT NULL
+    ) AS exact_completed_presentation_count,
+    COUNT(*) FILTER (
+      WHERE "title" = 'Weekend Rider Gear Raffle'
+        AND status = 'open'
+        AND compliance_status = 'approved'
+        AND mechanics = 'Registered event riders may enter once while the raffle is open.'
+        AND terms = 'One winner will receive the Weekend Rider Gear Package. The organizer will announce and contact the winner after the draw.'
+        AND public_title = 'Weekend Rider Gear Package'
+        AND public_description = 'Helmet, riding gloves, and Tambike gear for your next ride.'
+        AND public_image_media_id IS NOT NULL
+    ) AS exact_ongoing_presentation_count
   FROM target_campaigns
 )
 SELECT
   target_campaign_count,
   exact_completed_count,
   exact_ongoing_count,
+  exact_completed_presentation_count,
+  exact_ongoing_presentation_count,
   (
     target_campaign_count = 0
     OR (
@@ -197,17 +286,17 @@ WHERE "id" = 'tambike-cafe-classico'
     [int]$preflightState.exact_ongoing_count -eq 0 -and
     $preflightState.safe_to_run -eq $true
   )
-  $preflightIsFinal = (
+  $preflightIsRefreshable = (
     [int]$preflightState.target_campaign_count -eq 2 -and
     [int]$preflightState.exact_completed_count -eq 1 -and
     [int]$preflightState.exact_ongoing_count -eq 1 -and
     $preflightState.safe_to_run -eq $true
   )
-  if (!$preflightIsEmpty -and !$preflightIsFinal) {
+  if (!$preflightIsEmpty -and !$preflightIsRefreshable) {
     throw 'Sample raffle state is partial or conflicting; no write was attempted.'
   }
 
-  npm run provision:sample-raffles -- -- --confirm-production
+  vercel env run --environment=production -- npm run provision:sample-raffles -- -- --confirm-production
   if ($LASTEXITCODE -ne 0) {
     throw 'Sample raffle provisioning failed.'
   }
@@ -217,6 +306,8 @@ WHERE "id" = 'tambike-cafe-classico'
     [int]$postflightState.target_campaign_count -ne 2 -or
     [int]$postflightState.exact_completed_count -ne 1 -or
     [int]$postflightState.exact_ongoing_count -ne 1 -or
+    [int]$postflightState.exact_completed_presentation_count -ne 1 -or
+    [int]$postflightState.exact_ongoing_presentation_count -ne 1 -or
     $postflightState.safe_to_run -ne $true
   ) {
     throw 'Postflight did not prove the exact final sample raffle invariants.'
@@ -241,8 +332,24 @@ async function inspectPublicPrizes() {
     return {
       completedPublicPrize:
         completed?.giveaway.prizePools[0]?.presentation.title,
+      completedPublicDescription:
+        completed?.giveaway.prizePools[0]?.presentation.description,
+      completedPublicImage:
+        completed?.giveaway.prizePools[0]?.presentation.image?.mediaId,
+      completedWinnerAlias: completed?.results[0]?.winnerAlias,
       ongoingPublicPrize:
         ongoing?.giveaway.prizePools[0]?.presentation.title,
+      ongoingPublicDescription:
+        ongoing?.giveaway.prizePools[0]?.presentation.description,
+      ongoingPublicImage:
+        ongoing?.giveaway.prizePools[0]?.presentation.image?.mediaId,
+      publicCopyHasNoDemoLanguage: [completed, ongoing].every(
+        (entry) =>
+          entry !== undefined &&
+          !/\b(?:sample|demo)\b/i.test(
+            `${entry.giveaway.mechanics} ${entry.giveaway.terms}`,
+          ),
+      ),
       publicDtoOmitsInternalFields: [completed, ongoing].every(
         (entry) =>
           entry !== undefined &&
@@ -271,14 +378,23 @@ inspectPublicPrizes()
   $publicPrizeInspection = (($publicPrizeInspectionJson -join "`n") | ConvertFrom-Json)
   if (
     $publicPrizeInspection.completedPublicPrize -ne 'Cafe Classico Helmet' -or
+    $publicPrizeInspection.completedPublicDescription -ne 'A full-face helmet for safer everyday rides.' -or
+    [string]::IsNullOrWhiteSpace($publicPrizeInspection.completedPublicImage) -or
+    $publicPrizeInspection.completedWinnerAlias -ne 'Cafe Classico Rider' -or
     $publicPrizeInspection.ongoingPublicPrize -ne 'Weekend Rider Gear Package' -or
+    $publicPrizeInspection.ongoingPublicDescription -ne 'Helmet, riding gloves, and Tambike gear for your next ride.' -or
+    [string]::IsNullOrWhiteSpace($publicPrizeInspection.ongoingPublicImage) -or
+    $publicPrizeInspection.publicCopyHasNoDemoLanguage -ne $true -or
     $publicPrizeInspection.publicDtoOmitsInternalFields -ne $true
   ) {
     throw 'Public prize presentation verification failed.'
   }
 
   Write-Output "completed public prize: $($publicPrizeInspection.completedPublicPrize)"
+  Write-Output "completed public image: $($publicPrizeInspection.completedPublicImage)"
+  Write-Output "completed winner: $($publicPrizeInspection.completedWinnerAlias)"
   Write-Output "ongoing public prize: $($publicPrizeInspection.ongoingPublicPrize)"
+  Write-Output "ongoing public image: $($publicPrizeInspection.ongoingPublicImage)"
 } finally {
   try {
     if (Test-Path -LiteralPath $temporaryEnvFile) {
@@ -300,18 +416,22 @@ The allowed preflight states are:
 - target `0`, exact completed `0`, exact ongoing `0`, safe `true` — neither
   target campaign exists, so provisioning may start.
 - target `2`, exact completed `1`, exact ongoing `1`, safe `true` — the exact
-  completed and ongoing pair already exists, so the
-  command may perform its idempotent confirmation.
+  completed and ongoing lifecycle already exists, so the command may refresh
+  stale public copy, alias, or missing media in place.
 
 Every other result is partial or conflicting and stops before the write command.
-Postflight accepts only the exact second state.
+Postflight additionally requires completed presentation `1` and ongoing
+presentation `1`.
 
-The final two output lines are read-only checks of the two revealed production
-samples:
+The final output lines are read-only checks of the two revealed production
+raffles:
 
 ```text
 completed public prize: Cafe Classico Helmet
+completed public image: sample-raffle-helmet-photo-v1
+completed winner: Cafe Classico Rider
 ongoing public prize: Weekend Rider Gear Package
+ongoing public image: sample-raffle-gear-photo-v1
 ```
 
 These revealed samples cannot prove surprise-prize redaction. That contract is
@@ -338,7 +458,7 @@ Example receipt without live IDs:
     "title": "Cafe Classico Helmet Raffle",
     "state": "completed",
     "winnerCount": 1,
-    "winnerAlias": "Raffle Sample Rider"
+    "winnerAlias": "Cafe Classico Rider"
   },
   "ongoing": {
     "giveawayId": "<ongoing-giveaway-id>",
