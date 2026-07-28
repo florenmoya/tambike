@@ -85,6 +85,9 @@ describe("sample raffle presentation refresh route", () => {
   });
 
   test("keeps unexpected failures generic", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const handler = createSampleRafflePresentationRefreshHandler({
       cronSecret: "exact-secret",
       refresh: async () => {
@@ -96,5 +99,13 @@ describe("sample raffle presentation refresh route", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "REFRESH_FAILED" });
+    expect(consoleError).toHaveBeenCalledWith(
+      "Sample raffle presentation refresh failed",
+      { code: "Error" },
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      "provider detail",
+    );
+    consoleError.mockRestore();
   });
 });

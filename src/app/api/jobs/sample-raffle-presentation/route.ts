@@ -20,6 +20,14 @@ interface SampleRafflePresentationRefreshDependencies {
   refresh(): Promise<SampleRaffleProvisioningReceipt>;
 }
 
+function safeRefreshFailureCode(error: unknown) {
+  const name =
+    error instanceof Error ? error.name : undefined;
+  return name && /^[A-Za-z][A-Za-z0-9]*$/.test(name)
+    ? name
+    : "UnknownError";
+}
+
 async function refreshProductionSampleRafflePresentation() {
   const runtimeDatabaseUrl =
     process.env.DATABASE_URL?.trim() ||
@@ -75,7 +83,10 @@ export function createSampleRafflePresentationRefreshHandler(
     try {
       const receipt = await dependencies.refresh();
       return Response.json(receipt, { headers: noStoreHeaders });
-    } catch {
+    } catch (error) {
+      console.error("Sample raffle presentation refresh failed", {
+        code: safeRefreshFailureCode(error),
+      });
       return Response.json(
         { error: "REFRESH_FAILED" },
         { status: 500, headers: noStoreHeaders },
