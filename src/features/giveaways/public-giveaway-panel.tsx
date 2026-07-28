@@ -87,19 +87,36 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
   const loadState: PublicGiveawayLoadState = result?.eventId === eventId ? result.state : "loading";
   const campaigns = result?.eventId === eventId ? result.campaigns : [];
 
-  if (loadState === "unavailable" || (loadState === "ready" && campaigns.length === 0)) {
+  const groups = groupPublicGiveawaysForSpotlight(campaigns);
+  const openCampaigns = [
+    ...(groups.primaryOpen ? [groups.primaryOpen] : []),
+    ...groups.additional.filter(
+      ({ giveaway }) => giveaway.state === "open",
+    ),
+  ];
+  const winnerCampaigns = groups.completed.filter(
+    ({ results }) => results.length > 0,
+  );
+  const otherCampaigns = groups.additional.filter(
+    ({ giveaway }) => giveaway.state !== "open",
+  );
+  const hasDisplayableCampaigns =
+    openCampaigns.length > 0 ||
+    winnerCampaigns.length > 0 ||
+    otherCampaigns.length > 0;
+
+  if (
+    loadState === "unavailable" ||
+    (loadState === "ready" && !hasDisplayableCampaigns)
+  ) {
     return null;
   }
 
-  const groups = groupPublicGiveawaysForSpotlight(campaigns);
-  const featuredCompleted = groups.completed[0];
-  const additionalOpenCampaigns = groups.additional.filter(
-    ({ giveaway }) => giveaway.state === "open",
-  );
-  const compactCampaigns = [
-    ...groups.additional.filter(({ giveaway }) => giveaway.state !== "open"),
-    ...groups.completed.slice(featuredCompleted ? 1 : 0),
-  ];
+  const primaryOpen = openCampaigns[0];
+  const additionalOpenCampaigns = openCampaigns.slice(1);
+  const latestWinner = winnerCampaigns[0];
+  const additionalWinnerCampaigns = winnerCampaigns.slice(1);
+  const compactCampaigns = otherCampaigns;
 
   return (
     <section
@@ -109,9 +126,7 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
     >
       <header className={styles.heading}>
         <span>Raffles</span>
-        <h2 id={`event-giveaways-${eventId}`}>
-          Join the current raffle or see the latest result.
-        </h2>
+        <h2 id={`event-giveaways-${eventId}`}>Event raffles</h2>
       </header>
 
       {loadState === "loading" ? (
@@ -121,42 +136,63 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
         </div>
       ) : (
         <>
-          <div className={styles.spotlightGrid}>
-            {groups.primaryOpen ? (
-              <OpenGiveawaySpotlight
-                campaign={groups.primaryOpen}
-                eventId={eventId}
-                viewerRole={viewerRole}
-              />
-            ) : null}
-            {featuredCompleted && additionalOpenCampaigns.length === 0 ? (
-              <CompletedGiveawayResult
-                campaign={featuredCompleted}
-                eventId={eventId}
-                viewerRole={viewerRole}
-              />
-            ) : null}
-          </div>
-          {additionalOpenCampaigns.length > 0 ? (
-            <div className={styles.compactGrid}>
-              {additionalOpenCampaigns.map((campaign) => (
-                <CompactGiveawayCard
-                  key={campaign.giveaway.id}
-                  campaign={campaign}
+          {primaryOpen ? (
+            <section
+              className={styles.campaignGroup}
+              aria-labelledby={`open-raffles-${eventId}`}
+            >
+              <h3 className={styles.groupHeading} id={`open-raffles-${eventId}`}>
+                Open raffles
+              </h3>
+              <div className={styles.spotlightGrid}>
+                <OpenGiveawaySpotlight
+                  campaign={primaryOpen}
                   eventId={eventId}
                   viewerRole={viewerRole}
                 />
-              ))}
-            </div>
+              </div>
+              {additionalOpenCampaigns.length > 0 ? (
+                <div className={styles.compactGrid}>
+                  {additionalOpenCampaigns.map((campaign) => (
+                    <CompactGiveawayCard
+                      key={campaign.giveaway.id}
+                      campaign={campaign}
+                      eventId={eventId}
+                      viewerRole={viewerRole}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </section>
           ) : null}
-          {featuredCompleted && additionalOpenCampaigns.length > 0 ? (
-            <div className={styles.spotlightGrid}>
-              <CompletedGiveawayResult
-                campaign={featuredCompleted}
-                eventId={eventId}
-                viewerRole={viewerRole}
-              />
-            </div>
+          {latestWinner ? (
+            <section
+              className={styles.campaignGroup}
+              aria-labelledby={`recent-winners-${eventId}`}
+            >
+              <h3 className={styles.groupHeading} id={`recent-winners-${eventId}`}>
+                Recent winners
+              </h3>
+              <div className={styles.spotlightGrid}>
+                <CompletedGiveawayResult
+                  campaign={latestWinner}
+                  eventId={eventId}
+                  viewerRole={viewerRole}
+                />
+              </div>
+              {additionalWinnerCampaigns.length > 0 ? (
+                <div className={styles.compactGrid}>
+                  {additionalWinnerCampaigns.map((campaign) => (
+                    <CompactGiveawayCard
+                      key={campaign.giveaway.id}
+                      campaign={campaign}
+                      eventId={eventId}
+                      viewerRole={viewerRole}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </section>
           ) : null}
           {compactCampaigns.length > 0 ? (
             <div className={styles.compactGrid}>
@@ -191,7 +227,7 @@ function OpenGiveawaySpotlight({
       <div className={styles.cardBody}>
         <div className={styles.openStatus}>
           <TicketCheck aria-hidden="true" />
-          Ongoing
+          Open now
         </div>
         <PublicPrizeImage presentation={presentation} />
         <p className={styles.prizeTitle}>
@@ -243,7 +279,7 @@ function CompletedGiveawayResult({
       <div className={styles.cardBody}>
         <div className={styles.winnerHeader}>
           <CircleCheckBig aria-hidden="true" />
-          Completed
+          Latest winner
         </div>
         <PublicPrizeImage presentation={presentation} />
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
@@ -290,7 +326,7 @@ function CompactGiveawayCard({
       }`}
     >
       <span className={styles.compactStatus}>
-        {isOpen ? "Ongoing" : giveawayStateLabel(giveaway.state)}
+        {isOpen ? "Open now" : isCompleted ? "Winner" : giveawayStateLabel(giveaway.state)}
       </span>
       <PublicPrizeImage presentation={presentation} />
       {showPrize ? (
