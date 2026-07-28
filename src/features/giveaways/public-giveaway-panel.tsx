@@ -221,8 +221,7 @@ function OpenGiveawaySpotlight({
           </div>
         ) : null}
 
-        <CampaignDetails
-          label="Raffle details"
+        <PublicRaffleInformation
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
           sponsorDisclosure={giveaway.sponsorDisclosure}
@@ -237,6 +236,7 @@ function CompletedGiveawayResult({
 }: CampaignPresentationProps) {
   const { giveaway, results, drawVerifications } = campaign;
   const presentation = primaryPrizePresentation(campaign);
+  const drawAt = formatGiveawayMoment(giveaway.drawAt, giveaway.timeZone);
 
   return (
     <article className={styles.winnerCard}>
@@ -245,6 +245,7 @@ function CompletedGiveawayResult({
           <CircleCheckBig aria-hidden="true" />
           Completed
         </div>
+        <PublicPrizeImage presentation={presentation} />
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
 
         <PublicGiveawayResultList
@@ -252,13 +253,18 @@ function CompletedGiveawayResult({
           presentationTitle={presentation.title}
         />
 
-        <CampaignDetails
-          label="View result"
+        {drawAt ? (
+          <dl className={styles.schedule}>
+            <ScheduleMoment label="Draw date:" value={drawAt} />
+          </dl>
+        ) : null}
+
+        <PublicRaffleInformation
           mechanics={giveaway.mechanics}
           terms={giveaway.terms}
           sponsorDisclosure={giveaway.sponsorDisclosure}
-          drawVerifications={drawVerifications}
         />
+        <DrawVerificationDetails drawVerifications={drawVerifications} />
       </div>
     </article>
   );
@@ -286,17 +292,22 @@ function CompactGiveawayCard({
       <span className={styles.compactStatus}>
         {isOpen ? "Ongoing" : giveawayStateLabel(giveaway.state)}
       </span>
-      {showPrize ? <PublicPrizeImage presentation={presentation} /> : null}
+      <PublicPrizeImage presentation={presentation} />
       {showPrize ? (
         <p className={styles.compactPrize}>
           <span>Win:</span> {presentation.title}
         </p>
       ) : null}
+      {presentation.description ? (
+        <p className={styles.prizeDescription}>{presentation.description}</p>
+      ) : null}
       <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
 
-      {showPrize && (entryClose || drawAt) ? (
+      {(showPrize && entryClose) || drawAt ? (
         <dl className={styles.schedule}>
-          {entryClose ? <ScheduleMoment label="Entries close:" value={entryClose} /> : null}
+          {showPrize && entryClose ? (
+            <ScheduleMoment label="Entries close:" value={entryClose} />
+          ) : null}
           {drawAt ? <ScheduleMoment label="Draw date:" value={drawAt} /> : null}
         </dl>
       ) : null}
@@ -325,56 +336,61 @@ function CompactGiveawayCard({
         </div>
       ) : null}
 
-      <CampaignDetails
-        label={isCompleted ? "View result" : "Raffle details"}
+      <PublicRaffleInformation
         mechanics={giveaway.mechanics}
         terms={giveaway.terms}
         sponsorDisclosure={giveaway.sponsorDisclosure}
-        drawVerifications={isCompleted ? drawVerifications : undefined}
       />
+      {isCompleted ? (
+        <DrawVerificationDetails drawVerifications={drawVerifications} />
+      ) : null}
     </article>
   );
 }
 
-function CampaignDetails({
-  label,
+function PublicRaffleInformation({
   mechanics,
   terms,
   sponsorDisclosure,
-  drawVerifications,
 }: {
-  label: string;
   mechanics: string;
   terms: string;
   sponsorDisclosure?: string;
-  drawVerifications?: PublicEventGiveaway["drawVerifications"];
 }) {
   const disclosure = sponsorDisclosure?.trim();
 
   return (
+    <div className={styles.publicInfo}>
+      {disclosure ? <p className={styles.sponsorDisclosure}>{disclosure}</p> : null}
+      <p>{mechanics}</p>
+      <p className={styles.terms}>{terms}</p>
+    </div>
+  );
+}
+
+function DrawVerificationDetails({
+  drawVerifications,
+}: {
+  drawVerifications: PublicEventGiveaway["drawVerifications"];
+}) {
+  if (drawVerifications.length === 0) return null;
+
+  return (
     <details className={styles.details}>
       <summary>
-        {label}
+        Draw verification
         <ChevronDown aria-hidden="true" />
       </summary>
       <div className={styles.detailsBody}>
-        {disclosure ? <p className={styles.sponsorDisclosure}>{disclosure}</p> : null}
-        <p>{mechanics}</p>
-        <p>{terms}</p>
-        {drawVerifications && drawVerifications.length > 0 ? (
-          <section className={styles.drawDetails} aria-label="Draw details">
-            <h4>Draw details</h4>
-            <div className={styles.proofList}>
-              {drawVerifications.map((verification, index) => (
-                <DrawReceipt
-                  key={`${verification.drawDigest}-${verification.seed}`}
-                  verification={verification}
-                  label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
-                />
-              ))}
-            </div>
-          </section>
-        ) : null}
+        <div className={styles.proofList}>
+          {drawVerifications.map((verification, index) => (
+            <DrawReceipt
+              key={`${verification.drawDigest}-${verification.seed}`}
+              verification={verification}
+              label={drawVerifications.length > 1 ? `Draw ${index + 1}` : "Published draw"}
+            />
+          ))}
+        </div>
       </div>
     </details>
   );

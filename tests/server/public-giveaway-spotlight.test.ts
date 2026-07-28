@@ -448,6 +448,9 @@ describe("public giveaway spotlight", () => {
   test("renders every open raffle before completed results in plain raffle language", async () => {
     const completed = campaign("Completed helmet raffle", "completed");
     completed.giveaway.sponsorDisclosure = "Supported by Helmet Co.";
+    completed.giveaway.mechanics = "One eligible rider was selected from valid entries.";
+    completed.giveaway.terms = "The organizer will contact the winner.";
+    completed.giveaway.drawAt = "2026-07-26T00:00:00.000Z";
     completed.giveaway.prizePools = [
       {
         id: "helmet-pool",
@@ -455,7 +458,17 @@ describe("public giveaway spotlight", () => {
         inventoryKind: "finite",
         itemQuantity: 1,
         presenceVerificationRequired: false,
-        presentation: { disclosure: "revealed", title: "Tambike helmet" },
+        presentation: {
+          disclosure: "revealed",
+          title: "Tambike helmet",
+          description: "A full-face helmet for everyday rides.",
+          image: {
+            mediaId: "helmet-image",
+            url: "/giveaway-prize-media/helmet-image",
+            width: 1200,
+            height: 900,
+          },
+        },
       },
     ];
     completed.results = [
@@ -475,6 +488,8 @@ describe("public giveaway spotlight", () => {
 
     const open = campaign("Open jacket raffle", "open");
     open.giveaway.sponsorDisclosure = "Presented by Jacket Co.";
+    open.giveaway.mechanics = "Registered event riders may enter once.";
+    open.giveaway.terms = "One winner receives the gear package.";
     open.giveaway.prizePools = [
       {
         id: "jacket-pool",
@@ -501,6 +516,8 @@ describe("public giveaway spotlight", () => {
 
     const secondOpen = campaign("Open gloves raffle", "open");
     secondOpen.giveaway.sponsorDisclosure = "Backed by Gloves Co.";
+    secondOpen.giveaway.mechanics = "Eligible riders may enter once.";
+    secondOpen.giveaway.terms = "One winner receives a surprise prize.";
     secondOpen.giveaway.prizePools = [
       {
         id: "surprise-pool",
@@ -514,6 +531,8 @@ describe("public giveaway spotlight", () => {
     const hiddenInventoryTitle = "Private carbon racing gloves";
     const secondCompleted = campaign("Completed boots raffle", "completed");
     secondCompleted.giveaway.sponsorDisclosure = "   ";
+    secondCompleted.giveaway.mechanics = "A valid entry was selected.";
+    secondCompleted.giveaway.terms = "The organizer contacted the winner.";
 
     vi.mocked(listPublicGiveawaysForEventAction).mockResolvedValue({
       ok: true,
@@ -559,6 +578,10 @@ describe("public giveaway spotlight", () => {
     expect(text).toContain("Winner:");
     expect(text).toContain("Raffle Sample Rider");
     expect(text).toContain("Prize won:");
+    expect(text).toContain("Registered event riders may enter once.");
+    expect(text).toContain("One winner receives the gear package.");
+    expect(text).toContain("One eligible rider was selected from valid entries.");
+    expect(text).toContain("The organizer will contact the winner.");
     expect(articles[1]?.querySelector("span")?.textContent).toBe("Ongoing");
     expect(text).toContain("Presented by Jacket Co.");
     expect(text).toContain("Supported by Helmet Co.");
@@ -573,6 +596,9 @@ describe("public giveaway spotlight", () => {
     expect(prizeImage?.alt).toBe("Weekend Rider Gear Package");
     expect(prizeImage?.getAttribute("width")).toBe("1200");
     expect(prizeImage?.getAttribute("height")).toBe("900");
+    expect(articles[2]?.querySelector<HTMLImageElement>("img")?.alt).toBe(
+      "Tambike helmet",
+    );
 
     for (const removed of [
       "Featured prize",
@@ -585,12 +611,17 @@ describe("public giveaway spotlight", () => {
     }
 
     expect(articles[0]?.textContent).not.toContain("Raffle Sample Rider");
-    expect(articles[0]?.querySelector("details summary")?.textContent).toBe(
-      "Raffle details",
-    );
-    expect(articles[2]?.querySelector("details summary")?.textContent).toBe("View result");
-    expect(articles[2]?.textContent).toContain("Draw details");
-    expect(articles[3]?.querySelectorAll("details p")).toHaveLength(2);
+    expect(text).not.toContain("Raffle details");
+    expect(text).not.toContain("View result");
+    expect(
+      [...container.querySelectorAll("details > summary")].map(
+        (summary) => summary.textContent,
+      ),
+    ).toEqual(["Draw verification", "Published draw"]);
+    expect(container.querySelectorAll("details")).toHaveLength(2);
+    expect(articles[3]?.querySelector("details")).toBeNull();
+    expect(articles[3]?.textContent).toContain("A valid entry was selected.");
+    expect(articles[3]?.textContent).toContain("The organizer contacted the winner.");
   });
 
   test("keeps the raffle loading state compact", () => {
