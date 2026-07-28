@@ -43,8 +43,7 @@ export function EventAttendeePreview({
     });
   }
 
-  const goingCopy =
-    going === 1 ? "1 rider is going" : `${going} riders are going`;
+  const goingCopy = going === 1 ? "1 rider" : `${going} riders`;
   const rosterEnabled = preview?.summary?.rosterEnabled !== false;
   const riders = rosterEnabled ? preview?.attendees.slice(0, 4) ?? [] : [];
   const canOpenRoster = rosterEnabled;
@@ -60,7 +59,7 @@ export function EventAttendeePreview({
       <div className={styles.heading}>
         <span>Who’s going</span>
         <h2 id="event-attendee-preview-title">{goingCopy}</h2>
-        <p>{interested} interested · Around {expected} expected</p>
+        <p>{interested} interested · ~{expected} expected</p>
       </div>
 
       {bikeRiders.length > 0 ? (
@@ -99,7 +98,7 @@ export function EventAttendeePreview({
       <div className={styles.footer}>
         {canOpenRoster ? (
           <Link className={styles.action} href={`/events/${eventId}/attendees`}>
-            See who’s going
+            See more
           </Link>
         ) : null}
       </div>
