@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -64,6 +64,7 @@ export type SampleRaffleProvisioningErrorCode =
   | "HOST_EVENT_INVALID"
   | "AUTHENTICATION_FAILED"
   | "CONFLICTING_SAMPLE_STATE"
+  | "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED"
   | "FINAL_INVARIANT_FAILED";
 
 export class SampleRaffleProvisioningError extends Error {
@@ -85,6 +86,8 @@ export interface SampleRaffleProvisioningInput {
   drawEncryptionKeyPresent: boolean;
   databaseTargetPresent: boolean;
   directLockPresent: boolean;
+  replaceExisting?: boolean;
+  trustedProductionJob?: boolean;
 }
 
 export interface SampleRaffleProvisioningReceipt {
@@ -189,6 +192,10 @@ export interface SampleRaffleProvisionerDependencies {
   inspectTarget(manifest: SampleRaffleManifest): Promise<SampleRaffleTargetInspection>;
   acquireLock(): Promise<SampleRaffleProvisioningLock>;
   releaseLock(lock: SampleRaffleProvisioningLock): Promise<void>;
+  archiveExistingLifecycle(input: {
+    inspection: SampleRaffleTargetInspection;
+    manifest: SampleRaffleManifest;
+  }): Promise<void>;
   authenticateOrganizer(password: string): Promise<Session>;
   authenticateAdmin(password: string): Promise<Session>;
   ensureWinner(input: { email: string; name: string; password: string }): Promise<WinnerSession>;
@@ -224,7 +231,7 @@ export interface SampleRaffleProvisionerDependencies {
   submitOngoingCampaign(organizer: Session, giveawayId: string): Promise<void>;
   approveOngoingCampaign(admin: Session, giveawayId: string): Promise<void>;
   openOngoingCampaign(organizer: Session, giveawayId: string): Promise<void>;
-  refreshExistingPresentation(input: {
+  prepareCreatedPresentation(input: {
     inspection: SampleRaffleTargetInspection;
     manifest: SampleRaffleManifest;
   }): Promise<void>;
@@ -399,6 +406,33 @@ function hasNoSampleCampaigns(inspection: SampleRaffleTargetInspection) {
   return inspection.completedCampaigns.length === 0 && inspection.ongoingCampaigns.length === 0;
 }
 
+function hasExpectedDraftPair(
+  inspection: SampleRaffleTargetInspection,
+  manifest: SampleRaffleManifest,
+) {
+  const completed = inspection.completedCampaigns[0];
+  const ongoing = inspection.ongoingCampaigns[0];
+  return (
+    inspection.completedCampaigns.length === 1 &&
+    inspection.ongoingCampaigns.length === 1 &&
+    completed?.title === manifest.completedTitle &&
+    completed.state === "draft" &&
+    completed.complianceStatus === "draft" &&
+    completed.winnerCount === 0 &&
+    completed.drawCount === 0 &&
+    completed.currentAwardCount === 0 &&
+    completed.currentAwards.length === 0 &&
+    ongoing?.title === manifest.ongoingTitle &&
+    ongoing.state === "draft" &&
+    ongoing.complianceStatus === "draft" &&
+    ongoing.winnerCount === 0 &&
+    ongoing.snapshotCount === 0 &&
+    ongoing.drawCount === 0 &&
+    ongoing.awardCount === 0 &&
+    ongoing.resultCount === 0
+  );
+}
+
 function validateInput(input: SampleRaffleProvisioningInput) {
   if (!input.confirmedProduction) throw new SampleRaffleProvisioningError("PRODUCTION_CONFIRMATION_REQUIRED");
   if (input.databaseTargetPresent !== true) throw new SampleRaffleProvisioningError("DATABASE_TARGET_REQUIRED");
@@ -406,6 +440,7 @@ function validateInput(input: SampleRaffleProvisioningInput) {
 }
 
 function validateCreationCredentials(input: SampleRaffleProvisioningInput) {
+  if (input.trustedProductionJob === true) return;
   if (!hasCredential(input.organizerPassword)) throw new SampleRaffleProvisioningError("ORGANIZER_CREDENTIAL_REQUIRED");
   if (!hasCredential(input.adminPassword)) throw new SampleRaffleProvisioningError("ADMIN_CREDENTIAL_REQUIRED");
   if (!hasCredential(input.winnerPassword)) throw new SampleRaffleProvisioningError("WINNER_CREDENTIAL_REQUIRED");
@@ -424,13 +459,20 @@ export async function provisionSampleRaffles(
   }
   const existingReceipt = finalReceipt(firstInspection, manifest, false);
   if (existingReceipt) return existingReceipt;
+  const firstHasReplaceableLifecycle =
+    hasExpectedSampleLifecycle(firstInspection, manifest);
   if (
     !hasNoSampleCampaigns(firstInspection) &&
-    !hasExpectedSampleLifecycle(firstInspection, manifest)
+    !firstHasReplaceableLifecycle
   ) {
     throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
   }
-  if (hasNoSampleCampaigns(firstInspection)) {
+  if (firstHasReplaceableLifecycle && input.replaceExisting !== true) {
+    throw new SampleRaffleProvisioningError(
+      "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED",
+    );
+  }
+  if (hasNoSampleCampaigns(firstInspection) || firstHasReplaceableLifecycle) {
     validateCreationCredentials(input);
     if (!input.drawEncryptionKeyPresent) {
       throw new SampleRaffleProvisioningError("DRAW_ENCRYPTION_KEY_REQUIRED");
@@ -453,16 +495,19 @@ export async function provisionSampleRaffles(
     }
 
     if (hasExpectedSampleLifecycle(lockedInspection, manifest)) {
-      await dependencies.refreshExistingPresentation({
+      if (input.replaceExisting !== true) {
+        throw new SampleRaffleProvisioningError(
+          "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED",
+        );
+      }
+      await dependencies.archiveExistingLifecycle({
         inspection: lockedInspection,
         manifest,
       });
-      const refreshedInspection = await dependencies.inspectTarget(manifest);
-      const refreshedReceipt = finalReceipt(refreshedInspection, manifest, true);
-      if (!refreshedReceipt) {
-        throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
+      const archivedInspection = await dependencies.inspectTarget(manifest);
+      if (!hasNoSampleCampaigns(archivedInspection)) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
       }
-      return refreshedReceipt;
     }
 
     validateCreationCredentials(input);
@@ -473,12 +518,12 @@ export async function provisionSampleRaffles(
     let admin: Session;
     let winner: WinnerSession;
     try {
-      organizer = await dependencies.authenticateOrganizer(input.organizerPassword!);
-      admin = await dependencies.authenticateAdmin(input.adminPassword!);
+      organizer = await dependencies.authenticateOrganizer(input.organizerPassword ?? "");
+      admin = await dependencies.authenticateAdmin(input.adminPassword ?? "");
       winner = await dependencies.ensureWinner({
         email: manifest.winnerEmail,
         name: manifest.winnerName,
-        password: input.winnerPassword!,
+        password: input.winnerPassword ?? "",
       });
     } catch (error) {
       if (error instanceof SampleRaffleProvisioningError) throw error;
@@ -487,6 +532,16 @@ export async function provisionSampleRaffles(
 
     await dependencies.ensureWinnerRegistration(winner, manifest.eventId);
     const completed = await dependencies.createCompletedCampaign(organizer, completedSampleRaffleInput(manifest));
+    const ongoing = await dependencies.createOngoingCampaign(organizer, ongoingSampleRaffleInput(manifest));
+    const draftInspection = await dependencies.inspectTarget(manifest);
+    if (!hasExpectedDraftPair(draftInspection, manifest)) {
+      throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
+    }
+    await dependencies.prepareCreatedPresentation({
+      inspection: draftInspection,
+      manifest,
+    });
+
     await dependencies.submitCompletedCampaign(organizer, completed.giveawayId);
     await dependencies.approveCompletedCampaign(admin, completed.giveawayId);
     await dependencies.openCompletedCampaign(organizer, completed.giveawayId);
@@ -500,19 +555,9 @@ export async function provisionSampleRaffles(
     await dependencies.fulfillAward(admin, selected.awardId);
     await dependencies.completeClaims(organizer, completed.giveawayId);
 
-    const ongoing = await dependencies.createOngoingCampaign(organizer, ongoingSampleRaffleInput(manifest));
     await dependencies.submitOngoingCampaign(organizer, ongoing.giveawayId);
     await dependencies.approveOngoingCampaign(admin, ongoing.giveawayId);
     await dependencies.openOngoingCampaign(organizer, ongoing.giveawayId);
-
-    const createdInspection = await dependencies.inspectTarget(manifest);
-    if (!hasExpectedSampleLifecycle(createdInspection, manifest)) {
-      throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
-    }
-    await dependencies.refreshExistingPresentation({
-      inspection: createdInspection,
-      manifest,
-    });
 
     const finalInspection = await dependencies.inspectTarget(manifest);
     const receipt = finalReceipt(finalInspection, manifest, true);
@@ -551,6 +596,7 @@ export interface PrismaSampleRafflePresentationOptions {
   fetchPhoto?: (url: string) => Promise<Response>;
   normalizePhoto?: typeof normalizeMemberImage;
   mediaStore?: Pick<MemberMediaStore, "putObject" | "deleteObject">;
+  trustedExistingActorSessions?: boolean;
 }
 
 function parsePostgresDatabaseUrl(
@@ -696,6 +742,7 @@ export async function createPrismaSampleRaffleProvisioner(
   let authenticatedAdminUserId: string | undefined;
   let samplePrizeMediaStore: MemberMediaStore | undefined;
   let finishPromise: Promise<void> | undefined;
+  const trustedSessionIds: string[] = [];
   const manualSelectionByGiveaway = new Map<string, {
     prizePoolId: string;
     snapshotEntryId: string;
@@ -703,11 +750,48 @@ export async function createPrismaSampleRaffleProvisioner(
   }>();
 
   const finish = () => {
-    finishPromise ??= disconnectAll([
-      () => backend.disconnect(),
-      () => inspectionPrisma.$disconnect(),
-    ]);
+    finishPromise ??= (async () => {
+      let cleanupFailure: unknown;
+      try {
+        if (trustedSessionIds.length > 0) {
+          await inspectionPrisma.session.deleteMany({
+            where: { id: { in: trustedSessionIds } },
+          });
+        }
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      try {
+        await disconnectAll([
+          () => backend.disconnect(),
+          () => inspectionPrisma.$disconnect(),
+        ]);
+      } catch (error) {
+        if (cleanupFailure) {
+          throw new AggregateError(
+            [cleanupFailure, error],
+            "SAMPLE_RAFFLE_PROVISIONER_CLOSE_FAILED",
+          );
+        }
+        throw error;
+      }
+      if (cleanupFailure) throw cleanupFailure;
+    })();
     return finishPromise;
+  };
+
+  const createTrustedActorSession = async (userId: string) => {
+    const token = randomBytes(32).toString("base64url");
+    const session = await inspectionPrisma.session.create({
+      data: {
+        tokenHash: createHash("sha256").update(token).digest("base64url"),
+        userId,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      },
+      select: { id: true },
+    });
+    trustedSessionIds.push(session.id);
+    return token;
   };
 
   const resolveSamplePrizeMediaStore = () => {
@@ -914,14 +998,14 @@ export async function createPrismaSampleRaffleProvisioner(
     const targets = [
       {
         inspection: input.completed,
-        expectedState: "completed",
+        expectedState: input.completed.state,
         expected: completedExpected,
         image: input.images.completed,
         source: SAMPLE_RAFFLE_PHOTO_SOURCES.completed,
       },
       {
         inspection: input.ongoing,
-        expectedState: "open",
+        expectedState: input.ongoing.state,
         expected: ongoingExpected,
         image: input.images.ongoing,
         source: SAMPLE_RAFFLE_PHOTO_SOURCES.ongoing,
@@ -1080,6 +1164,8 @@ export async function createPrismaSampleRaffleProvisioner(
         });
       }
 
+      if (input.completed.state !== "completed") return;
+
       const completedAwardInspection = input.completed.currentAwards[0];
       if (
         input.completed.currentAwards.length !== 1 ||
@@ -1176,9 +1262,96 @@ export async function createPrismaSampleRaffleProvisioner(
         throw new Error("ADVISORY_LOCK_RELEASE_FAILED");
       }
     },
+    async archiveExistingLifecycle({ inspection, manifest: archiveManifest }) {
+      const completed = inspection.completedCampaigns[0];
+      const ongoing = inspection.ongoingCampaigns[0];
+      if (
+        inspection.completedCampaigns.length !== 1 ||
+        inspection.ongoingCampaigns.length !== 1 ||
+        !completed ||
+        !ongoing ||
+        completed.title !== archiveManifest.completedTitle ||
+        ongoing.title !== archiveManifest.ongoingTitle
+      ) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      await inspectionPrisma.$transaction(async (tx) => {
+        for (const target of [completed, ongoing]) {
+          await tx.$queryRaw(
+            Prisma.sql`SELECT "id" FROM "EventGiveaway" WHERE "id" = ${target.giveawayId} FOR UPDATE`,
+          );
+          const campaign = await tx.eventGiveaway.findUnique({
+            where: { id: target.giveawayId },
+            select: {
+              id: true,
+              eventId: true,
+              title: true,
+              creatorUserId: true,
+            },
+          });
+          if (
+            !campaign ||
+            campaign.eventId !== archiveManifest.eventId ||
+            campaign.title !== target.title
+          ) {
+            throw new SampleRaffleProvisioningError(
+              "CONFLICTING_SAMPLE_STATE",
+            );
+          }
+          const archivedTitle =
+            `Archived sample · ${campaign.title} · ${campaign.id}`;
+          await tx.eventGiveaway.update({
+            where: { id: campaign.id },
+            data: {
+              title: archivedTitle,
+              visibility: "hidden",
+            },
+          });
+          const auditPayload = {
+            change: "sample_lifecycle_archived_for_replacement",
+            previousTitle: campaign.title,
+            title: archivedTitle,
+            visibility: "hidden",
+          };
+          const previous = await tx.giveawayAuditEvent.findFirst({
+            where: { giveawayId: campaign.id },
+            orderBy: { sequence: "desc" },
+            select: { sequence: true, hash: true },
+          });
+          const canonicalPayload = canonicalizeJson(auditPayload);
+          await tx.giveawayAuditEvent.create({
+            data: {
+              id: `giveaway-audit-${randomUUID()}`,
+              giveawayId: campaign.id,
+              sequence: (previous?.sequence ?? 0) + 1,
+              actorUserId: campaign.creatorUserId,
+              action: "GIVEAWAY_UPDATED",
+              targetType: "giveaway",
+              targetId: campaign.id,
+              canonicalPayload,
+              payload: JSON.parse(canonicalPayload) as Prisma.InputJsonValue,
+              previousHash: previous?.hash ?? null,
+              hash: calculateGiveawayAuditHash(
+                previous?.hash,
+                auditPayload,
+              ),
+            },
+          });
+        }
+      });
+    },
     async authenticateOrganizer(password) {
       if (!hostOrganizerEmail) {
         throw new SampleRaffleProvisioningError("HOST_EVENT_INVALID");
+      }
+      if (presentationOptions.trustedExistingActorSessions) {
+        if (!hostOrganizerUserId) {
+          throw new SampleRaffleProvisioningError("HOST_EVENT_INVALID");
+        }
+        authenticatedOrganizerUserId = hostOrganizerUserId;
+        return {
+          sessionToken: await createTrustedActorSession(hostOrganizerUserId),
+        };
       }
       const result = await backend.loginWithPassword(hostOrganizerEmail, password);
       if (
@@ -1192,6 +1365,23 @@ export async function createPrismaSampleRaffleProvisioner(
       return { sessionToken: result.sessionToken };
     },
     async authenticateAdmin(password) {
+      if (presentationOptions.trustedExistingActorSessions) {
+        const approvedAdmin = await inspectionPrisma.user.findFirst({
+          where: {
+            email: "admin@bayanko.ph",
+            role: "admin",
+            verificationStatus: "APPROVED",
+          },
+          select: { id: true },
+        });
+        if (!approvedAdmin) {
+          throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+        }
+        authenticatedAdminUserId = approvedAdmin.id;
+        return {
+          sessionToken: await createTrustedActorSession(approvedAdmin.id),
+        };
+      }
       const result = await backend.loginWithPassword("admin@bayanko.ph", password);
       if (result.user.role !== "admin") {
         throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
@@ -1202,8 +1392,17 @@ export async function createPrismaSampleRaffleProvisioner(
     async ensureWinner(input) {
       const existing = await inspectionPrisma.user.findUnique({
         where: { email: input.email },
-        select: { id: true },
+        select: { id: true, role: true },
       });
+      if (presentationOptions.trustedExistingActorSessions) {
+        if (!existing || existing.role !== "rider") {
+          throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+        }
+        return {
+          sessionToken: await createTrustedActorSession(existing.id),
+          riderId: existing.id,
+        };
+      }
       const result = existing
         ? await backend.loginWithPassword(input.email, input.password)
         : await backend.signUpRider({
@@ -1347,17 +1546,17 @@ export async function createPrismaSampleRaffleProvisioner(
     async openOngoingCampaign(organizer, giveawayId) {
       await backend.openGiveaway(organizer.sessionToken, giveawayId);
     },
-    async refreshExistingPresentation({ inspection, manifest: refreshManifest }) {
+    async prepareCreatedPresentation({ inspection, manifest: refreshManifest }) {
       const completed = inspection.completedCampaigns[0];
       const ongoing = inspection.ongoingCampaigns[0];
-      const completedAward = completed?.currentAwards[0];
       if (
         inspection.completedCampaigns.length !== 1 ||
         inspection.ongoingCampaigns.length !== 1 ||
         !completed ||
         !ongoing ||
-        completed.currentAwards.length !== 1 ||
-        !completedAward
+        completed.state !== "draft" ||
+        ongoing.state !== "draft" ||
+        completed.currentAwards.length !== 0
       ) {
         throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
       }

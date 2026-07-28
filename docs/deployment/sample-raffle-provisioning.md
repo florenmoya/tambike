@@ -6,9 +6,12 @@ This command provisions or refreshes exactly two sample campaigns on the publish
 - `Cafe Classico Helmet Raffle` — completed, with one published and fulfilled winner
 - `Weekend Rider Gear Raffle` — open, with no snapshot, draw, award, or winner
 
-When the exact lifecycle already exists, the command refreshes only its public
-copy, winner alias, and missing managed prize media. It never creates duplicate
-campaigns. Any partial or conflicting lifecycle fails closed.
+When the exact lifecycle already matches, the job is idempotent. When the exact
+legacy sample lifecycle exists with stale public presentation, the protected
+job keeps those historical campaigns as hidden archived records and creates
+the replacement pair. Prize media is attached while the replacement campaigns
+are drafts, before any entrant history makes their presentation immutable. Any
+partial or conflicting lifecycle fails closed.
 
 ## Requirements
 
@@ -24,7 +27,10 @@ S3_BUCKET_NAME
 CRON_SECRET
 ```
 
-Creating the lifecycle for the first time also requires:
+The protected production job uses short-lived sessions for only the exact
+existing organizer, approved administrator, and dedicated sample rider. Those
+sessions are removed before the job closes. The standalone CLI instead
+requires:
 
 ```text
 GIVEAWAY_DRAW_ENCRYPTION_KEY
@@ -71,8 +77,8 @@ Run the following block from the repository root in a clean PowerShell. It:
 3. loads `DIRECT_URL` without displaying it and passes it to the read-only Node
    inspection process through the environment rather than the command line;
 4. fails closed unless the target campaigns are absent or have the exact
-   refreshable lifecycle;
-5. calls the protected production refresh function, which receives short-lived
+   replaceable lifecycle;
+5. calls the protected production replacement function, which receives short-lived
    Vercel OIDC;
 6. proves the exact lifecycle, public copy, winner alias, and managed media; and
 7. removes the temporary file and process-level database variables even when a
@@ -305,7 +311,7 @@ WHERE "id" = 'tambike-cafe-classico'
     throw 'Sample raffle state is partial or conflicting; no write was attempted.'
   }
 
-  $refreshReceiptJson = & node --input-type=module -e "import nextEnv from '@next/env'; const { loadEnvConfig } = nextEnv; loadEnvConfig(process.cwd(), false); const secret = process.env.CRON_SECRET?.trim(); if (!secret) { process.stderr.write('CRON_AUTHORIZATION_REQUIRED'); process.exit(1); } const response = await fetch('https://tambike.bayanko.ph/api/jobs/sample-raffle-presentation', { method: 'POST', headers: { Authorization: 'Bearer ' + secret, 'x-tambike-sample-raffle-refresh': 'cafe-classico-public-v1' } }); const body = await response.text(); if (!response.ok) { process.stderr.write('SAMPLE_RAFFLE_REFRESH_FAILED'); process.exit(1); } process.stdout.write(body);"
+  $refreshReceiptJson = & node --input-type=module -e "import nextEnv from '@next/env'; const { loadEnvConfig } = nextEnv; loadEnvConfig(process.cwd(), false); const secret = process.env.CRON_SECRET?.trim(); if (!secret) { process.stderr.write('CRON_AUTHORIZATION_REQUIRED'); process.exit(1); } const response = await fetch('https://tambike.bayanko.ph/api/jobs/sample-raffle-presentation', { method: 'POST', headers: { Authorization: 'Bearer ' + secret, 'x-tambike-sample-raffle-refresh': 'cafe-classico-replace-v1' } }); const body = await response.text(); if (!response.ok) { process.stderr.write('SAMPLE_RAFFLE_REFRESH_FAILED'); process.exit(1); } process.stdout.write(body);"
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($refreshReceiptJson -join "`n"))) {
     throw 'Sample raffle refresh failed.'
   }
@@ -426,8 +432,9 @@ The allowed preflight states are:
 - target `0`, exact completed `0`, exact ongoing `0`, safe `true` — neither
   target campaign exists, so provisioning may start.
 - target `2`, exact completed `1`, exact ongoing `1`, safe `true` — the exact
-  completed and ongoing lifecycle already exists, so the command may refresh
-  stale public copy, alias, or missing media in place.
+  completed and ongoing lifecycle already exists. A final presentation returns
+  unchanged; a stale presentation is archived and replaced without mutating
+  its entrant, draw, award, or audit history.
 
 Every other result is partial or conflicting and stops before the write command.
 Postflight additionally requires completed presentation `1` and ongoing

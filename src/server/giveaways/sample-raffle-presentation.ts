@@ -78,9 +78,7 @@ export async function refreshSampleRafflePresentation(
   const ongoingPresentation = input.ongoing.presentation;
   if (
     input.completed.title !== input.manifest.completedTitle ||
-    input.completed.state !== "completed" ||
     input.ongoing.title !== input.manifest.ongoingTitle ||
-    input.ongoing.state !== "open" ||
     !completedPresentation ||
     !ongoingPresentation
   ) {

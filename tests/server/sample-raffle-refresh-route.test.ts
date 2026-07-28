@@ -4,7 +4,7 @@ import { createSampleRafflePresentationRefreshHandler } from "@/app/api/jobs/sam
 
 function request(
   authorization?: string,
-  confirmation = "cafe-classico-public-v1",
+  confirmation = "cafe-classico-replace-v1",
 ) {
   return new Request(
     "https://tambike.example/api/jobs/sample-raffle-presentation",

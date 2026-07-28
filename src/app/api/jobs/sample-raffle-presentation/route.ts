@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const confirmationHeader = "x-tambike-sample-raffle-refresh";
-const exactConfirmation = "cafe-classico-public-v1";
+const exactConfirmation = "cafe-classico-replace-v1";
 const noStoreHeaders = {
   "Cache-Control": "no-store",
 };
@@ -61,6 +61,7 @@ async function refreshProductionSampleRafflePresentation() {
     runtimeDatabaseUrl ?? "",
     directDatabaseUrl ?? "",
     productionSampleRaffleManifest,
+    { trustedExistingActorSessions: true },
   );
   try {
     return await provisionSampleRaffles(
@@ -71,6 +72,8 @@ async function refreshProductionSampleRafflePresentation() {
         ),
         databaseTargetPresent: Boolean(runtimeDatabaseUrl),
         directLockPresent: Boolean(directDatabaseUrl),
+        replaceExisting: true,
+        trustedProductionJob: true,
       },
       provisioner.dependencies,
       productionSampleRaffleManifest,

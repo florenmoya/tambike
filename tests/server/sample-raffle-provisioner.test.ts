@@ -25,6 +25,7 @@ type FakeOptions = {
   inspection?: SampleRaffleTargetInspection;
   finalInspection?: SampleRaffleTargetInspection;
   failAt?: keyof SampleRaffleProvisionerDependencies;
+  replaceExisting?: boolean;
 };
 
 type CompletedFinalCampaign = SampleRaffleTargetInspection["completedCampaigns"][number] & {
@@ -153,6 +154,32 @@ function stalePresentationInspection(): RichTargetInspection {
   return inspection;
 }
 
+function draftCreatedInspection(
+  manifest: SampleRaffleManifest = productionSampleRaffleManifest,
+): RichTargetInspection {
+  const inspection = structuredClone(exactFinalInspection(manifest));
+  inspection.completedCampaigns[0] = {
+    ...inspection.completedCampaigns[0],
+    state: "draft",
+    complianceStatus: "draft",
+    winnerCount: 0,
+    winnerAlias: undefined,
+    drawCount: 0,
+    publishedDrawCount: 0,
+    currentAwardCount: 0,
+    fulfilledAwardCount: 0,
+    publicWinnerAliases: [],
+    winnerUserId: undefined,
+    currentAwards: [],
+  };
+  inspection.ongoingCampaigns[0] = {
+    ...inspection.ongoingCampaigns[0],
+    state: "draft",
+    complianceStatus: "draft",
+  };
+  return inspection;
+}
+
 function partialInspection(): SampleRaffleTargetInspection {
   return {
     ...emptyInspection(),
@@ -175,14 +202,31 @@ function partialInspection(): SampleRaffleTargetInspection {
 function fakeDependencies(options: FakeOptions = {}) {
   const calls: string[] = [];
   let inspectionCount = 0;
-  let presentationRefreshed = false;
+  let archived = false;
+  let completedCreated = false;
+  let ongoingCreated = false;
+  let lifecycleCompleted = false;
   const dependencies: SampleRaffleProvisionerDependencies = {
     async inspectTarget(manifest) {
       calls.push("inspectTarget");
       if (options.failAt === "inspectTarget") throw new Error("inspection failed");
       inspectionCount += 1;
-      if (presentationRefreshed) {
+      if (options.replaceExisting && !archived) {
+        return options.inspection ?? stalePresentationInspection();
+      }
+      if (
+        options.replaceExisting &&
+        archived &&
+        !completedCreated &&
+        !ongoingCreated
+      ) {
+        return emptyInspection(manifest);
+      }
+      if (lifecycleCompleted) {
         return options.finalInspection ?? exactFinalInspection(manifest);
+      }
+      if (completedCreated && ongoingCreated) {
+        return draftCreatedInspection(manifest);
       }
       return options.inspection ?? (
         inspectionCount === 3
@@ -196,6 +240,10 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async releaseLock() {
       calls.push("releaseLock");
+    },
+    async archiveExistingLifecycle() {
+      calls.push("archiveExistingLifecycle");
+      archived = true;
     },
     async authenticateOrganizer() {
       calls.push("authenticateOrganizer");
@@ -215,6 +263,7 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async createCompletedCampaign() {
       calls.push("createCompletedCampaign");
+      completedCreated = true;
       return { giveawayId: "completed-sample-raffle" };
     },
     async submitCompletedCampaign() {
@@ -259,6 +308,7 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async createOngoingCampaign() {
       calls.push("createOngoingCampaign");
+      ongoingCreated = true;
       return { giveawayId: "ongoing-sample-raffle" };
     },
     async submitOngoingCampaign() {
@@ -269,10 +319,10 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async openOngoingCampaign() {
       calls.push("openOngoingCampaign");
+      lifecycleCompleted = true;
     },
-    async refreshExistingPresentation() {
-      calls.push("refreshExistingPresentation");
-      presentationRefreshed = true;
+    async prepareCreatedPresentation() {
+      calls.push("prepareCreatedPresentation");
     },
     async finish() {
       calls.push("finish");
@@ -419,7 +469,7 @@ describe("sample raffle provisioner safety", () => {
     expect(runbook).toContain("import pg from 'pg';");
     expect(runbook).toContain("new Client({ connectionString: process.env.DIRECT_URL })");
     expect(runbook).toContain(
-      "'x-tambike-sample-raffle-refresh': 'cafe-classico-public-v1'",
+      "'x-tambike-sample-raffle-refresh': 'cafe-classico-replace-v1'",
     );
     expect(runbook).toContain("Authorization: 'Bearer ' + secret");
     expect(runbook).toContain("finally {");
@@ -546,15 +596,14 @@ describe("sample raffle provisioner safety", () => {
         completed: { state: "completed", winnerCount: 1 },
         ongoing: { state: "open", winnerCount: 0 },
         changed: false,
-      });
+    });
     expect(dependencies.calls).not.toContain("createWinner");
-    expect(dependencies.calls).not.toContain("refreshExistingPresentation");
+    expect(dependencies.calls).not.toContain("archiveExistingLifecycle");
   });
 
-  test("refreshes an exact existing lifecycle without creating duplicate campaigns", async () => {
+  test("requires explicit replacement approval for an immutable stale lifecycle", async () => {
     const dependencies = fakeDependencies({
       inspection: stalePresentationInspection(),
-      finalInspection: exactFinalInspection(),
     });
 
     await expect(provisionSampleRaffles(
@@ -567,16 +616,42 @@ describe("sample raffle provisioner safety", () => {
       },
       dependencies,
     ))
-      .resolves.toMatchObject({
-        eventId: SAMPLE_RAFFLE_EVENT_ID,
-        completed: { winnerAlias: "Cafe Classico Rider" },
-        ongoing: { state: "open" },
-        changed: true,
+      .rejects.toMatchObject({
+        code: "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED",
       });
 
-    expect(dependencies.calls).toContain("refreshExistingPresentation");
+    expect(dependencies.calls).not.toContain("archiveExistingLifecycle");
     expect(dependencies.calls).not.toContain("createCompletedCampaign");
-    expect(dependencies.calls).not.toContain("createOngoingCampaign");
+  });
+
+  test("archives and recreates only the exact stale lifecycle through the trusted production job", async () => {
+    const dependencies = fakeDependencies({
+      inspection: stalePresentationInspection(),
+      finalInspection: exactFinalInspection(),
+      replaceExisting: true,
+    });
+
+    await expect(provisionSampleRaffles(
+      {
+        ...validInput(),
+        organizerPassword: undefined,
+        adminPassword: undefined,
+        winnerPassword: undefined,
+        replaceExisting: true,
+        trustedProductionJob: true,
+      },
+      dependencies,
+    )).resolves.toMatchObject({
+      completed: { winnerAlias: "Cafe Classico Rider" },
+      ongoing: { state: "open" },
+      changed: true,
+    });
+
+    expect(dependencies.calls).toContain("archiveExistingLifecycle");
+    expect(dependencies.calls.indexOf("prepareCreatedPresentation"))
+      .toBeLessThan(dependencies.calls.indexOf("submitCompletedCampaign"));
+    expect(dependencies.calls.indexOf("prepareCreatedPresentation"))
+      .toBeLessThan(dependencies.calls.indexOf("grantCompletedEntry"));
   });
 
   test("fails closed on a conflicting or partial sample campaign", async () => {
@@ -687,6 +762,9 @@ test("runs the completed and ongoing raffle lifecycle in the required safe order
     "ensureWinner",
     "ensureWinnerRegistration",
     "createCompletedCampaign",
+    "createOngoingCampaign",
+    "inspectTarget",
+    "prepareCreatedPresentation",
     "submitCompletedCampaign",
     "approveCompletedCampaign",
     "openCompletedCampaign",
@@ -699,12 +777,9 @@ test("runs the completed and ongoing raffle lifecycle in the required safe order
     "verifyClaim",
     "fulfillAward",
     "completeClaims",
-    "createOngoingCampaign",
     "submitOngoingCampaign",
     "approveOngoingCampaign",
     "openOngoingCampaign",
-    "inspectTarget",
-    "refreshExistingPresentation",
     "inspectTarget",
     "releaseLock",
     "finish",
