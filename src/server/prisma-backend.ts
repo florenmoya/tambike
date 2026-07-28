@@ -92,6 +92,7 @@ import type {
   EventAttendeePublicPreview,
   EventAttendeeRosterPage,
   EventAttendeeSummary,
+  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -4811,8 +4812,21 @@ export class PrismaTambikeBackend {
       await this.lockGiveawayEvent(tx, event.id);
       const previousRsvp = await tx.rSVP.findUnique({
         where: { eventId_userId: { eventId: event.id, userId: user.id } },
-        select: { status: true, goingAt: true },
+        select: { status: true, goingAt: true, rosterIdentity: true },
       });
+      if (
+        input.rosterIdentity !== undefined &&
+        input.rosterIdentity !== "VISIBLE" &&
+        input.rosterIdentity !== "ANONYMOUS"
+      ) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      const previousIdentity =
+        previousRsvp?.rosterIdentity ?? user.defaultRosterIdentity;
+      const rosterIdentity =
+        input.status === "going" && input.rosterIdentity !== undefined
+          ? input.rosterIdentity
+          : previousIdentity;
       const now = new Date();
       const goingAt =
         input.status === "going"
@@ -4829,13 +4843,14 @@ export class PrismaTambikeBackend {
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
-          rosterIdentity: user.defaultRosterIdentity,
+          rosterIdentity,
         },
         update: {
           status: input.status,
           goingAt,
           attendanceType: attendanceTypeToDb[input.attendanceType] as never,
           clubName: input.clubName?.trim() || user.clubName,
+          rosterIdentity,
         },
       });
       const pass =
@@ -4870,6 +4885,19 @@ export class PrismaTambikeBackend {
     }
     await this.audit("PASS_CREATED", user.id, "Pass", result.pass.id);
     return { rsvp: rsvpDto, pass: this.toPass(result.pass) };
+  }
+
+  async getEventRegistrationRosterIdentity(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<RosterIdentity> {
+    const user = await this.requireUser(sessionToken);
+    await this.requireEvent(eventId);
+    const rsvp = await this.prisma.rSVP.findUnique({
+      where: { eventId_userId: { eventId, userId: user.id } },
+      select: { rosterIdentity: true },
+    });
+    return rsvp?.rosterIdentity ?? user.defaultRosterIdentity;
   }
 
   async configureEventRoster(

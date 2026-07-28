@@ -224,6 +224,7 @@ export type RegistrationInput = {
   status: "interested" | "going";
   attendanceType: AttendanceType;
   clubName?: string;
+  rosterIdentity?: RosterIdentity;
 };
 
 export type SignupWithPasswordInput = SignupInput & {
@@ -4298,6 +4299,19 @@ export class TambikeBackend {
 
     const rsvpKey = `${event.id}:${user.id}`;
     const previousRsvp = this.rsvps.get(rsvpKey);
+    const defaultIdentity = user.defaultRosterIdentity ?? "ANONYMOUS";
+    const previousIdentity = previousRsvp?.rosterIdentity ?? defaultIdentity;
+    if (
+      input.rosterIdentity !== undefined &&
+      input.rosterIdentity !== "VISIBLE" &&
+      input.rosterIdentity !== "ANONYMOUS"
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const rosterIdentity =
+      input.status === "going" && input.rosterIdentity !== undefined
+        ? input.rosterIdentity
+        : previousIdentity;
     const now = new Date().toISOString();
     const rsvp: RSVP & { userId: string; goingAt?: string; id: string } = {
       id: previousRsvp?.id ?? `rsvp-${randomUUID()}`,
@@ -4306,10 +4320,7 @@ export class TambikeBackend {
       status: input.status,
       attendanceType: input.attendanceType,
       clubName: input.clubName?.trim() || user.clubName,
-      rosterIdentity:
-        previousRsvp?.rosterIdentity ??
-        user.defaultRosterIdentity ??
-        "ANONYMOUS",
+      rosterIdentity,
       ...(input.status === "going"
         ? {
             goingAt:
@@ -4345,6 +4356,19 @@ export class TambikeBackend {
     this.audit("PASS_CREATED", user.id, pass.id);
     this.reconcileAutomaticEligibilityForEvent(event.id, user.id);
     return { rsvp, pass: { ...pass } };
+  }
+
+  async getEventRegistrationRosterIdentity(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<RosterIdentity> {
+    const user = this.requireUser(sessionToken);
+    this.requireEvent(eventId);
+    return (
+      this.rsvps.get(`${eventId}:${user.id}`)?.rosterIdentity ??
+      user.defaultRosterIdentity ??
+      "ANONYMOUS"
+    );
   }
 
   async configureEventRoster(

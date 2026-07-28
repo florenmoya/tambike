@@ -15,6 +15,7 @@ import type {
   SignupInput,
 } from "@/features/tambike-demo/types";
 import type {
+  RosterIdentity,
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "@/features/member-profiles/types";
@@ -116,6 +117,7 @@ export async function registerForEventAction(
     status: "interested" | "going";
     attendanceType: AttendanceType;
     clubName?: string;
+    rosterIdentity?: RosterIdentity;
   },
 ) {
   const backend = await getTambikeBackend();
@@ -125,6 +127,12 @@ export async function registerForEventAction(
     state: await snapshot(),
     passId: result.pass?.id ?? null,
   };
+}
+
+export async function getEventRegistrationRosterIdentityAction(eventId: string) {
+  const backend = await getTambikeBackend();
+  const token = await readRequiredSessionToken();
+  return backend.getEventRegistrationRosterIdentity(token, eventId);
 }
 
 export async function configureEventRosterAction(eventId: string, input: { enabled: boolean }) {

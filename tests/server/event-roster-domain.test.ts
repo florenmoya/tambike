@@ -181,29 +181,57 @@ describe("in-memory organizer-controlled event rosters", () => {
     expect(new Set([...first.attendees, ...second.attendees].map((entry) => entry.slug)).size).toBe(4);
   });
 
-  test("uses the current global profile preference for an existing RSVP", async () => {
+  test("persists a per-event roster identity across profile-default changes", async () => {
     const backend = await createTambikeTestBackend();
     const actors = await createTestActors(backend, "roster-defaults");
     const event = await createPublishedTestEvent(backend, actors);
     await backend.updateMemberProfile(actors.rider.sessionToken, visibleProfile);
 
-    await expect(backend.registerForEvent(actors.rider.sessionToken, event.id, { status: "going", attendanceType: "direct" })).resolves.toMatchObject({ rsvp: { rosterIdentity: "VISIBLE" } });
-    await backend.configureEventRoster(actors.organizer.sessionToken, event.id, { enabled: true });
-    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
-      summary: { visibleCount: 1, anonymousCount: 0 },
-      attendees: [{ slug: "visible-rider" }],
+    const first = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
     });
+    expect(first.rsvp.rosterIdentity).toBe("VISIBLE");
+    await expect(
+      backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, event.id),
+    ).resolves.toBe("VISIBLE");
 
     await backend.updateMemberProfile(actors.rider.sessionToken, { ...visibleProfile, defaultRosterIdentity: "ANONYMOUS" });
-    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
-      summary: { visibleCount: 0, anonymousCount: 1 },
-      attendees: [],
+    await expect(
+      backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, event.id),
+    ).resolves.toBe("VISIBLE");
+
+    const preserved = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
     });
-    await backend.updateMemberProfile(actors.rider.sessionToken, visibleProfile);
-    await expect(backend.listEventAttendees(actors.outsider.sessionToken, event.id, {})).resolves.toMatchObject({
-      summary: { visibleCount: 1, anonymousCount: 0 },
-      attendees: [{ slug: "visible-rider" }],
+    expect(preserved.rsvp.rosterIdentity).toBe("VISIBLE");
+
+    const hidden = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "ANONYMOUS",
     });
+    expect(hidden.rsvp.rosterIdentity).toBe("ANONYMOUS");
+
+    const interested = await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "interested",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
+    });
+    expect(interested.rsvp.rosterIdentity).toBe("ANONYMOUS");
+
+    const secondEvent = await createPublishedTestEvent(backend, actors, {
+      title: "Second Per-Event Choice",
+      date: "Fri · December 31, 2099",
+    });
+    await expect(
+      backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, secondEvent.id),
+    ).resolves.toBe("ANONYMOUS");
+    await expect(
+      backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, event.id),
+    ).resolves.toBe("ANONYMOUS");
   });
 
   test("paginates visible attendees by goingAt then RSVP id without duplicates and keeps full aggregates", async () => {
