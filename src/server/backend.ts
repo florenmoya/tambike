@@ -4482,14 +4482,24 @@ export class TambikeBackend {
             right.rsvp.id ?? `${right.rsvp.eventId}:${right.rsvp.userId}`,
           ),
       )
+      .map(({ user }) => this.toMemberProfileView(user))
+      .filter(
+        (profile): profile is typeof profile & {
+          motorcycle: NonNullable<typeof profile.motorcycle>;
+        } => Boolean(profile.motorcycle?.photos[0]),
+      )
       .slice(0, PUBLIC_ATTENDEE_PREVIEW_LIMIT)
-      .map(({ user }) => {
-        const profile = this.toMemberProfileView(user);
+      .map((profile) => {
+        const photo = profile.motorcycle.photos[0]!;
         return {
           slug: profile.slug,
           displayName: profile.displayName,
           area: profile.area,
-          profilePhotoUrl: profile.profilePhotoUrl,
+          bikePhoto: {
+            url: photo.url,
+            width: photo.width,
+            height: photo.height,
+          },
         };
       });
 

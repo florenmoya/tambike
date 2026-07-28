@@ -49,10 +49,18 @@ export interface EventAttendeeRosterPage {
   pageSize: number;
 }
 
+export interface EventAttendeePreviewBikePhoto {
+  url: string;
+  width: number;
+  height: number;
+}
+
 export type EventAttendeePreviewRider = Pick<
   MemberProfileView,
-  "slug" | "displayName" | "area" | "profilePhotoUrl"
->;
+  "slug" | "displayName" | "area"
+> & {
+  bikePhoto: EventAttendeePreviewBikePhoto;
+};
 
 export interface EventAttendeePublicPreview {
   summary: EventAttendeeSummary;

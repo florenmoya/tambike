@@ -20,7 +20,11 @@ const rosterPage = {
     slug: `rider-${index + 1}`,
     displayName: `Rider ${index + 1}`,
     area: "Davao City",
-    profilePhotoUrl: `/media/rider-${index + 1}`,
+    bikePhoto: {
+      url: `/media/bike-${index + 1}`,
+      width: 1200,
+      height: 800,
+    },
   })),
 };
 
@@ -38,11 +42,11 @@ describe("event attendee preview loader", () => {
         return {
           summary,
           attendees: rosterPage.attendees.slice(0, 4).map(
-            ({ slug, displayName, area, profilePhotoUrl }) => ({
+            ({ slug, displayName, area, bikePhoto }) => ({
               slug,
               displayName,
               area,
-              profilePhotoUrl,
+              bikePhoto,
             }),
           ),
         };
@@ -53,15 +57,19 @@ describe("event attendee preview loader", () => {
     );
 
     expect(calls).toEqual(["ride-1"]);
-    expect(result).toMatchObject({
-      summary,
-      unavailable: false,
-      attendees: expect.arrayContaining([
-        expect.objectContaining({ slug: "rider-1" }),
-      ]),
+    expect(result).toMatchObject({ summary, unavailable: false });
+    expect(result.attendees[0]).toEqual({
+      slug: "rider-1",
+      displayName: "Rider 1",
+      area: "Davao City",
+      bikePhoto: {
+        url: "/media/bike-1",
+        width: 1200,
+        height: 800,
+      },
     });
     expect(JSON.stringify(result)).not.toMatch(
-      /signedIn|motorcycle|email|userId|verification|storageKey/i,
+      /signedIn|profilePhoto|motorcycle|email|userId|verification|storageKey|make|model/i,
     );
   });
 

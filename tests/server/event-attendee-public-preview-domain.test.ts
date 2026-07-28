@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
 
+import type {
+  MemberMediaStore,
+  StoredMemberMediaObject,
+} from "../../src/server/member-media/store";
 import { createTambikeTestBackend } from "../../src/server/testing";
 import {
   createPublishedTestEvent,
@@ -13,6 +17,69 @@ const visibleProfile = {
   visibility: "PUBLIC" as const,
   defaultRosterIdentity: "VISIBLE" as const,
 };
+
+async function createPreviewHarness() {
+  const objects = new Map<string, StoredMemberMediaObject>();
+  let mediaSequence = 0;
+  const store: MemberMediaStore = {
+    createPresignedPost: async (input) => ({
+      url: "https://uploads.example.test",
+      fields: { key: input.key, "Content-Type": input.mimeType },
+    }),
+    getObject: async (key) => {
+      const object = objects.get(key);
+      if (!object) throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+      return object;
+    },
+    putObject: async (input) => {
+      objects.set(input.key, {
+        body: input.body,
+        contentType: input.mimeType,
+      });
+    },
+    deleteObject: async (key) => {
+      if (!objects.delete(key)) {
+        throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+      }
+    },
+  };
+  const backend = await createTambikeTestBackend({
+    memberMedia: {
+      store,
+      createUuid: () => `preview-bike-${++mediaSequence}`,
+      normalize: async () => ({
+        bytes: Buffer.from("normalized-bike"),
+        mimeType: "image/webp",
+        width: 1200,
+        height: 800,
+      }),
+    },
+  });
+
+  async function addBikePhoto(
+    rider: { sessionToken: string; user: { id: string } },
+    label: string,
+  ) {
+    await backend.upsertMotorcycle(rider.sessionToken, {
+      make: "Honda",
+      model: "CB650R",
+    });
+    const tempKey = `tmp/users/${rider.user.id}/${label}`;
+    objects.set(tempKey, {
+      body: Buffer.from("jpeg"),
+      contentType: "image/jpeg",
+      lastModified: new Date(),
+    });
+    return backend.finalizeMemberMedia(rider.sessionToken, {
+      purpose: "motorcycle-photo",
+      tempKey,
+      claimedMimeType: "image/jpeg",
+      motorcyclePhotoPosition: 0,
+    });
+  }
+
+  return { backend, addBikePhoto };
+}
 
 async function addPreviewCandidate(input: {
   backend: Awaited<ReturnType<typeof createTambikeTestBackend>>;
@@ -41,11 +108,12 @@ async function addPreviewCandidate(input: {
     status: input.status ?? "going",
     attendanceType: "direct",
   });
+  return rider;
 }
 
 describe("public event attendee preview", () => {
   test("returns only public visible Going riders in the anonymous preview", async () => {
-    const backend = await createTambikeTestBackend();
+    const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview");
     const event = await createPublishedTestEvent(backend, actors, {
       date: "Fri · December 31, 2099",
@@ -63,6 +131,7 @@ describe("public event attendee preview", () => {
       status: "going",
       attendanceType: "direct",
     });
+    await addBikePhoto(actors.rider, "public-rider");
 
     await backend.updateMemberProfile(actors.outsider.sessionToken, {
       ...visibleProfile,
@@ -73,6 +142,7 @@ describe("public event attendee preview", () => {
       status: "going",
       attendanceType: "direct",
     });
+    await addBikePhoto(actors.outsider, "members-rider");
 
     const preview = await backend.getPublicEventAttendeePreview(event.id);
 
@@ -81,13 +151,19 @@ describe("public event attendee preview", () => {
       goingCount: 2,
     });
     expect(preview.attendees).toEqual([
-      expect.objectContaining({
+      {
         slug: "public-rider",
         displayName: "Public Rider",
-      }),
+        area: "Quezon City",
+        bikePhoto: {
+          url: "/media/preview-bike-1",
+          width: 1200,
+          height: 800,
+        },
+      },
     ]);
     expect(JSON.stringify(preview)).not.toMatch(
-      /Members Rider|email|userId|rsvpId|verification|storageKey|motorcycle/i,
+      /Members Rider|profilePhoto|email|userId|rsvpId|verification|storageKey|make|model/i,
     );
 
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
@@ -101,8 +177,8 @@ describe("public event attendee preview", () => {
     });
   });
 
-  test("limits public Going riders to the first four registrations", async () => {
-    const backend = await createTambikeTestBackend();
+  test("filters riders without bike photos before limiting public Going riders", async () => {
+    const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview-limit");
     const event = await createPublishedTestEvent(backend, actors, {
       date: "Fri · December 31, 2099",
@@ -111,7 +187,7 @@ describe("public event attendee preview", () => {
       enabled: true,
     });
 
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       const rider = await backend.signUpRider({
         displayName: `Public Preview Rider ${index}`,
         email: `public-preview-${index}@example.test`,
@@ -127,20 +203,23 @@ describe("public event attendee preview", () => {
         status: "going",
         attendanceType: "direct",
       });
+      if (index > 0) {
+        await addBikePhoto(rider, `public-preview-${index}`);
+      }
     }
 
     const preview = await backend.getPublicEventAttendeePreview(event.id);
     expect(preview.attendees).toHaveLength(4);
     expect(preview.attendees.map(({ displayName }) => displayName)).toEqual([
-      "Public Preview Rider 0",
       "Public Preview Rider 1",
       "Public Preview Rider 2",
       "Public Preview Rider 3",
+      "Public Preview Rider 4",
     ]);
   });
 
   test("excludes anonymous, private, unpublished, and interested riders", async () => {
-    const backend = await createTambikeTestBackend();
+    const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview-exclusions");
     const event = await createPublishedTestEvent(backend, actors, {
       date: "Fri · December 31, 2099",
@@ -149,30 +228,34 @@ describe("public event attendee preview", () => {
       enabled: true,
     });
 
-    await addPreviewCandidate({
+    const anonymous = await addPreviewCandidate({
       backend,
       eventId: event.id,
       label: "Anonymous Going",
       identity: "ANONYMOUS",
     });
-    await addPreviewCandidate({
+    await addBikePhoto(anonymous, "anonymous-going");
+    const privateRider = await addPreviewCandidate({
       backend,
       eventId: event.id,
       label: "Private Going",
       visibility: "PRIVATE",
     });
-    await addPreviewCandidate({
+    await addBikePhoto(privateRider, "private-going");
+    const unpublished = await addPreviewCandidate({
       backend,
       eventId: event.id,
       label: "Unpublished Going",
       publish: false,
     });
-    await addPreviewCandidate({
+    await addBikePhoto(unpublished, "unpublished-going");
+    const interested = await addPreviewCandidate({
       backend,
       eventId: event.id,
       label: "Public Interested",
       status: "interested",
     });
+    await addBikePhoto(interested, "public-interested");
 
     const preview = await backend.getPublicEventAttendeePreview(event.id);
     expect(preview.attendees).toEqual([]);

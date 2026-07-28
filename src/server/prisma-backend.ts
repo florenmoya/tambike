@@ -4995,6 +4995,11 @@ export class PrismaTambikeBackend {
           defaultRosterIdentity: "VISIBLE",
           profileSlug: { not: null },
           profileVisibility: "PUBLIC",
+          motorcycle: {
+            is: {
+              photos: { some: {} },
+            },
+          },
         },
       },
       orderBy: [{ goingAt: "asc" }, { id: "asc" }],
@@ -5013,11 +5018,16 @@ export class PrismaTambikeBackend {
     const attendees = await Promise.all(
       rows.map(async ({ user }) => {
         const profile = await this.sanitizeMemberProfile(user);
+        const photo = profile.motorcycle!.photos[0]!;
         return {
           slug: profile.slug,
           displayName: profile.displayName,
           area: profile.area,
-          profilePhotoUrl: profile.profilePhotoUrl,
+          bikePhoto: {
+            url: photo.url,
+            width: photo.width,
+            height: photo.height,
+          },
         };
       }),
     );
