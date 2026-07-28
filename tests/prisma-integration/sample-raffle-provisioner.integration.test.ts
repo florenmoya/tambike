@@ -35,6 +35,7 @@ const completedAuditActions = [
   "GIVEAWAY_CLAIM_VERIFIED",
   "GIVEAWAY_AWARD_FULFILLED",
   "GIVEAWAY_COMPLETED",
+  "GIVEAWAY_UPDATED",
 ] as const;
 
 const ongoingAuditActions = [
@@ -42,6 +43,7 @@ const ongoingAuditActions = [
   "GIVEAWAY_SUBMITTED_FOR_REVIEW",
   "GIVEAWAY_COMPLIANCE_REVIEWED",
   "GIVEAWAY_OPENED",
+  "GIVEAWAY_UPDATED",
 ] as const;
 
 function validIntegrationInput(): SampleRaffleProvisioningInput {
@@ -114,6 +116,22 @@ describe("guarded Prisma sample raffle provisioner", () => {
           databaseUrl,
           databaseUrl,
           manifest,
+          {
+            fetchPhoto: async () =>
+              new Response(Uint8Array.from([1, 2, 3]), {
+                headers: { "content-type": "image/jpeg" },
+              }),
+            normalizePhoto: async () => ({
+              bytes: Buffer.from("integration-sample-raffle-image"),
+              mimeType: "image/webp",
+              width: 1200,
+              height: 900,
+            }),
+            mediaStore: {
+              async putObject() {},
+              async deleteObject() {},
+            },
+          },
         );
         try {
           return await provisionSampleRaffles(
@@ -160,6 +178,21 @@ describe("guarded Prisma sample raffle provisioner", () => {
         where: { id: first.completed.giveawayId },
         select: {
           status: true,
+          mechanicsVersions: {
+            orderBy: { version: "desc" },
+            take: 1,
+            select: { mechanics: true, terms: true },
+          },
+          prizePools: {
+            orderBy: { position: "asc" },
+            select: {
+              publicTitle: true,
+              publicDescription: true,
+              publicImage: {
+                select: { mediaId: true, mimeType: true, width: true, height: true },
+              },
+            },
+          },
           awards: {
             orderBy: { id: "asc" },
             select: {
@@ -182,6 +215,21 @@ describe("guarded Prisma sample raffle provisioner", () => {
       });
       expect(completed).toMatchObject({
         status: "completed",
+        mechanicsVersions: [{
+          mechanics: "One eligible rider was selected from valid entries.",
+          terms:
+            "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+        }],
+        prizePools: [{
+          publicTitle: "Cafe Classico Helmet",
+          publicDescription: "A full-face helmet for safer everyday rides.",
+          publicImage: {
+            mediaId: "sample-raffle-helmet-photo-v1",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 900,
+          },
+        }],
         awards: [{
           isCurrent: true,
           status: "fulfilled",
@@ -206,6 +254,21 @@ describe("guarded Prisma sample raffle provisioner", () => {
         where: { id: first.ongoing.giveawayId },
         select: {
           status: true,
+          mechanicsVersions: {
+            orderBy: { version: "desc" },
+            take: 1,
+            select: { mechanics: true, terms: true },
+          },
+          prizePools: {
+            orderBy: { position: "asc" },
+            select: {
+              publicTitle: true,
+              publicDescription: true,
+              publicImage: {
+                select: { mediaId: true, mimeType: true, width: true, height: true },
+              },
+            },
+          },
           snapshot: { select: { id: true } },
           draws: { select: { id: true } },
           awards: { select: { id: true } },
@@ -217,6 +280,21 @@ describe("guarded Prisma sample raffle provisioner", () => {
       });
       expect(ongoing).toMatchObject({
         status: "open",
+        mechanicsVersions: [{
+          mechanics: "Registered event riders may enter once while the raffle is open.",
+          terms:
+            "One winner will receive the Weekend Rider Gear Package. The organizer will announce and contact the winner after the draw.",
+        }],
+        prizePools: [{
+          publicTitle: "Weekend Rider Gear Package",
+          publicDescription: "Helmet, riding gloves, and Tambike gear for your next ride.",
+          publicImage: {
+            mediaId: "sample-raffle-gear-photo-v1",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 900,
+          },
+        }],
         snapshot: null,
         draws: [],
         awards: [],

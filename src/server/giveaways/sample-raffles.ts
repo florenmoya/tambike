@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash, randomUUID } from "node:crypto";
+
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
@@ -12,6 +14,19 @@ import type {
 } from "@/features/giveaways/types";
 import type { PrismaTambikeBackend } from "@/server/prisma-backend";
 import { PrismaTambikeBackend as PrismaTambikeBackendRuntime } from "@/server/prisma-backend";
+import { loadMemberMediaConfig } from "@/server/member-media/config";
+import { normalizeMemberImage } from "@/server/member-media/image-normalizer";
+import { createS3MemberMediaStore } from "@/server/member-media/s3-store";
+import type { MemberMediaStore } from "@/server/member-media/store";
+import {
+  refreshSampleRafflePresentation,
+  SAMPLE_RAFFLE_PHOTO_SOURCES,
+  type RefreshSampleRafflePresentationPersistenceInput,
+} from "@/server/giveaways/sample-raffle-presentation";
+import {
+  calculateGiveawayAuditHash,
+  canonicalizeJson,
+} from "@/server/giveaways/audit";
 
 export const SAMPLE_RAFFLE_EVENT_ID = "tambike-cafe-classico";
 export const COMPLETED_SAMPLE_RAFFLE_TITLE = "Cafe Classico Helmet Raffle";
@@ -96,9 +111,20 @@ export interface SampleRaffleCampaignInspection {
   state: string;
   winnerCount: number;
   winnerAlias?: string;
+  presentation?: SampleRafflePresentationInspection;
+}
+
+export interface SampleRafflePresentationInspection {
+  mechanics: string;
+  terms: string;
+  prizePoolId: string;
+  publicTitle?: string;
+  publicDescription?: string;
+  publicImageMediaId?: string;
 }
 
 export interface SampleRaffleCompletedAwardInspection {
+  awardId: string;
   status: string;
   winnerAlias?: string;
   winnerAliasPublished: boolean;
@@ -198,6 +224,13 @@ export interface SampleRaffleProvisionerDependencies {
   submitOngoingCampaign(organizer: Session, giveawayId: string): Promise<void>;
   approveOngoingCampaign(admin: Session, giveawayId: string): Promise<void>;
   openOngoingCampaign(organizer: Session, giveawayId: string): Promise<void>;
+  refreshExistingPresentation(input: {
+    organizer: Session;
+    admin: Session;
+    winner: WinnerSession;
+    inspection: SampleRaffleTargetInspection;
+    manifest: SampleRaffleManifest;
+  }): Promise<void>;
   finish(): Promise<void>;
 }
 
@@ -286,37 +319,29 @@ function finalReceipt(
   manifest: SampleRaffleManifest,
   changed: boolean,
 ): SampleRaffleProvisioningReceipt | null {
+  if (!hasExpectedSampleLifecycle(inspection, manifest)) return null;
   const completed = inspection.completedCampaigns;
   const ongoing = inspection.ongoingCampaigns;
-  if (completed.length !== 1 || ongoing.length !== 1) return null;
   const [completedCampaign] = completed;
   const [ongoingCampaign] = ongoing;
+  const completedExpected = completedSampleRaffleInput(manifest);
+  const ongoingExpected = ongoingSampleRaffleInput(manifest);
+  const completedPrize = completedExpected.prizePools[0]?.publicPresentation;
+  const ongoingPrize = ongoingExpected.prizePools[0]?.publicPresentation;
   if (
-    completedCampaign.title !== manifest.completedTitle ||
-    completedCampaign.state !== "completed" ||
-    completedCampaign.complianceStatus !== "approved" ||
-    completedCampaign.drawCount !== 1 ||
-    completedCampaign.publishedDrawCount !== 1 ||
-    completedCampaign.currentAwardCount !== 1 ||
-    completedCampaign.fulfilledAwardCount !== 1 ||
-    completedCampaign.publicWinnerAliases.length !== 1 ||
-    completedCampaign.publicWinnerAliases[0] !== manifest.winnerAlias ||
-    !inspection.dedicatedWinnerId ||
-    completedCampaign.winnerUserId !== inspection.dedicatedWinnerId ||
-    completedCampaign.winnerCount !== 1 ||
-    completedCampaign.currentAwards.length !== 1 ||
-    completedCampaign.currentAwards[0]?.status !== "fulfilled" ||
     completedCampaign.currentAwards[0]?.winnerAlias !== manifest.winnerAlias ||
     !completedCampaign.currentAwards[0]?.winnerAliasPublished ||
     completedCampaign.winnerAlias !== manifest.winnerAlias ||
-    ongoingCampaign.title !== manifest.ongoingTitle ||
-    ongoingCampaign.state !== "open" ||
-    ongoingCampaign.complianceStatus !== "approved" ||
-    ongoingCampaign.winnerCount !== 0 ||
-    ongoingCampaign.snapshotCount !== 0 ||
-    ongoingCampaign.drawCount !== 0 ||
-    ongoingCampaign.awardCount !== 0 ||
-    ongoingCampaign.resultCount !== 0
+    completedCampaign.presentation?.mechanics !== completedExpected.mechanics ||
+    completedCampaign.presentation.terms !== completedExpected.terms ||
+    completedCampaign.presentation.publicTitle !== completedPrize?.title ||
+    completedCampaign.presentation.publicDescription !== completedPrize?.description ||
+    !completedCampaign.presentation.publicImageMediaId ||
+    ongoingCampaign.presentation?.mechanics !== ongoingExpected.mechanics ||
+    ongoingCampaign.presentation.terms !== ongoingExpected.terms ||
+    ongoingCampaign.presentation.publicTitle !== ongoingPrize?.title ||
+    ongoingCampaign.presentation.publicDescription !== ongoingPrize?.description ||
+    !ongoingCampaign.presentation.publicImageMediaId
   ) {
     return null;
   }
@@ -337,6 +362,40 @@ function finalReceipt(
     },
     changed,
   };
+}
+
+function hasExpectedSampleLifecycle(
+  inspection: SampleRaffleTargetInspection,
+  manifest: SampleRaffleManifest,
+) {
+  const completed = inspection.completedCampaigns;
+  const ongoing = inspection.ongoingCampaigns;
+  if (completed.length !== 1 || ongoing.length !== 1) return false;
+  const [completedCampaign] = completed;
+  const [ongoingCampaign] = ongoing;
+  return (
+    completedCampaign.title === manifest.completedTitle &&
+    completedCampaign.state === "completed" &&
+    completedCampaign.complianceStatus === "approved" &&
+    completedCampaign.drawCount === 1 &&
+    completedCampaign.publishedDrawCount === 1 &&
+    completedCampaign.currentAwardCount === 1 &&
+    completedCampaign.fulfilledAwardCount === 1 &&
+    completedCampaign.publicWinnerAliases.length === 1 &&
+    Boolean(inspection.dedicatedWinnerId) &&
+    completedCampaign.winnerUserId === inspection.dedicatedWinnerId &&
+    completedCampaign.winnerCount === 1 &&
+    completedCampaign.currentAwards.length === 1 &&
+    completedCampaign.currentAwards[0]?.status === "fulfilled" &&
+    ongoingCampaign.title === manifest.ongoingTitle &&
+    ongoingCampaign.state === "open" &&
+    ongoingCampaign.complianceStatus === "approved" &&
+    ongoingCampaign.winnerCount === 0 &&
+    ongoingCampaign.snapshotCount === 0 &&
+    ongoingCampaign.drawCount === 0 &&
+    ongoingCampaign.awardCount === 0 &&
+    ongoingCampaign.resultCount === 0
+  );
 }
 
 function hasNoSampleCampaigns(inspection: SampleRaffleTargetInspection) {
@@ -365,7 +424,10 @@ export async function provisionSampleRaffles(
   }
   const existingReceipt = finalReceipt(firstInspection, manifest, false);
   if (existingReceipt) return existingReceipt;
-  if (!hasNoSampleCampaigns(firstInspection)) {
+  if (
+    !hasNoSampleCampaigns(firstInspection) &&
+    !hasExpectedSampleLifecycle(firstInspection, manifest)
+  ) {
     throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
   }
   if (!input.drawEncryptionKeyPresent) throw new SampleRaffleProvisioningError("DRAW_ENCRYPTION_KEY_REQUIRED");
@@ -378,7 +440,10 @@ export async function provisionSampleRaffles(
     }
     const lockedReceipt = finalReceipt(lockedInspection, manifest, false);
     if (lockedReceipt) return lockedReceipt;
-    if (!hasNoSampleCampaigns(lockedInspection)) {
+    if (
+      !hasNoSampleCampaigns(lockedInspection) &&
+      !hasExpectedSampleLifecycle(lockedInspection, manifest)
+    ) {
       throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
     }
 
@@ -396,6 +461,22 @@ export async function provisionSampleRaffles(
     } catch (error) {
       if (error instanceof SampleRaffleProvisioningError) throw error;
       throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+    }
+
+    if (hasExpectedSampleLifecycle(lockedInspection, manifest)) {
+      await dependencies.refreshExistingPresentation({
+        organizer,
+        admin,
+        winner,
+        inspection: lockedInspection,
+        manifest,
+      });
+      const refreshedInspection = await dependencies.inspectTarget(manifest);
+      const refreshedReceipt = finalReceipt(refreshedInspection, manifest, true);
+      if (!refreshedReceipt) {
+        throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
+      }
+      return refreshedReceipt;
     }
 
     await dependencies.ensureWinnerRegistration(winner, manifest.eventId);
@@ -418,6 +499,18 @@ export async function provisionSampleRaffles(
     await dependencies.approveOngoingCampaign(admin, ongoing.giveawayId);
     await dependencies.openOngoingCampaign(organizer, ongoing.giveawayId);
 
+    const createdInspection = await dependencies.inspectTarget(manifest);
+    if (!hasExpectedSampleLifecycle(createdInspection, manifest)) {
+      throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
+    }
+    await dependencies.refreshExistingPresentation({
+      organizer,
+      admin,
+      winner,
+      inspection: createdInspection,
+      manifest,
+    });
+
     const finalInspection = await dependencies.inspectTarget(manifest);
     const receipt = finalReceipt(finalInspection, manifest, true);
     if (!receipt) throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
@@ -436,9 +529,25 @@ const SAMPLE_COMPLETED_SELECTION_KEY = "sample-completed-manual-selection-v1";
 const SAMPLE_COMPLETED_VERIFICATION_KEY = "sample-completed-claim-verification-v1";
 const SAMPLE_COMPLETED_FULFILMENT_KEY = "sample-completed-fulfilment-v1";
 
+function sampleRaffleMechanicsChecksum(
+  mechanics: string,
+  terms: string,
+  sponsorDisclosure: string | null,
+) {
+  return createHash("sha256")
+    .update(canonicalizeJson({ mechanics, terms, sponsorDisclosure }))
+    .digest("hex");
+}
+
 export interface PrismaSampleRaffleProvisioner {
   dependencies: SampleRaffleProvisionerDependencies;
   close(): Promise<void>;
+}
+
+export interface PrismaSampleRafflePresentationOptions {
+  fetchPhoto?: (url: string) => Promise<Response>;
+  normalizePhoto?: typeof normalizeMemberImage;
+  mediaStore?: Pick<MemberMediaStore, "putObject" | "deleteObject">;
 }
 
 function parsePostgresDatabaseUrl(
@@ -535,6 +644,7 @@ export async function createPrismaSampleRaffleProvisioner(
   runtimeDatabaseUrl: string,
   directDatabaseUrl: string,
   manifest: SampleRaffleManifest = productionSampleRaffleManifest,
+  presentationOptions: PrismaSampleRafflePresentationOptions = {},
 ): Promise<PrismaSampleRaffleProvisioner> {
   const runtimeTarget = parsePostgresDatabaseUrl(runtimeDatabaseUrl, "DATABASE_TARGET_REQUIRED");
   const directTarget = parsePostgresDatabaseUrl(
@@ -579,6 +689,9 @@ export async function createPrismaSampleRaffleProvisioner(
   let lockHeld = false;
   let hostOrganizerUserId: string | undefined;
   let hostOrganizerEmail: string | undefined;
+  let authenticatedOrganizerUserId: string | undefined;
+  let authenticatedAdminUserId: string | undefined;
+  let samplePrizeMediaStore: MemberMediaStore | undefined;
   let finishPromise: Promise<void> | undefined;
   const manualSelectionByGiveaway = new Map<string, {
     prizePoolId: string;
@@ -592,6 +705,22 @@ export async function createPrismaSampleRaffleProvisioner(
       () => inspectionPrisma.$disconnect(),
     ]);
     return finishPromise;
+  };
+
+  const resolveSamplePrizeMediaStore = () => {
+    samplePrizeMediaStore ??=
+      presentationOptions.mediaStore
+        ? {
+            createPresignedPost: async () => {
+              throw new Error("SAMPLE_RAFFLE_PRESIGNED_UPLOAD_UNAVAILABLE");
+            },
+            getObject: async () => {
+              throw new Error("SAMPLE_RAFFLE_MEDIA_READ_UNAVAILABLE");
+            },
+            ...presentationOptions.mediaStore,
+          }
+        : createS3MemberMediaStore(loadMemberMediaConfig());
+    return samplePrizeMediaStore;
   };
 
   const inspectTarget = async (): Promise<SampleRaffleTargetInspection> => {
@@ -618,6 +747,24 @@ export async function createPrismaSampleRaffleProvisioner(
           title: true,
           status: true,
           complianceStatus: true,
+          mechanicsVersions: {
+            orderBy: { version: "desc" },
+            take: 1,
+            select: {
+              mechanics: true,
+              terms: true,
+            },
+          },
+          prizePools: {
+            orderBy: { position: "asc" },
+            take: 1,
+            select: {
+              id: true,
+              publicTitle: true,
+              publicDescription: true,
+              publicImage: { select: { mediaId: true } },
+            },
+          },
           snapshot: { select: { id: true } },
           draws: {
             orderBy: { id: "asc" },
@@ -626,6 +773,7 @@ export async function createPrismaSampleRaffleProvisioner(
           awards: {
             orderBy: { id: "asc" },
             select: {
+              id: true,
               status: true,
               isCurrent: true,
               winnerUserId: true,
@@ -644,6 +792,8 @@ export async function createPrismaSampleRaffleProvisioner(
       .filter((campaign) => campaign.title === manifest.completedTitle)
       .map((campaign): SampleRaffleCompletedCampaignInspection => {
         const currentAwards = campaign.awards.filter((award) => award.isCurrent);
+        const mechanics = campaign.mechanicsVersions[0];
+        const prizePool = campaign.prizePools[0];
         const publicWinnerAliases = currentAwards
           .filter((award) =>
             Boolean(
@@ -668,6 +818,7 @@ export async function createPrismaSampleRaffleProvisioner(
           publicWinnerAliases,
           winnerUserId: winnerIds.length === 1 ? winnerIds[0] : undefined,
           currentAwards: currentAwards.map((award) => ({
+            awardId: award.id,
             status: award.status,
             winnerAlias: award.publicWinnerAlias ?? undefined,
             winnerAliasPublished: Boolean(
@@ -676,6 +827,17 @@ export async function createPrismaSampleRaffleProvisioner(
               !award.winnerAliasRevokedAt,
             ),
           })),
+          presentation:
+            mechanics && prizePool
+              ? {
+                  mechanics: mechanics.mechanics,
+                  terms: mechanics.terms,
+                  prizePoolId: prizePool.id,
+                  publicTitle: prizePool.publicTitle ?? undefined,
+                  publicDescription: prizePool.publicDescription ?? undefined,
+                  publicImageMediaId: prizePool.publicImage?.mediaId,
+                }
+              : undefined,
         };
       });
 
@@ -683,6 +845,8 @@ export async function createPrismaSampleRaffleProvisioner(
       .filter((campaign) => campaign.title === manifest.ongoingTitle)
       .map((campaign): SampleRaffleOngoingCampaignInspection => {
         const currentAwards = campaign.awards.filter((award) => award.isCurrent);
+        const mechanics = campaign.mechanicsVersions[0];
+        const prizePool = campaign.prizePools[0];
         return {
           giveawayId: campaign.id,
           title: campaign.title,
@@ -693,6 +857,17 @@ export async function createPrismaSampleRaffleProvisioner(
           drawCount: campaign.draws.length,
           awardCount: campaign.awards.length,
           resultCount: campaign.draws.filter((draw) => draw.status === "published").length,
+          presentation:
+            mechanics && prizePool
+              ? {
+                  mechanics: mechanics.mechanics,
+                  terms: mechanics.terms,
+                  prizePoolId: prizePool.id,
+                  publicTitle: prizePool.publicTitle ?? undefined,
+                  publicDescription: prizePool.publicDescription ?? undefined,
+                  publicImageMediaId: prizePool.publicImage?.mediaId,
+                }
+              : undefined,
         };
       });
 
@@ -703,6 +878,192 @@ export async function createPrismaSampleRaffleProvisioner(
       completedCampaigns,
       ongoingCampaigns,
     };
+  };
+
+  const persistSampleRafflePresentation = async (
+    input: RefreshSampleRafflePresentationPersistenceInput,
+  ) => {
+    if (
+      !authenticatedOrganizerUserId ||
+      authenticatedOrganizerUserId !== hostOrganizerUserId ||
+      !authenticatedAdminUserId
+    ) {
+      throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
+    }
+    const organizerUserId = authenticatedOrganizerUserId;
+    const adminUserId = authenticatedAdminUserId;
+    const now = new Date();
+    const completedExpected = completedSampleRaffleInput(input.manifest);
+    const ongoingExpected = ongoingSampleRaffleInput(input.manifest);
+    const targets = [
+      {
+        inspection: input.completed,
+        expectedState: "completed",
+        expected: completedExpected,
+        image: input.images.completed,
+        source: SAMPLE_RAFFLE_PHOTO_SOURCES.completed,
+      },
+      {
+        inspection: input.ongoing,
+        expectedState: "open",
+        expected: ongoingExpected,
+        image: input.images.ongoing,
+        source: SAMPLE_RAFFLE_PHOTO_SOURCES.ongoing,
+      },
+    ] as const;
+
+    await inspectionPrisma.$transaction(async (tx) => {
+      for (const target of targets) {
+        const presentation = target.inspection.presentation;
+        const expectedPrize = target.expected.prizePools[0]?.publicPresentation;
+        if (
+          !presentation ||
+          !expectedPrize ||
+          expectedPrize.disclosure !== "revealed"
+        ) {
+          throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+        }
+        await tx.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "EventGiveaway" WHERE "id" = ${target.inspection.giveawayId} FOR UPDATE`,
+        );
+        await tx.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "GiveawayPrizePool" WHERE "id" = ${presentation.prizePoolId} FOR UPDATE`,
+        );
+        const campaign = await tx.eventGiveaway.findUnique({
+          where: { id: target.inspection.giveawayId },
+          select: {
+            id: true,
+            eventId: true,
+            title: true,
+            status: true,
+            complianceStatus: true,
+            mechanicsVersions: {
+              orderBy: { version: "desc" },
+              take: 1,
+              select: {
+                version: true,
+                mechanics: true,
+                terms: true,
+                sponsorDisclosure: true,
+              },
+            },
+            prizePools: {
+              where: { id: presentation.prizePoolId },
+              select: {
+                id: true,
+                publicImage: { select: { mediaId: true } },
+              },
+            },
+          },
+        });
+        const currentMechanics = campaign?.mechanicsVersions[0];
+        const prizePool = campaign?.prizePools[0];
+        if (
+          !campaign ||
+          campaign.eventId !== input.manifest.eventId ||
+          campaign.title !== target.inspection.title ||
+          campaign.status !== target.expectedState ||
+          campaign.complianceStatus !== "approved" ||
+          !currentMechanics ||
+          !prizePool ||
+          prizePool.id !== presentation.prizePoolId
+        ) {
+          throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+        }
+
+        let mechanicsVersion = currentMechanics.version;
+        const desiredSponsorDisclosure =
+          target.expected.sponsorDisclosure?.trim() || null;
+        if (
+          currentMechanics.mechanics !== target.expected.mechanics ||
+          currentMechanics.terms !== target.expected.terms ||
+          currentMechanics.sponsorDisclosure !== desiredSponsorDisclosure
+        ) {
+          mechanicsVersion += 1;
+          await tx.giveawayMechanicsVersion.create({
+            data: {
+              id: `giveaway-mechanics-${randomUUID()}`,
+              giveawayId: campaign.id,
+              version: mechanicsVersion,
+              mechanics: target.expected.mechanics,
+              terms: target.expected.terms,
+              sponsorDisclosure: desiredSponsorDisclosure,
+              checksum: sampleRaffleMechanicsChecksum(
+                target.expected.mechanics,
+                target.expected.terms,
+                desiredSponsorDisclosure,
+              ),
+              createdByUserId: organizerUserId,
+              reviewedByUserId: adminUserId,
+              reviewDecision: "approved",
+              reviewReason: "Public sample raffle presentation refresh",
+              reviewedAt: now,
+            },
+          });
+        }
+
+        await tx.giveawayPrizePool.update({
+          where: { id: prizePool.id },
+          data: {
+            publicDisclosure: "revealed",
+            publicTitle: expectedPrize.title,
+            publicDescription: expectedPrize.description ?? null,
+          },
+        });
+
+        if (target.image) {
+          if (prizePool.publicImage) {
+            throw new SampleRaffleProvisioningError(
+              "CONFLICTING_SAMPLE_STATE",
+            );
+          }
+          await tx.giveawayPrizeImage.create({
+            data: {
+              id: `giveaway-prize-image-${target.image.mediaId}`,
+              prizePoolId: prizePool.id,
+              uploadedByUserId: organizerUserId,
+              mediaId: target.image.mediaId,
+              storageKey: target.image.storageKey,
+              mimeType: target.image.mimeType,
+              width: target.image.width,
+              height: target.image.height,
+              finalizedAt: now,
+            },
+          });
+        }
+
+        const auditPayload = {
+          change: "sample_public_presentation_refresh",
+          mechanicsVersion,
+          photoSource: target.image ? target.source.pageUrl : null,
+          publicTitle: expectedPrize.title,
+        };
+        const previous = await tx.giveawayAuditEvent.findFirst({
+          where: { giveawayId: campaign.id },
+          orderBy: { sequence: "desc" },
+          select: { sequence: true, hash: true },
+        });
+        const canonicalPayload = canonicalizeJson(auditPayload);
+        await tx.giveawayAuditEvent.create({
+          data: {
+            id: `giveaway-audit-${randomUUID()}`,
+            giveawayId: campaign.id,
+            sequence: (previous?.sequence ?? 0) + 1,
+            actorUserId: organizerUserId,
+            action: "GIVEAWAY_UPDATED",
+            targetType: "giveaway",
+            targetId: campaign.id,
+            canonicalPayload,
+            payload: JSON.parse(canonicalPayload) as Prisma.InputJsonValue,
+            previousHash: previous?.hash ?? null,
+            hash: calculateGiveawayAuditHash(
+              previous?.hash,
+              auditPayload,
+            ),
+          },
+        });
+      }
+    });
   };
 
   const dependencies: SampleRaffleProvisionerDependencies = {
@@ -737,6 +1098,7 @@ export async function createPrismaSampleRaffleProvisioner(
       ) {
         throw new SampleRaffleProvisioningError("HOST_EVENT_INVALID");
       }
+      authenticatedOrganizerUserId = result.user.id;
       return { sessionToken: result.sessionToken };
     },
     async authenticateAdmin(password) {
@@ -744,6 +1106,7 @@ export async function createPrismaSampleRaffleProvisioner(
       if (result.user.role !== "admin") {
         throw new SampleRaffleProvisioningError("AUTHENTICATION_FAILED");
       }
+      authenticatedAdminUserId = result.user.id;
       return { sessionToken: result.sessionToken };
     },
     async ensureWinner(input) {
@@ -893,6 +1256,47 @@ export async function createPrismaSampleRaffleProvisioner(
     },
     async openOngoingCampaign(organizer, giveawayId) {
       await backend.openGiveaway(organizer.sessionToken, giveawayId);
+    },
+    async refreshExistingPresentation({
+      winner,
+      inspection,
+      manifest: refreshManifest,
+    }) {
+      const completed = inspection.completedCampaigns[0];
+      const ongoing = inspection.ongoingCampaigns[0];
+      const completedAward = completed?.currentAwards[0];
+      if (
+        inspection.completedCampaigns.length !== 1 ||
+        inspection.ongoingCampaigns.length !== 1 ||
+        !completed ||
+        !ongoing ||
+        completed.currentAwards.length !== 1 ||
+        !completedAward
+      ) {
+        throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
+      }
+      await refreshSampleRafflePresentation(
+        {
+          manifest: refreshManifest,
+          completed,
+          ongoing,
+        },
+        {
+          fetchPhoto: presentationOptions.fetchPhoto ?? ((url) => fetch(url)),
+          normalizePhoto:
+            presentationOptions.normalizePhoto ?? normalizeMemberImage,
+          mediaStore: resolveSamplePrizeMediaStore(),
+          persist: persistSampleRafflePresentation,
+        },
+      );
+      await backend.setGiveawayWinnerPublication(
+        winner.sessionToken,
+        completedAward.awardId,
+        {
+          published: true,
+          alias: refreshManifest.winnerAlias,
+        },
+      );
     },
     finish,
   };

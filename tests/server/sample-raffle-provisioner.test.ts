@@ -91,10 +91,20 @@ function exactFinalInspection(
       publicWinnerAliases: [manifest.winnerAlias],
       winnerUserId: "sample-winner",
       currentAwards: [{
+        awardId: "completed-sample-award",
         status: "fulfilled",
         winnerAlias: manifest.winnerAlias,
         winnerAliasPublished: true,
       }],
+      presentation: {
+        mechanics: "One eligible rider was selected from valid entries.",
+        terms:
+          "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+        prizePoolId: "sample-helmet-pool",
+        publicTitle: "Cafe Classico Helmet",
+        publicDescription: "A full-face helmet for safer everyday rides.",
+        publicImageMediaId: "sample-raffle-helmet-photo-v1",
+      },
     }],
     ongoingCampaigns: [{
       giveawayId: "ongoing-sample-raffle",
@@ -106,8 +116,41 @@ function exactFinalInspection(
       drawCount: 0,
       awardCount: 0,
       resultCount: 0,
+      presentation: {
+        mechanics: "Registered event riders may enter once while the raffle is open.",
+        terms:
+          "One winner will receive the Weekend Rider Gear Package. The organizer will announce and contact the winner after the draw.",
+        prizePoolId: "sample-rider-gear-pool",
+        publicTitle: "Weekend Rider Gear Package",
+        publicDescription: "Helmet, riding gloves, and Tambike gear for your next ride.",
+        publicImageMediaId: "sample-raffle-gear-photo-v1",
+      },
     }],
   } as RichTargetInspection;
+}
+
+function stalePresentationInspection(): RichTargetInspection {
+  const inspection = structuredClone(exactFinalInspection());
+  const completed = inspection.completedCampaigns[0];
+  const ongoing = inspection.ongoingCampaigns[0];
+  completed.winnerAlias = "Raffle Sample Rider";
+  completed.publicWinnerAliases = ["Raffle Sample Rider"];
+  completed.currentAwards[0].winnerAlias = "Raffle Sample Rider";
+  completed.presentation = {
+    ...completed.presentation!,
+    mechanics: "One designated demo rider entry is selected for this sample raffle.",
+    terms: "Sample raffle for demonstrating a completed Tambike winner flow.",
+    publicDescription: undefined,
+    publicImageMediaId: undefined,
+  };
+  ongoing.presentation = {
+    ...ongoing.presentation!,
+    mechanics: "Registered event riders may enter once while this sample raffle is open.",
+    terms: "Sample ongoing raffle. No winner has been selected.",
+    publicDescription: undefined,
+    publicImageMediaId: undefined,
+  };
+  return inspection;
 }
 
 function partialInspection(): SampleRaffleTargetInspection {
@@ -132,11 +175,15 @@ function partialInspection(): SampleRaffleTargetInspection {
 function fakeDependencies(options: FakeOptions = {}) {
   const calls: string[] = [];
   let inspectionCount = 0;
+  let presentationRefreshed = false;
   const dependencies: SampleRaffleProvisionerDependencies = {
     async inspectTarget(manifest) {
       calls.push("inspectTarget");
       if (options.failAt === "inspectTarget") throw new Error("inspection failed");
       inspectionCount += 1;
+      if (presentationRefreshed) {
+        return options.finalInspection ?? exactFinalInspection(manifest);
+      }
       return options.inspection ?? (
         inspectionCount === 3
           ? (options.finalInspection ?? exactFinalInspection(manifest))
@@ -222,6 +269,10 @@ function fakeDependencies(options: FakeOptions = {}) {
     },
     async openOngoingCampaign() {
       calls.push("openOngoingCampaign");
+    },
+    async refreshExistingPresentation() {
+      calls.push("refreshExistingPresentation");
+      presentationRefreshed = true;
     },
     async finish() {
       calls.push("finish");
@@ -486,6 +537,26 @@ describe("sample raffle provisioner safety", () => {
         changed: false,
       });
     expect(dependencies.calls).not.toContain("createWinner");
+    expect(dependencies.calls).not.toContain("refreshExistingPresentation");
+  });
+
+  test("refreshes an exact existing lifecycle without creating duplicate campaigns", async () => {
+    const dependencies = fakeDependencies({
+      inspection: stalePresentationInspection(),
+      finalInspection: exactFinalInspection(),
+    });
+
+    await expect(provisionSampleRaffles(validInput(), dependencies))
+      .resolves.toMatchObject({
+        eventId: SAMPLE_RAFFLE_EVENT_ID,
+        completed: { winnerAlias: "Cafe Classico Rider" },
+        ongoing: { state: "open" },
+        changed: true,
+      });
+
+    expect(dependencies.calls).toContain("refreshExistingPresentation");
+    expect(dependencies.calls).not.toContain("createCompletedCampaign");
+    expect(dependencies.calls).not.toContain("createOngoingCampaign");
   });
 
   test("fails closed on a conflicting or partial sample campaign", async () => {
@@ -501,6 +572,7 @@ describe("sample raffle provisioner safety", () => {
     }],
     ["completed campaign has more than one current award", (inspection: RichTargetInspection) => {
       inspection.completedCampaigns[0].currentAwards.push({
+        awardId: "second-sample-award",
         status: "fulfilled",
         winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
         winnerAliasPublished: true,
@@ -611,6 +683,8 @@ test("runs the completed and ongoing raffle lifecycle in the required safe order
     "submitOngoingCampaign",
     "approveOngoingCampaign",
     "openOngoingCampaign",
+    "inspectTarget",
+    "refreshExistingPresentation",
     "inspectTarget",
     "releaseLock",
     "finish",
