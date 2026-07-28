@@ -22,12 +22,21 @@ const memberPreview: EventAttendeePreviewData = {
       slug: "mika-santos",
       displayName: "Mika Santos",
       area: "Davao City",
-      profilePhotoUrl: "/media/mika",
+      bikePhoto: {
+        url: "/media/bike-mika",
+        width: 1200,
+        height: 800,
+      },
     },
     {
       slug: "paolo-reyes",
       displayName: "Paolo Reyes",
       area: "Quezon City",
+      bikePhoto: {
+        url: "/media/bike-paolo",
+        width: 1200,
+        height: 800,
+      },
     },
   ],
   unavailable: false,
@@ -49,7 +58,7 @@ function render(
 }
 
 describe("event attendee preview", () => {
-  test("shows public rider links without a login gate or long name list", () => {
+  test("shows public bike links without a login gate or long name list", () => {
     const markup = render(memberPreview);
 
     expect(markup).toContain('href="/riders/mika-santos"');
@@ -57,9 +66,12 @@ describe("event attendee preview", () => {
     expect(markup).toContain("See who’s going");
     expect(markup).not.toContain("Log in to see riders");
     expect(markup).not.toContain("Mika Santos, Paolo Reyes");
-    expect(markup).toContain('src="/media/mika"');
+    expect(markup).toContain('src="/media/bike-mika"');
+    expect(markup).toContain('src="/media/bike-paolo"');
+    expect(markup).toContain("View Mika Santos’s bike and rider profile");
+    expect(markup).not.toContain("/media/mika");
     expect(markup).not.toMatch(
-      /anonymous riders|visible riders|email|userId|verification|motorcycle/i,
+      /anonymous riders|visible riders|profilePhoto|email|userId|verification|make|model/i,
     );
   });
 
@@ -100,7 +112,7 @@ describe("event attendee preview", () => {
     expect(markup).toContain("See who’s going");
   });
 
-  test("replaces a failed portrait with the rider initial", async () => {
+  test("removes a failed bike tile without substituting an initial", async () => {
     (
       globalThis as typeof globalThis & {
         IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -122,38 +134,26 @@ describe("event attendee preview", () => {
           }),
         );
       });
-      const image = container.querySelector('img[src$="/media/mika"]');
-      expect(image).not.toBeNull();
+      const failedImage = container.querySelector(
+        'img[src$="/media/bike-mika"]',
+      );
+      expect(failedImage).not.toBeNull();
 
       await act(async () => {
-        image!.dispatchEvent(new Event("error"));
+        failedImage!.dispatchEvent(new Event("error"));
       });
 
-      const mikaLink = container.querySelector(
-        'a[href="/riders/mika-santos"]',
-      );
-      expect(mikaLink?.querySelector("img")).toBeNull();
-      expect(mikaLink?.textContent).toBe("M");
+      expect(
+        container.querySelector('a[href="/riders/mika-santos"]'),
+      ).toBeNull();
+      expect(
+        container.querySelector('a[href="/riders/paolo-reyes"]'),
+      ).not.toBeNull();
+      expect(container.textContent).not.toContain(">M<");
     } finally {
       await act(async () => root.unmount());
       container.remove();
     }
-  });
-
-  test("uses the first non-whitespace character when a rider has no portrait", () => {
-    const markup = render({
-      ...memberPreview,
-      attendees: [
-        {
-          slug: "mika-santos",
-          displayName: "  Mika Santos",
-          area: "Davao City",
-        },
-      ],
-    });
-
-    expect(markup).toContain('href="/riders/mika-santos"');
-    expect(markup).toContain(">M</span>");
   });
 
   test.each([

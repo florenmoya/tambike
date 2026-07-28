@@ -48,8 +48,11 @@ export function EventAttendeePreview({
   const rosterEnabled = preview?.summary?.rosterEnabled !== false;
   const riders = rosterEnabled ? preview?.attendees.slice(0, 4) ?? [] : [];
   const canOpenRoster = rosterEnabled;
-  const [failedPhotos, setFailedPhotos] = useState<Set<string>>(
+  const [failedBikePhotos, setFailedBikePhotos] = useState<Set<string>>(
     () => new Set(),
+  );
+  const bikeRiders = riders.filter(
+    (rider) => !failedBikePhotos.has(rider.slug),
   );
 
   return (
@@ -60,42 +63,33 @@ export function EventAttendeePreview({
         <p>{interested} interested · Around {expected} expected</p>
       </div>
 
-      {riders.length > 0 ? (
+      {bikeRiders.length > 0 ? (
         <div className={styles.riderSummary}>
-          <div className={styles.facepile} aria-label="Featured attendees">
-            {riders.map((rider) => {
-              const photoFailed = failedPhotos.has(rider.slug);
-              const initial = rider.displayName.trim().charAt(0).toUpperCase() || "R";
-
-              return (
-                <Link
-                  key={rider.slug}
-                  className={styles.rider}
-                  href={`/riders/${rider.slug}`}
-                  aria-label={`View ${rider.displayName}’s rider profile`}
-                >
-                  {rider.profilePhotoUrl && !photoFailed ? (
-                    <Image
-                      src={rider.profilePhotoUrl}
-                      alt=""
-                      width={52}
-                      height={52}
-                      sizes="52px"
-                      unoptimized
-                      onError={() => {
-                        setFailedPhotos((current) => {
-                          const next = new Set(current);
-                          next.add(rider.slug);
-                          return next;
-                        });
-                      }}
-                    />
-                  ) : (
-                    <span aria-hidden="true">{initial}</span>
-                  )}
-                </Link>
-              );
-            })}
+          <div className={styles.bikeGrid} aria-label="Featured attendee bikes">
+            {bikeRiders.map((rider) => (
+              <Link
+                key={rider.slug}
+                className={styles.bikeTile}
+                href={`/riders/${rider.slug}`}
+                aria-label={`View ${rider.displayName}’s bike and rider profile`}
+              >
+                <Image
+                  src={rider.bikePhoto.url}
+                  alt=""
+                  width={rider.bikePhoto.width}
+                  height={rider.bikePhoto.height}
+                  sizes="(max-width: 430px) calc((100vw - 3.7rem) / 2), 170px"
+                  unoptimized
+                  onError={() => {
+                    setFailedBikePhotos((current) => {
+                      const next = new Set(current);
+                      next.add(rider.slug);
+                      return next;
+                    });
+                  }}
+                />
+              </Link>
+            ))}
           </div>
         </div>
       ) : rosterEnabled && !preview?.unavailable ? (
