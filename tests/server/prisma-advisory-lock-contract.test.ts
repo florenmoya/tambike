@@ -35,4 +35,26 @@ describe("Prisma advisory transaction lock contract", () => {
     expect(end).toBeGreaterThan(start);
     expect(methodSource).not.toContain("Promise.all");
   });
+
+  test("gives complex giveaway configuration transactions an explicit bounded timeout", () => {
+    const createStart = prismaBackend.indexOf("async createGiveaway(");
+    const updateStart = prismaBackend.indexOf(
+      "async updateGiveaway(",
+      createStart,
+    );
+    const listStart = prismaBackend.indexOf(
+      "async listOrganizerGiveaways(",
+      updateStart,
+    );
+
+    expect(prismaBackend).toContain(
+      "timeout: 30_000",
+    );
+    expect(prismaBackend.slice(createStart, updateStart)).toContain(
+      "GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS",
+    );
+    expect(prismaBackend.slice(updateStart, listStart)).toContain(
+      "GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS",
+    );
+  });
 });

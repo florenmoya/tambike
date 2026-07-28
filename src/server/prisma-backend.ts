@@ -365,6 +365,11 @@ const attendanceTypeToDb: Record<AttendanceType, string> = {
   club: "club",
 };
 
+const GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS = {
+  maxWait: 5_000,
+  timeout: 30_000,
+} as const;
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -909,67 +914,79 @@ export class PrismaTambikeBackend {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const event = await this.lockGiveawayEvent(tx, eventId);
-      this.requireGiveawayConfigurator(user, event);
-      this.assertGiveawayEligibilityPerks(event, parsed.eligibilityGroups);
+    return this.prisma.$transaction(
+      async (tx) => {
+        const event = await this.lockGiveawayEvent(tx, eventId);
+        this.requireGiveawayConfigurator(user, event);
+        this.assertGiveawayEligibilityPerks(event, parsed.eligibilityGroups);
 
-      const mechanicsChecksum = this.calculateMechanicsChecksum(
-        parsed.mechanics,
-        parsed.terms,
-        parsed.sponsorDisclosure,
-      );
-      const giveaway = await tx.eventGiveaway.create({
-        data: {
-          id: `giveaway-${randomUUID()}`,
-          eventId: event.id,
-          creatorUserId: user.id,
-          organizerAttestedById: user.id,
-          title: parsed.title,
-          kind: parsed.kind as never,
-          status: "draft",
-          complianceStatus: "draft",
-          entryMode: parsed.entryMode as never,
-          maxEntriesPerRider: parsed.maxEntriesPerRider,
-          presenceVerificationRequired: parsed.presenceVerificationRequired ?? false,
-          visibility: (parsed.publicVisibility ?? "hidden") as never,
-          timeZone: parsed.timeZone,
-          entryOpensAt: this.toOptionalDate(parsed.entryOpensAt),
-          entryClosesAt: this.toOptionalDate(parsed.entryClosesAt),
-          drawAt: this.toOptionalDate(parsed.drawAt),
-          claimDeadlineAt: this.toOptionalDate(parsed.claimDeadlineAt),
-          maxWinsPerRider: parsed.winnerLimits.perRider,
-          maxWinsTotal: parsed.winnerLimits.total,
-          organizerAttestedAt: new Date(),
-          mechanicsVersions: {
-            create: {
-              id: `giveaway-mechanics-${randomUUID()}`,
-              version: 1,
-              mechanics: parsed.mechanics,
-              terms: parsed.terms,
-              sponsorDisclosure: parsed.sponsorDisclosure ?? null,
-              checksum: mechanicsChecksum,
-              createdByUserId: user.id,
+        const mechanicsChecksum = this.calculateMechanicsChecksum(
+          parsed.mechanics,
+          parsed.terms,
+          parsed.sponsorDisclosure,
+        );
+        const giveaway = await tx.eventGiveaway.create({
+          data: {
+            id: `giveaway-${randomUUID()}`,
+            eventId: event.id,
+            creatorUserId: user.id,
+            organizerAttestedById: user.id,
+            title: parsed.title,
+            kind: parsed.kind as never,
+            status: "draft",
+            complianceStatus: "draft",
+            entryMode: parsed.entryMode as never,
+            maxEntriesPerRider: parsed.maxEntriesPerRider,
+            presenceVerificationRequired:
+              parsed.presenceVerificationRequired ?? false,
+            visibility: (parsed.publicVisibility ?? "hidden") as never,
+            timeZone: parsed.timeZone,
+            entryOpensAt: this.toOptionalDate(parsed.entryOpensAt),
+            entryClosesAt: this.toOptionalDate(parsed.entryClosesAt),
+            drawAt: this.toOptionalDate(parsed.drawAt),
+            claimDeadlineAt: this.toOptionalDate(parsed.claimDeadlineAt),
+            maxWinsPerRider: parsed.winnerLimits.perRider,
+            maxWinsTotal: parsed.winnerLimits.total,
+            organizerAttestedAt: new Date(),
+            mechanicsVersions: {
+              create: {
+                id: `giveaway-mechanics-${randomUUID()}`,
+                version: 1,
+                mechanics: parsed.mechanics,
+                terms: parsed.terms,
+                sponsorDisclosure: parsed.sponsorDisclosure ?? null,
+                checksum: mechanicsChecksum,
+                createdByUserId: user.id,
+              },
             },
           },
-        },
-      });
+        });
 
-      await this.replaceGiveawayConfiguration(
-        tx,
-        giveaway.id,
-        parsed.eligibilityGroups,
-        parsed.prizePools,
-        parsed.presenceVerificationRequired ?? false,
-      );
-      const configured = await this.lockGiveawayCampaign(tx, giveaway.id);
-      await this.auditGiveaway(tx, configured.id, user.id, "GIVEAWAY_CREATED", "giveaway", configured.id, {
-        state: configured.status,
-        complianceStatus: configured.complianceStatus,
-        mechanicsVersion: this.currentGiveawayMechanics(configured).version,
-      });
-      return this.toGiveawayCampaignView(configured);
-    });
+        await this.replaceGiveawayConfiguration(
+          tx,
+          giveaway.id,
+          parsed.eligibilityGroups,
+          parsed.prizePools,
+          parsed.presenceVerificationRequired ?? false,
+        );
+        const configured = await this.lockGiveawayCampaign(tx, giveaway.id);
+        await this.auditGiveaway(
+          tx,
+          configured.id,
+          user.id,
+          "GIVEAWAY_CREATED",
+          "giveaway",
+          configured.id,
+          {
+            state: configured.status,
+            complianceStatus: configured.complianceStatus,
+            mechanicsVersion: this.currentGiveawayMechanics(configured).version,
+          },
+        );
+        return this.toGiveawayCampaignView(configured);
+      },
+      GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS,
+    );
   }
 
   async updateGiveaway(sessionToken: string, input: UpdateGiveawayInput) {
@@ -1157,7 +1174,7 @@ export class PrismaTambikeBackend {
         complianceStatus: updated.complianceStatus,
       });
       return this.toGiveawayCampaignView(updated);
-    });
+    }, GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS);
   }
 
   async listOrganizerGiveaways(sessionToken: string, eventId: string) {
