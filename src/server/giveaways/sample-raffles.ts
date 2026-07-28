@@ -18,7 +18,7 @@ export const COMPLETED_SAMPLE_RAFFLE_TITLE = "Cafe Classico Helmet Raffle";
 export const ONGOING_SAMPLE_RAFFLE_TITLE = "Weekend Rider Gear Raffle";
 export const SAMPLE_RAFFLE_WINNER_EMAIL = "raffle.winner.sample@tambike.ph";
 export const SAMPLE_RAFFLE_WINNER_NAME = "Raffle Winner — Sample Rider";
-export const SAMPLE_RAFFLE_WINNER_ALIAS = "Raffle Sample Rider";
+export const SAMPLE_RAFFLE_WINNER_ALIAS = "Cafe Classico Rider";
 
 export interface SampleRaffleManifest {
   eventId: string;
@@ -210,8 +210,9 @@ export function completedSampleRaffleInput(
     kind: "raffle",
     entryMode: "manual_only",
     maxEntriesPerRider: 1,
-    mechanics: "One designated demo rider entry is selected for this sample raffle.",
-    terms: "Sample raffle for demonstrating a completed Tambike winner flow.",
+    mechanics: "One eligible rider was selected from valid entries.",
+    terms:
+      "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
     timeZone: "Asia/Manila",
     winnerLimits: { perRider: 1, total: 1 },
     organizerAttestation: true,
@@ -229,6 +230,7 @@ export function completedSampleRaffleInput(
         publicPresentation: {
           disclosure: "revealed",
           title: "Cafe Classico Helmet",
+          description: "A full-face helmet for safer everyday rides.",
         },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Cafe Classico Helmet" }],
@@ -246,8 +248,9 @@ export function ongoingSampleRaffleInput(
     kind: "raffle",
     entryMode: "opt_in",
     maxEntriesPerRider: 1,
-    mechanics: "Registered event riders may enter once while this sample raffle is open.",
-    terms: "Sample ongoing raffle. No winner has been selected.",
+    mechanics: "Registered event riders may enter once while the raffle is open.",
+    terms:
+      "One winner will receive the Weekend Rider Gear Package. The organizer will announce and contact the winner after the draw.",
     timeZone: "Asia/Manila",
     winnerLimits: { perRider: 1, total: 1 },
     organizerAttestation: true,
@@ -265,6 +268,7 @@ export function ongoingSampleRaffleInput(
         publicPresentation: {
           disclosure: "revealed",
           title: "Weekend Rider Gear Package",
+          description: "Helmet, riding gloves, and Tambike gear for your next ride.",
         },
         inventory: { kind: "finite", quantity: 1 },
         items: [{ title: "Weekend Rider Gear Package" }],

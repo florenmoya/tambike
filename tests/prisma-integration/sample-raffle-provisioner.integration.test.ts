@@ -131,7 +131,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         completed: {
           state: "completed",
           winnerCount: 1,
-          winnerAlias: "Raffle Sample Rider",
+          winnerAlias: "Cafe Classico Rider",
         },
         ongoing: { state: "open", winnerCount: 0 },
         changed: true,
@@ -185,7 +185,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         awards: [{
           isCurrent: true,
           status: "fulfilled",
-          publicWinnerAlias: "Raffle Sample Rider",
+          publicWinnerAlias: "Cafe Classico Rider",
           winner: { email: manifest.winnerEmail },
         }],
       });

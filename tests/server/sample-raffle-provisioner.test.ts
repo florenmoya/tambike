@@ -274,22 +274,37 @@ describe("sample raffle provisioner safety", () => {
     const completed = completedSampleRaffleInput();
     const ongoing = ongoingSampleRaffleInput();
 
+    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Cafe Classico Rider");
+    expect(completed.mechanics).toBe(
+      "One eligible rider was selected from valid entries.",
+    );
+    expect(completed.terms).toBe(
+      "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+    );
     expect(completed.prizePools).toEqual([
       expect.objectContaining({
         title: "Helmet",
         publicPresentation: {
           disclosure: "revealed",
           title: "Cafe Classico Helmet",
+          description: "A full-face helmet for safer everyday rides.",
         },
         items: [{ title: "Cafe Classico Helmet" }],
       }),
     ]);
+    expect(ongoing.mechanics).toBe(
+      "Registered event riders may enter once while the raffle is open.",
+    );
+    expect(ongoing.terms).toBe(
+      "One winner will receive the Weekend Rider Gear Package. The organizer will announce and contact the winner after the draw.",
+    );
     expect(ongoing.prizePools).toEqual([
       expect.objectContaining({
         title: "Rider gear package",
         publicPresentation: {
           disclosure: "revealed",
           title: "Weekend Rider Gear Package",
+          description: "Helmet, riding gloves, and Tambike gear for your next ride.",
         },
         items: [{ title: "Weekend Rider Gear Package" }],
       }),
