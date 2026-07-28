@@ -433,6 +433,12 @@ function hasExpectedDraftPair(
   );
 }
 
+export function expectedSampleRafflePresentationComplianceStatus(
+  state: string,
+) {
+  return state === "draft" ? "draft" : "approved";
+}
+
 function validateInput(input: SampleRaffleProvisioningInput) {
   if (!input.confirmedProduction) throw new SampleRaffleProvisioningError("PRODUCTION_CONFIRMATION_REQUIRED");
   if (input.databaseTargetPresent !== true) throw new SampleRaffleProvisioningError("DATABASE_TARGET_REQUIRED");
@@ -461,9 +467,12 @@ export async function provisionSampleRaffles(
   if (existingReceipt) return existingReceipt;
   const firstHasReplaceableLifecycle =
     hasExpectedSampleLifecycle(firstInspection, manifest);
+  const firstHasRecoverableDraftPair =
+    hasExpectedDraftPair(firstInspection, manifest);
   if (
     !hasNoSampleCampaigns(firstInspection) &&
-    !firstHasReplaceableLifecycle
+    !firstHasReplaceableLifecycle &&
+    !firstHasRecoverableDraftPair
   ) {
     throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
   }
@@ -472,7 +481,11 @@ export async function provisionSampleRaffles(
       "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED",
     );
   }
-  if (hasNoSampleCampaigns(firstInspection) || firstHasReplaceableLifecycle) {
+  if (
+    hasNoSampleCampaigns(firstInspection) ||
+    firstHasReplaceableLifecycle ||
+    firstHasRecoverableDraftPair
+  ) {
     validateCreationCredentials(input);
     if (!input.drawEncryptionKeyPresent) {
       throw new SampleRaffleProvisioningError("DRAW_ENCRYPTION_KEY_REQUIRED");
@@ -487,14 +500,19 @@ export async function provisionSampleRaffles(
     }
     const lockedReceipt = finalReceipt(lockedInspection, manifest, false);
     if (lockedReceipt) return lockedReceipt;
+    const lockedHasExpectedLifecycle =
+      hasExpectedSampleLifecycle(lockedInspection, manifest);
+    const lockedHasExpectedDraftPair =
+      hasExpectedDraftPair(lockedInspection, manifest);
     if (
       !hasNoSampleCampaigns(lockedInspection) &&
-      !hasExpectedSampleLifecycle(lockedInspection, manifest)
+      !lockedHasExpectedLifecycle &&
+      !lockedHasExpectedDraftPair
     ) {
       throw new SampleRaffleProvisioningError("CONFLICTING_SAMPLE_STATE");
     }
 
-    if (hasExpectedSampleLifecycle(lockedInspection, manifest)) {
+    if (lockedHasExpectedLifecycle) {
       if (input.replaceExisting !== true) {
         throw new SampleRaffleProvisioningError(
           "IMMUTABLE_SAMPLE_PRESENTATION_REPLACEMENT_REQUIRED",
@@ -531,8 +549,18 @@ export async function provisionSampleRaffles(
     }
 
     await dependencies.ensureWinnerRegistration(winner, manifest.eventId);
-    const completed = await dependencies.createCompletedCampaign(organizer, completedSampleRaffleInput(manifest));
-    const ongoing = await dependencies.createOngoingCampaign(organizer, ongoingSampleRaffleInput(manifest));
+    const completed = lockedHasExpectedDraftPair
+      ? { giveawayId: lockedInspection.completedCampaigns[0].giveawayId }
+      : await dependencies.createCompletedCampaign(
+          organizer,
+          completedSampleRaffleInput(manifest),
+        );
+    const ongoing = lockedHasExpectedDraftPair
+      ? { giveawayId: lockedInspection.ongoingCampaigns[0].giveawayId }
+      : await dependencies.createOngoingCampaign(
+          organizer,
+          ongoingSampleRaffleInput(manifest),
+        );
     const draftInspection = await dependencies.inspectTarget(manifest);
     if (!hasExpectedDraftPair(draftInspection, manifest)) {
       throw new SampleRaffleProvisioningError("FINAL_INVARIANT_FAILED");
@@ -911,67 +939,67 @@ export async function createPrismaSampleRaffleProvisioner(
   };
 
   const inspectTarget = async (): Promise<SampleRaffleTargetInspection> => {
-    const [event, dedicatedWinner, campaigns] = await Promise.all([
-      inspectionPrisma.event.findUnique({
-        where: { id: manifest.eventId },
-        select: {
-          status: true,
-          organizer: { select: { userId: true, user: { select: { email: true } } } },
+    const event = await inspectionPrisma.event.findUnique({
+      where: { id: manifest.eventId },
+      select: {
+        status: true,
+        organizer: {
+          select: { userId: true, user: { select: { email: true } } },
         },
-      }),
-      inspectionPrisma.user.findUnique({
-        where: { email: manifest.winnerEmail },
-        select: { id: true },
-      }),
-      inspectionPrisma.eventGiveaway.findMany({
-        where: {
-          eventId: manifest.eventId,
-          title: { in: [manifest.completedTitle, manifest.ongoingTitle] },
-        },
-        orderBy: { id: "asc" },
-        select: {
-          id: true,
-          title: true,
-          status: true,
-          complianceStatus: true,
-          mechanicsVersions: {
-            orderBy: { version: "desc" },
-            take: 1,
-            select: {
-              mechanics: true,
-              terms: true,
-            },
-          },
-          prizePools: {
-            orderBy: { position: "asc" },
-            take: 1,
-            select: {
-              id: true,
-              publicTitle: true,
-              publicDescription: true,
-              publicImage: { select: { mediaId: true } },
-            },
-          },
-          snapshot: { select: { id: true } },
-          draws: {
-            orderBy: { id: "asc" },
-            select: { status: true },
-          },
-          awards: {
-            orderBy: { id: "asc" },
-            select: {
-              id: true,
-              status: true,
-              isCurrent: true,
-              winnerUserId: true,
-              publicWinnerAlias: true,
-              winnerAliasOptedInAt: true,
-              winnerAliasRevokedAt: true,
-            },
+      },
+    });
+    const dedicatedWinner = await inspectionPrisma.user.findUnique({
+      where: { email: manifest.winnerEmail },
+      select: { id: true },
+    });
+    const campaigns = await inspectionPrisma.eventGiveaway.findMany({
+      where: {
+        eventId: manifest.eventId,
+        title: { in: [manifest.completedTitle, manifest.ongoingTitle] },
+      },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        complianceStatus: true,
+        mechanicsVersions: {
+          orderBy: { version: "desc" },
+          take: 1,
+          select: {
+            mechanics: true,
+            terms: true,
           },
         },
-      }),
-    ]);
+        prizePools: {
+          orderBy: { position: "asc" },
+          take: 1,
+          select: {
+            id: true,
+            publicTitle: true,
+            publicDescription: true,
+            publicImage: { select: { mediaId: true } },
+          },
+        },
+        snapshot: { select: { id: true } },
+        draws: {
+          orderBy: { id: "asc" },
+          select: { status: true },
+        },
+        awards: {
+          orderBy: { id: "asc" },
+          select: {
+            id: true,
+            status: true,
+            isCurrent: true,
+            winnerUserId: true,
+            publicWinnerAlias: true,
+            winnerAliasOptedInAt: true,
+            winnerAliasRevokedAt: true,
+          },
+        },
+      },
+    });
     hostOrganizerUserId = event?.organizer.userId;
     hostOrganizerEmail = event?.organizer.user.email;
 
@@ -1163,7 +1191,10 @@ export async function createPrismaSampleRaffleProvisioner(
           campaign.eventId !== input.manifest.eventId ||
           campaign.title !== target.inspection.title ||
           campaign.status !== target.expectedState ||
-          campaign.complianceStatus !== "approved" ||
+          campaign.complianceStatus !==
+            expectedSampleRafflePresentationComplianceStatus(
+              target.expectedState,
+            ) ||
           !currentMechanics ||
           !prizePool ||
           prizePool.id !== presentation.prizePoolId
@@ -1339,6 +1370,9 @@ export async function createPrismaSampleRaffleProvisioner(
           },
         });
       }
+    }, {
+      maxWait: 5_000,
+      timeout: 30_000,
     });
   };
 

@@ -8,6 +8,7 @@ import {
   SAMPLE_RAFFLE_WINNER_ALIAS,
   completedSampleRaffleInput,
   createDedicatedSampleRaffleLock,
+  expectedSampleRafflePresentationComplianceStatus,
   ongoingSampleRaffleInput,
   productionSampleRaffleManifest,
   provisionSampleRaffles,
@@ -433,6 +434,19 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 }
 
 describe("sample raffle provisioner safety", () => {
+  test.each([
+    ["draft", "draft"],
+    ["open", "approved"],
+    ["completed", "approved"],
+  ])(
+    "expects %s raffle presentation persistence to use %s compliance",
+    (state, expected) => {
+      expect(
+        expectedSampleRafflePresentationComplianceStatus(state),
+      ).toBe(expected);
+    },
+  );
+
   test("publishes explicit prize names without changing the sample inventory", () => {
     const completed = completedSampleRaffleInput();
     const ongoing = ongoingSampleRaffleInput();
@@ -714,6 +728,24 @@ describe("sample raffle provisioner safety", () => {
       .toBeLessThan(dependencies.calls.indexOf("submitCompletedCampaign"));
     expect(dependencies.calls.indexOf("prepareCreatedPresentation"))
       .toBeLessThan(dependencies.calls.indexOf("grantCompletedEntry"));
+  });
+
+  test("resumes an exact draft pair without creating duplicate campaigns", async () => {
+    const dependencies = fakeDependencies({
+      inspection: draftCreatedInspection(),
+    });
+
+    await expect(
+      provisionSampleRaffles(validInput(), dependencies),
+    ).resolves.toMatchObject({
+      completed: { state: "completed", winnerCount: 1 },
+      ongoing: { state: "open", winnerCount: 0 },
+      changed: true,
+    });
+
+    expect(dependencies.calls).not.toContain("createCompletedCampaign");
+    expect(dependencies.calls).not.toContain("createOngoingCampaign");
+    expect(dependencies.calls).toContain("prepareCreatedPresentation");
   });
 
   test("fails closed on a conflicting or partial sample campaign", async () => {
