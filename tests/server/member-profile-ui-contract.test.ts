@@ -393,18 +393,17 @@ describe("member profile App Router and UI contracts", () => {
     expect(profileSettingsSource).toMatch(/handleProfileSave = async \(formData: FormData\)/);
   });
 
-  test("uploads directly with browser FormData and reports progress accessibly", () => {
+  test("starts profile photo upload from file selection without a second button", () => {
     const uploader = source("src/features/member-profiles/member-media-uploader.tsx");
 
-    expect(uploader).toContain("/api/member-media/uploads");
-    expect(uploader).toContain("new FormData()");
-    expect(uploader).toMatch(/fetch\(presign\.url/);
-    expect(uploader).toContain("finalizeMemberMediaAction");
+    expect(uploader).toContain("Choose profile photo");
+    expect(uploader).toContain(
+      "Optional · Square images work best · JPEG, PNG, or WebP · Up to 8 MB.",
+    );
+    expect(uploader).toContain("void uploadSelected(selected)");
     expect(uploader).toContain('aria-live="polite"');
-    expect(uploader).toMatch(/Avatar photo/);
-    expect(uploader).toMatch(/Motorcycle photo/);
-    expect(uploader).toMatch(/Maximum 5 motorcycle photos/);
-    expect(uploader).toContain('disabled={pending || (purpose === "motorcycle-photo" && photoCount >= 5)}');
+    expect(uploader).toContain("selectedPreviewUrl");
+    expect(uploader).not.toContain("Upload avatar photo");
   });
 
   test("keeps motorcycle photo controls keyboard-operable and explicitly labeled", () => {

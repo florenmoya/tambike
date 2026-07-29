@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type Ref } from "react";
-import { ImagePlus, LoaderCircle } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { finalizeMemberMediaAction } from "@/server/actions";
@@ -223,8 +221,6 @@ export function memberMediaUploadFailure(error: unknown) {
 }
 
 export function MemberMediaUploader({
-  purpose,
-  photos,
   onUploaded,
 }: {
   purpose: UploadPurpose;
@@ -234,14 +230,9 @@ export function MemberMediaUploader({
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedPreviewUrlRef = useRef<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState(false);
-  const isMotorcyclePhoto = purpose === "motorcycle-photo";
-  const photoLimitReached = isMotorcyclePhoto && photos.length >= 5;
-  const fileError = file ? validateMemberMediaFile(file) : null;
-  const label = isMotorcyclePhoto ? "Motorcycle photo" : "Avatar photo";
 
   const clearSelectedPreview = () => {
     if (selectedPreviewUrlRef.current) {
@@ -251,44 +242,40 @@ export function MemberMediaUploader({
     setSelectedPreviewUrl(null);
   };
 
-  const selectFile = (selected: File | null) => {
-    if (!isMotorcyclePhoto) {
-      clearSelectedPreview();
-      if (selected) {
-        const previewUrl = URL.createObjectURL(selected);
-        selectedPreviewUrlRef.current = previewUrl;
-        setSelectedPreviewUrl(previewUrl);
-      }
-    }
-    setFile(selected);
-    setStatus(selected ? validateMemberMediaFile(selected) ?? "" : "");
-  };
-
   useEffect(() => () => {
     if (selectedPreviewUrlRef.current) URL.revokeObjectURL(selectedPreviewUrlRef.current);
   }, []);
 
-  const upload = async () => {
-    if (!file || photoLimitReached) return;
-    setPending(true);
+  const uploadSelected = async (selected: File | null) => {
+    clearSelectedPreview();
+    setStatus("");
+    if (!selected) return;
 
+    const previewUrl = URL.createObjectURL(selected);
+    selectedPreviewUrlRef.current = previewUrl;
+    setSelectedPreviewUrl(previewUrl);
+
+    const validationError = validateMemberMediaFile(selected);
+    if (validationError) {
+      setStatus(validationError);
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+
+    setPending(true);
     try {
-      await performMemberMediaUpload({
-        file,
-        purpose,
-        motorcyclePhotoPosition: isMotorcyclePhoto ? photos.length : undefined,
-      }, {
+      await performMemberMediaUpload({ file: selected, purpose: "avatar" }, {
         fetchImpl: fetch,
         finalize: finalizeMemberMediaAction,
         onStatus: setStatus,
       });
       await onUploaded();
-      setFile(null);
       clearSelectedPreview();
       if (inputRef.current) inputRef.current.value = "";
-      setStatus(`${label} uploaded.`);
+      setStatus("Profile photo uploaded.");
     } catch (error) {
       setStatus(memberMediaUploadFailure(error).message);
+      if (inputRef.current) inputRef.current.value = "";
     } finally {
       setPending(false);
     }
@@ -296,27 +283,21 @@ export function MemberMediaUploader({
 
   return (
     <div className="member-media-uploader">
-      <Label htmlFor={inputId}>{label}</Label>
-      <p>
-        {isMotorcyclePhoto
-          ? "JPEG, PNG, or WebP · up to 8 MB · Maximum 5 motorcycle photos."
-          : "Square images work best. JPEG, PNG, or WebP · up to 8 MB."}
-      </p>
+      <Label htmlFor={inputId}>Choose profile photo</Label>
+      <p>Optional · Square images work best · JPEG, PNG, or WebP · Up to 8 MB.</p>
       <div className="member-media-uploader__controls">
         <MemberMediaFileChooser
           inputRef={inputRef}
           inputId={inputId}
-          purpose={purpose}
-          photoCount={photos.length}
+          purpose="avatar"
+          photoCount={0}
           pending={pending}
-          onFileSelected={selectFile}
+          onFileSelected={(selected) => {
+            void uploadSelected(selected);
+          }}
         />
-        <Button type="button" onClick={upload} disabled={!file || Boolean(fileError) || pending || photoLimitReached}>
-          {pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <ImagePlus aria-hidden="true" />}
-          {pending ? "Uploading…" : `Upload ${label.toLowerCase()}`}
-        </Button>
       </div>
-      {!isMotorcyclePhoto && selectedPreviewUrl ? (
+      {selectedPreviewUrl ? (
         // Local object URLs are not eligible for the persisted-media Image component.
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -324,9 +305,6 @@ export function MemberMediaUploader({
           src={selectedPreviewUrl}
           alt="Selected avatar preview"
         />
-      ) : null}
-      {photoLimitReached ? (
-        <p className="member-media-uploader__limit">Five photos added. Delete one before choosing another.</p>
       ) : null}
       <p className="member-media-uploader__status" aria-live="polite">{status}</p>
     </div>
