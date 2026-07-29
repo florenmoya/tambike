@@ -219,25 +219,39 @@ export function MotorcyclePhotoWorkspace({
               height={photo.height || 600}
               sizes="(max-width: 640px) 45vw, 280px"
             />
-            <span className={styles.motorcyclePhotoCardLabel}>{index === 0 ? "Cover" : `Photo ${index + 1}`}</span>
+            <div className={styles.motorcyclePhotoCardMeta}>
+              <span>Photo {index + 1} of {photos.length}</span>
+              {index === 0 ? <strong>Cover photo</strong> : null}
+            </div>
             <div className={styles.motorcyclePhotoActions}>
+              {index > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label={`Set motorcycle photo ${index + 1} as cover`}
+                  disabled={mediaPending}
+                  onClick={() => void onReorder(index, 0)}
+                >
+                  Set as cover
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
-                aria-label={`Move motorcycle photo ${index + 1} earlier`}
+                aria-label={`Move motorcycle photo ${index + 1} left`}
                 disabled={mediaPending || index === 0}
                 onClick={() => void onMove(index, -1)}
               >
-                Move earlier
+                Move left
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                aria-label={`Move motorcycle photo ${index + 1} later`}
+                aria-label={`Move motorcycle photo ${index + 1} right`}
                 disabled={mediaPending || index === photos.length - 1}
                 onClick={() => void onMove(index, 1)}
               >
-                Move later
+                Move right
               </Button>
               <Button
                 type="button"

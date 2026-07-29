@@ -336,9 +336,27 @@ describe("member profile App Router and UI contracts", () => {
   test("keeps motorcycle photo controls keyboard-operable and explicitly labeled", () => {
     const workspace = source("src/features/member-profiles/motorcycle-photo-workspace.tsx");
 
-    expect(workspace).toMatch(/<Button[\s\S]*?Move [^"{]*(?:left|right|earlier|later)/i);
+    expect(workspace).toMatch(/<Button[\s\S]*?Move [^"{]*(?:left|right)/i);
     expect(workspace).toMatch(/<Button[\s\S]*?Delete motorcycle photo/i);
     expect(workspace).not.toMatch(/<div[^>]+onClick=/);
+  });
+
+  test("names saved-photo actions by their visible result", () => {
+    const workspace = source(
+      "src/features/member-profiles/motorcycle-photo-workspace.tsx",
+    );
+
+    expect(workspace).toContain("Set as cover");
+    expect(workspace).toContain("Move left");
+    expect(workspace).toContain("Move right");
+    expect(workspace).toContain("Cover photo");
+    expect(workspace).toMatch(/Photo\s*\{index \+ 1\}\s*of\s*\{photos.length\}/);
+    expect(workspace).toContain("onReorder(index, 0)");
+    expect(workspace).toMatch(/Set motorcycle photo \$\{index \+ 1\} as cover/);
+    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} left/);
+    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} right/);
+    expect(workspace).not.toContain("Move earlier");
+    expect(workspace).not.toContain("Move later");
   });
 
   test("offers a multi-file drag and drop motorcycle workspace", () => {
@@ -359,8 +377,8 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).toMatch(/Cover/);
     expect(workspace).toMatch(/Retry/);
     expect(workspace).toMatch(/Remove/);
-    expect(workspace).toMatch(/Move motorcycle photo .* earlier/);
-    expect(workspace).toMatch(/Move motorcycle photo .* later/);
+    expect(workspace).toMatch(/Move motorcycle photo .* left/);
+    expect(workspace).toMatch(/Move motorcycle photo .* right/);
   });
 
   test("keeps a finalized refresh error locked to refresh-only recovery", () => {
