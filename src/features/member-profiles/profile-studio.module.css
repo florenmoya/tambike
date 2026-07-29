@@ -6,6 +6,10 @@
   border-radius: 0.5rem;
 }
 
+:global(.ambient-main):has(.studio) {
+  overflow: visible;
+}
+
 :global(.buy-view):has(.studio) {
   overflow: visible;
 }

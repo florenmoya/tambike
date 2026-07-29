@@ -110,6 +110,9 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toContain(".studio");
     expect(styles).toContain(".motorcyclePhotoCardCover");
     expect(styles).toMatch(
+      /:global\(\.ambient-main\):has\(\.studio\)\s*\{[\s\S]*?overflow:\s*visible;/,
+    );
+    expect(styles).toMatch(
       /:global\(\.buy-view\):has\(\.studio\)\s*\{[\s\S]*?overflow:\s*visible;/,
     );
     expect(styles).toMatch(
