@@ -6,17 +6,26 @@ import { ImagePlus, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { finalizeMemberMediaAction } from "@/server/actions";
-import { MemberMediaDropInput, performMemberMediaUpload } from "./member-media-uploader";
+import {
+  memberMediaUploadFailure,
+  MemberMediaDropInput,
+  performMemberMediaUpload,
+} from "./member-media-uploader";
 import { MemberMediaImage } from "./member-profile-screen";
 import {
-  enqueueMotorcyclePhotoFiles,
-  nextReadyMotorcyclePhoto,
+  createMotorcyclePhotoPreviewRegistry,
+  createMotorcyclePhotoQueueDescriptors,
+  createMotorcyclePhotoUploadScheduler,
+  enqueueMotorcyclePhotoDescriptors,
+} from "./motorcycle-photo-upload-orchestrator";
+import {
   patchMotorcyclePhotoQueueItem,
-  removeMotorcyclePhotoQueueItem,
   type MotorcyclePhotoQueueItem,
 } from "./motorcycle-photo-queue";
 import styles from "./profile-studio.module.css";
 import type { MotorcycleShowcase } from "./types";
+
+// The extracted scheduler selects nextReadyMotorcyclePhoto without coupling that policy to React state updates.
 
 export interface MotorcyclePhotoWorkspaceProps {
   photos: MotorcycleShowcase["photos"];
@@ -60,28 +69,31 @@ export function MotorcyclePhotoWorkspace({
   const [queue, setQueue] = useState<MotorcyclePhotoQueueItem[]>([]);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const queueRef = useRef(queue);
-  const uploadInFlight = useRef(false);
+  const schedulerRef = useRef<ReturnType<typeof createMotorcyclePhotoUploadScheduler> | null>(null);
+  const [previewRegistry] = useState(() => createMotorcyclePhotoPreviewRegistry(URL.revokeObjectURL));
 
   const availableSlots = Math.max(0, 5 - photos.length - activeQueueCount(queue));
   const queueSummary = queueStatus(queue);
 
   const addFiles = (files: File[]) => {
     if (disabled || files.length === 0) return;
-    setQueue((current) => enqueueMotorcyclePhotoFiles({
-      current,
+    const descriptors = createMotorcyclePhotoQueueDescriptors({
       files,
-      persistedCount: photos.length,
       createObjectUrl: (file) => URL.createObjectURL(file),
       createId: (file) => `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
+    });
+    previewRegistry.register(descriptors);
+    setQueue((current) => enqueueMotorcyclePhotoDescriptors({
+      current,
+      descriptors,
+      persistedCount: photos.length,
     }).items);
   };
 
   const removeItem = (id: string) => {
-    setQueue((current) => {
-      const item = current.find((candidate) => candidate.id === id);
-      if (item) URL.revokeObjectURL(item.previewUrl);
-      return removeMotorcyclePhotoQueueItem(current, id);
-    });
+    const item = queue.find((candidate) => candidate.id === id);
+    if (item) previewRegistry.release(item.previewUrl);
+    setQueue((current) => current.filter((candidate) => candidate.id !== id));
   };
 
   const retryItem = (id: string) => {
@@ -97,54 +109,40 @@ export function MotorcyclePhotoWorkspace({
   }, [queue]);
 
   useEffect(() => {
-    if (disabled || uploadInFlight.current) return;
-    const next = nextReadyMotorcyclePhoto(queue);
-    if (!next) return;
+    schedulerRef.current = createMotorcyclePhotoUploadScheduler({
+      getItems: () => queueRef.current,
+      setItems: setQueue,
+      releasePreview: (previewUrl) => previewRegistry.release(previewUrl),
+    });
+  }, [previewRegistry]);
 
-    uploadInFlight.current = true;
-    queueMicrotask(() => {
-      setQueue((current) => patchMotorcyclePhotoQueueItem(current, next.id, {
-        status: "uploading",
-        error: undefined,
-        retryable: true,
-      }));
-
-      void (async () => {
-        try {
-          await performMemberMediaUpload({
-            file: next.file,
-            purpose: "motorcycle-photo",
-            motorcyclePhotoPosition: photos.length,
-          }, {
-            fetchImpl: fetch,
-            finalize: finalizeMemberMediaAction,
-            onStatus: () => undefined,
-          });
-          await onUploaded();
-          setQueue((current) => patchMotorcyclePhotoQueueItem(current, next.id, {
-            status: "uploaded",
-            retryable: false,
-          }));
-          URL.revokeObjectURL(next.previewUrl);
-          setQueue((current) => removeMotorcyclePhotoQueueItem(current, next.id));
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Upload failed. Check the file and try again.";
-          setQueue((current) => patchMotorcyclePhotoQueueItem(current, next.id, {
-            status: "failed",
-            error: message,
-            retryable: true,
-          }));
-        } finally {
-          uploadInFlight.current = false;
-          setQueue((current) => [...current]);
-        }
-      })();
+  useEffect(() => {
+    if (disabled) return;
+    const scheduler = schedulerRef.current;
+    if (!scheduler) return;
+    void scheduler.processNext({
+      motorcyclePhotoPosition: photos.length,
+      upload: (item, motorcyclePhotoPosition) => performMemberMediaUpload({
+        file: item.file,
+        purpose: "motorcycle-photo",
+        motorcyclePhotoPosition,
+      }, {
+        fetchImpl: fetch,
+        finalize: finalizeMemberMediaAction,
+        onStatus: () => undefined,
+      }),
+      refresh: onUploaded,
+      describeFailure: memberMediaUploadFailure,
     });
   }, [disabled, onUploaded, photos.length, queue]);
 
   useEffect(() => () => {
-    queueRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
-  }, []);
+    previewRegistry.releaseAll();
+  }, [previewRegistry]);
+
+  const refreshUploadedItem = (id: string) => {
+    void schedulerRef.current?.refreshUploaded(id, onUploaded);
+  };
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -183,6 +181,9 @@ export function MotorcyclePhotoWorkspace({
             {item.status === "uploading" ? <LoaderCircle className="animate-spin" aria-label="Uploading" /> : null}
             {item.status === "failed" && item.retryable ? (
               <Button type="button" variant="outline" onClick={() => retryItem(item.id)}>Retry</Button>
+            ) : null}
+            {item.status === "uploaded" && item.error ? (
+              <Button type="button" variant="outline" onClick={() => refreshUploadedItem(item.id)}>Refresh gallery</Button>
             ) : null}
             <Button type="button" variant="outline" disabled={item.status === "uploading"} onClick={() => removeItem(item.id)}>Remove</Button>
           </li>

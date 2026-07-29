@@ -195,16 +195,31 @@ export function MemberMediaDropInput({
   );
 }
 
-function uploadMessage(error: unknown) {
-  if (error instanceof MemberMediaUploadUiError) return error.message;
+export function memberMediaUploadFailure(error: unknown) {
+  if (error instanceof MemberMediaUploadUiError) {
+    return {
+      message: error.message,
+      retryable: !(
+        error.message.startsWith("Choose a ") ||
+        error.message.startsWith("Log in again") ||
+        error.message.includes("signed file type or size policy")
+      ),
+    };
+  }
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("UNAUTHENTICATED")) {
+    return { message: "Log in again before uploading an image.", retryable: false };
+  }
+  if (message.includes("INVALID_INPUT")) {
+    return { message: "Choose a JPEG, PNG, or WebP image no larger than 8 MB.", retryable: false };
+  }
   if (message.includes("INVALID_IMAGE")) {
-    return "Choose a JPEG, PNG, or WebP image no larger than 8 MB.";
+    return { message: "Choose a JPEG, PNG, or WebP image no larger than 8 MB.", retryable: false };
   }
   if (message.includes("PHOTO_LIMIT")) {
-    return "This garage already has five motorcycle photos.";
+    return { message: "This garage already has five motorcycle photos.", retryable: false };
   }
-  return "Upload failed. Check the file and try again.";
+  return { message: "Upload failed. Check the file and try again.", retryable: true };
 }
 
 export function MemberMediaUploader({
@@ -273,7 +288,7 @@ export function MemberMediaUploader({
       if (inputRef.current) inputRef.current.value = "";
       setStatus(`${label} uploaded.`);
     } catch (error) {
-      setStatus(uploadMessage(error));
+      setStatus(memberMediaUploadFailure(error).message);
     } finally {
       setPending(false);
     }
