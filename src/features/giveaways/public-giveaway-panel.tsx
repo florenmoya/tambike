@@ -276,27 +276,29 @@ function CompletedGiveawayResult({
 
   return (
     <article className={styles.winnerCard}>
-      <div className={styles.cardBody}>
+      <div className={`${styles.cardBody} ${styles.winnerBody}`}>
         <PublicPrizeImage presentation={presentation} />
-        <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
+        <div className={styles.winnerContent}>
+          <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
 
-        <PublicGiveawayResultList
-          results={results}
-          presentationTitle={presentation.title}
-        />
+          <PublicGiveawayResultList
+            results={results}
+            presentationTitle={presentation.title}
+          />
 
-        {drawAt ? (
-          <dl className={styles.schedule}>
-            <ScheduleMoment label="Draw date:" value={drawAt} />
-          </dl>
-        ) : null}
+          {drawAt ? (
+            <dl className={styles.schedule}>
+              <ScheduleMoment label="Draw date:" value={drawAt} />
+            </dl>
+          ) : null}
 
-        <PublicRaffleInformation
-          mechanics={giveaway.mechanics}
-          terms={giveaway.terms}
-          sponsorDisclosure={giveaway.sponsorDisclosure}
-        />
-        <DrawVerificationDetails drawVerifications={drawVerifications} />
+          <PublicRaffleInformation
+            mechanics={giveaway.mechanics}
+            terms={giveaway.terms}
+            sponsorDisclosure={giveaway.sponsorDisclosure}
+          />
+          <DrawVerificationDetails drawVerifications={drawVerifications} />
+        </div>
       </div>
     </article>
   );

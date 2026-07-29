@@ -96,6 +96,19 @@
   padding: clamp(1rem, 2.4vw, 1.35rem);
 }
 
+.winnerBody {
+  grid-template-columns: minmax(11rem, 18rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.winnerContent {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 0.85rem;
+}
+
 .openStatus {
   display: inline-flex;
   align-items: center;
@@ -431,6 +444,16 @@
     padding: 1rem;
   }
 
+}
+
+@media (max-width: 699px) {
+  .winnerBody {
+    grid-template-columns: 1fr;
+  }
+
+  .winnerBody .prizeImage {
+    width: min(70%, 15rem);
+  }
 }
 
 @media (max-width: 390px) {

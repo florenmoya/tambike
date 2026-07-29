@@ -265,6 +265,20 @@ describe("public giveaway spotlight", () => {
     expect(mobileCss).toContain("padding: 0.8rem");
   });
 
+  test("keeps winner results compact on desktop and stacked on small screens", () => {
+    const winnerBodyRule = raffleCss.match(/\.winnerBody\s*\{[^}]+\}/)?.[0] ?? "";
+    const smallScreenCss = raffleCss.slice(
+      raffleCss.indexOf("@media (max-width: 699px)"),
+    );
+
+    expect(winnerBodyRule).toContain(
+      "grid-template-columns: minmax(11rem, 18rem) minmax(0, 1fr)",
+    );
+    expect(smallScreenCss).toContain(".winnerBody");
+    expect(smallScreenCss).toContain("grid-template-columns: 1fr");
+    expect(smallScreenCss).toContain("width: min(70%, 15rem)");
+  });
+
   test("keeps duplicate result nodes stable when unrelated results are inserted or reordered", async () => {
     const panelModule = (await import(
       "../../src/features/giveaways/public-giveaway-panel"
