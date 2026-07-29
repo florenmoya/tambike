@@ -8,7 +8,6 @@ import { BackendError } from "../../src/server/backend";
 import { MemberProfileScreen } from "../../src/features/member-profiles/member-profile-screen";
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
 import { toProfilePreviewView } from "../../src/features/member-profiles/profile-preview-adapter";
-import { ProfileStudioPreview } from "../../src/features/member-profiles/profile-studio-preview";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
 function source(path: string) {
@@ -161,14 +160,34 @@ describe("member profile App Router and UI contracts", () => {
     expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
-  test("renders a draft-aware Garage Studio preview", () => {
-    const preview = source(
-      "src/features/member-profiles/profile-studio-preview.tsx",
+  test("offers edit and exact public-preview modes without unmounting editor state", () => {
+    const settings = source("src/features/member-profiles/profile-settings.tsx");
+
+    expect(settings).toContain('"edit" | "preview"');
+    expect(settings).toContain("Edit profile");
+    expect(settings).toContain("Preview profile");
+    expect(settings).toContain("Preview — only you can see this");
+    expect(settings).toContain("<RiderGarageView");
+    expect(settings).toContain("toProfilePreviewView(");
+    expect(settings).toContain('hidden={studioMode !== "edit"}');
+    expect(settings).toContain('hidden={studioMode !== "preview"}');
+    expect(settings).not.toContain("ProfileStudioPreview");
+    expect(settings).not.toContain("studioPreviewColumn");
+  });
+
+  test("styles the full visitor garage preview instead of a compact sidebar card", () => {
+    const styles = source(
+      "src/features/member-profiles/profile-studio.module.css",
     );
-    expect(preview).toContain("Garage preview");
-    expect(preview).toContain("styles.studioPreview");
-    expect(preview).toContain("Cover photo");
-    expect(preview).not.toMatch(/email|verificationStatus|storageKey/i);
+
+    expect(styles).toContain(".studioModeSwitch");
+    expect(styles).toContain(".studioPreviewMode");
+    expect(styles).toContain(".studioPreviewNotice");
+    expect(styles).toMatch(
+      /\.studioPreviewMode\s+:global\(\.garage-profile-page\)[\s\S]*?min-height:\s*auto;/,
+    );
+    expect(styles).not.toContain(".studioPreviewColumn");
+    expect(styles).not.toContain(".studioPreviewHero");
   });
 
   test("composes the profile editor as a professional Garage Studio", () => {
@@ -177,10 +196,8 @@ describe("member profile App Router and UI contracts", () => {
       "src/features/member-profiles/profile-studio.module.css",
     );
     expect(settings).toContain("Garage Studio");
-    expect(settings).toContain("ProfileStudioPreview");
     expect(settings).toContain("MotorcyclePhotoWorkspace");
     expect(settings).toContain("styles.studioEditor");
-    expect(settings).toContain("styles.studioPreviewColumn");
     expect(settings).toContain("Profile readiness");
     expect(settings).toContain("readyItems.length");
     expect(settings).toContain("styles.mediaStatus");
@@ -218,33 +235,6 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).toContain("uploadEnabled,");
     expect(workspace).not.toContain("disabled={!editor.motorcycle}");
     expect(workspace).not.toContain("if (disabled || files.length === 0)");
-  });
-
-  test("shows the rider-facing visibility label from the profile draft", () => {
-    const labels = [
-      ["PUBLIC", "Public profile"],
-      ["MEMBERS_ONLY", "Members-only profile"],
-      ["PRIVATE", "Private profile"],
-    ] as const;
-
-    for (const [visibility, label] of labels) {
-      const markup = renderToStaticMarkup(ProfileStudioPreview({
-        editor,
-        profileDraft: {
-          displayName: editor.displayName,
-          area: editor.area,
-          bio: editor.bio,
-          visibility,
-          defaultRosterIdentity: editor.defaultRosterIdentity,
-        },
-        motorcycleDraft: {
-          make: editor.motorcycle?.make ?? "",
-          model: editor.motorcycle?.model ?? "",
-        },
-      }));
-
-      expect(markup).toContain(label);
-    }
   });
 
   test("preserves a dirty motorcycle draft across media refresh", async () => {

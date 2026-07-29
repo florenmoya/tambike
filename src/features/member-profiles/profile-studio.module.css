@@ -77,7 +77,7 @@
   line-height: 1.55;
 }
 
-.studioHeader :global([data-slot="button"]) {
+.studioHeader > :global([data-slot="button"]) {
   border-color: var(--studio-amber);
   background: var(--studio-amber);
   color: var(--studio-asphalt);
@@ -107,15 +107,6 @@
   overflow-wrap: anywhere;
 }
 
-.studioLayout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
-  align-items: start;
-  gap: clamp(1.25rem, 3vw, 2.5rem);
-  min-width: 0;
-  max-width: 100%;
-}
-
 .studioEditor {
   display: grid;
   gap: 1.25rem;
@@ -134,102 +125,39 @@
   color: var(--studio-paper);
 }
 
-.studioPreviewColumn {
-  position: sticky;
-  top: 96px;
-  min-width: 0;
-  max-width: 100%;
+.studioModeSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--studio-steel) 26%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--studio-asphalt) 82%, transparent);
 }
 
-.studioPreview {
+.studioModeSwitch :global([data-slot="button"]) {
+  min-height: 44px;
+}
+
+.studioPreviewMode {
   display: grid;
-  gap: 0.875rem;
+  gap: 1rem;
   min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  padding: 1rem;
-  border: 1px solid var(--studio-steel);
-  border-radius: 0.875rem;
-  background: var(--studio-paper);
-  color: var(--studio-asphalt);
-  box-shadow: 0 1.25rem 3rem color-mix(in srgb, var(--studio-asphalt) 55%, transparent);
 }
 
-.studioPreviewEyebrow,
-.studioPreviewSpecification {
-  color: var(--studio-green);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.studioPreviewVisibility {
-  justify-self: start;
-  padding: 0.25rem 0.5rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--studio-green) 14%, var(--studio-paper));
-  color: var(--studio-green);
-  font-size: 0.8125rem;
+.studioPreviewNotice {
+  border-left: 3px solid var(--studio-amber);
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, var(--studio-amber) 12%, var(--studio-asphalt));
+  color: var(--studio-paper);
+  padding: 0.875rem 1rem;
   font-weight: 700;
 }
 
-.studioPreviewHero {
-  aspect-ratio: 4 / 3;
-  max-width: 100%;
-  overflow: hidden;
-  border-radius: 0.625rem;
-  background: color-mix(in srgb, var(--studio-green) 14%, var(--studio-paper));
-}
-
-.studioPreviewHero img {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.studioPreviewEmpty {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
-  color: var(--studio-green);
-}
-
-.studioPreviewEmpty svg {
-  width: 3rem;
-  height: 3rem;
-}
-
-.studioPreviewIdentity {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.studioPreviewIdentity h2,
-.studioPreviewIdentity p,
-.studioPreviewNote {
-  margin: 0;
-}
-
-.studioPreviewIdentity h2 {
-  font-size: 1.25rem;
-  font-weight: 800;
-}
-
-.studioPreviewIdentity p,
-.studioPreviewNote {
-  color: color-mix(in srgb, var(--studio-asphalt) 68%, var(--studio-paper));
-  font-size: 0.9375rem;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.studioPreviewNote {
-  min-height: 3em;
+.studioPreviewMode :global(.garage-profile-page) {
+  min-height: auto;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  border-radius: 1rem;
 }
 
 .motorcyclePhotoWorkspace {
@@ -420,20 +348,17 @@
     align-items: start;
   }
 
-  .studioHeader :global([data-slot="button"]) {
+  .studioHeader > :global([data-slot="button"]) {
     justify-self: start;
   }
 
-  .studioLayout {
-    grid-template-columns: 1fr;
-  }
-
-  .studioPreviewColumn {
-    position: static;
-  }
 }
 
 @media (max-width: 640px) {
+  .studioModeSwitch {
+    width: 100%;
+  }
+
   .motorcyclePhotoQueueItem {
     grid-template-columns: 3.5rem minmax(0, 1fr);
   }

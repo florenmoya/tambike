@@ -34,7 +34,8 @@ import type {
 import { MemberMediaUploader } from "./member-media-uploader";
 import { MemberMediaImage } from "./member-media-image";
 import { MotorcyclePhotoWorkspace } from "./motorcycle-photo-workspace";
-import { ProfileStudioPreview } from "./profile-studio-preview";
+import { RiderGarageView } from "./rider-garage-view";
+import { toProfilePreviewView } from "./profile-preview-adapter";
 import styles from "./profile-studio.module.css";
 
 function actionErrorMessage(error: unknown) {
@@ -84,6 +85,8 @@ interface EditorRefreshState {
   motorcycleDraft: UpsertMotorcycleInput;
   motorcycleDirty: boolean;
 }
+
+type StudioMode = "edit" | "preview";
 
 function profileDraftFromEditor(editor: MemberProfileEditorView): ProfileDraft {
   return {
@@ -213,7 +216,13 @@ function LoadedProfileSettings({
   const [profilePending, setProfilePending] = useState(false);
   const [motorcyclePending, setMotorcyclePending] = useState(false);
   const [mediaPending, setMediaPending] = useState(false);
+  const [studioMode, setStudioMode] = useState<StudioMode>("edit");
   const photos = editor.motorcycle?.photos.toSorted((left, right) => left.position - right.position) ?? [];
+  const previewProfile = toProfilePreviewView(
+    editor,
+    profileDraft,
+    motorcycleDraft,
+  );
 
   const refreshEditor = async () => {
     const refreshed = await getMemberProfileEditor();
@@ -361,6 +370,24 @@ function LoadedProfileSettings({
           <h1 id="profile-settings-title">Garage Studio</h1>
           <p>Build the rider card people see before the next meetup.</p>
         </div>
+        <div className={styles.studioModeSwitch} role="group" aria-label="Profile workspace mode">
+          <Button
+            type="button"
+            variant={studioMode === "edit" ? "default" : "outline"}
+            aria-pressed={studioMode === "edit"}
+            onClick={() => setStudioMode("edit")}
+          >
+            Edit profile
+          </Button>
+          <Button
+            type="button"
+            variant={studioMode === "preview" ? "default" : "outline"}
+            aria-pressed={studioMode === "preview"}
+            onClick={() => setStudioMode("preview")}
+          >
+            Preview profile
+          </Button>
+        </div>
         {editor.slug ? (
           <Button asChild>
             <Link href={`/riders/${editor.slug}`}>View rider page</Link>
@@ -379,8 +406,10 @@ function LoadedProfileSettings({
         </div>
       </header>
 
-      <div className={styles.studioLayout}>
-      <div className={styles.studioEditor}>
+      <div
+        hidden={studioMode !== "edit"}
+        className={styles.studioEditor}
+      >
       <form action={handleProfileSave} className="profile-settings__grid">
         <ProfileSaveFieldset pending={profilePending}>
         <Card className="profile-settings__section">
@@ -524,15 +553,20 @@ function LoadedProfileSettings({
         {mediaStatus}
       </p>
       </div>
-
-      <div className={styles.studioPreviewColumn}>
-        <ProfileStudioPreview
-          editor={editor}
-          profileDraft={profileDraft}
-          motorcycleDraft={motorcycleDraft}
-        />
-      </div>
-      </div>
+      <section
+        hidden={studioMode !== "preview"}
+        className={styles.studioPreviewMode}
+        aria-label="Profile preview"
+      >
+        <div className={styles.studioPreviewNotice} role="status">
+          Preview — only you can see this
+        </div>
+        <div className="garage-profile-page">
+          <div className="garage-profile-shell">
+            <RiderGarageView profile={previewProfile} />
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
