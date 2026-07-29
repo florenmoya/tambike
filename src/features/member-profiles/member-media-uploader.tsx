@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { finalizeMemberMediaAction } from "@/server/actions";
+import { validateMemberMediaFile } from "./member-media-file-validation";
 import type { MotorcycleShowcase } from "./types";
+
+export { validateMemberMediaFile } from "./member-media-file-validation";
 
 type UploadPurpose = "avatar" | "motorcycle-photo";
 
@@ -18,27 +21,11 @@ interface PresignedUpload {
   fields: Record<string, string>;
 }
 
-const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-
 export class MemberMediaUploadUiError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "MemberMediaUploadUiError";
   }
-}
-
-export function validateMemberMediaFile(file: Pick<File, "type" | "size">) {
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    return "Choose a JPEG, PNG, or WebP image.";
-  }
-  if (file.size < 1) {
-    return "Choose a non-empty image file.";
-  }
-  if (file.size > MAX_IMAGE_BYTES) {
-    return "Choose an image no larger than 8 MB.";
-  }
-  return null;
 }
 
 interface PerformMemberMediaUploadInput {
@@ -77,7 +64,7 @@ function isPresignedUpload(value: unknown): value is PresignedUpload {
   const upload = value as Partial<PresignedUpload>;
   return (
     typeof upload.key === "string" &&
-    ALLOWED_IMAGE_TYPES.has(upload.mimeType ?? "") &&
+    ["image/jpeg", "image/png", "image/webp"].includes(upload.mimeType ?? "") &&
     typeof upload.url === "string" &&
     Boolean(upload.fields) &&
     typeof upload.fields === "object" &&
