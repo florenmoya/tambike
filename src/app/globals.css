@@ -3611,7 +3611,7 @@ svg {
   display: grid;
   grid-template-areas:
     "copy poster"
-    "decision poster";
+    "decision decision";
   grid-template-columns: minmax(0, 1fr) minmax(180px, 200px);
   align-items: start;
   gap: 1rem clamp(1.5rem, 4vw, 3rem);

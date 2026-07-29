@@ -219,7 +219,8 @@ describe("event detail decision-first UI contract", () => {
       "width: min(1200px, calc(100% - clamp(24px, 5vw, 72px)))",
     );
     expect(stage).toContain('"copy poster"');
-    expect(stage).toContain('"decision poster"');
+    expect(stage).toContain('"decision decision"');
+    expect(stage).not.toContain('"decision poster"');
     expect(stage).toContain("minmax(180px, 200px)");
     expect(decision).toContain("grid-area: decision");
     expect(posterWrap).toContain("max-width: 200px");
