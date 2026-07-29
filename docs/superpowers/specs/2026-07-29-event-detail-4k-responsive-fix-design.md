@@ -6,16 +6,11 @@
 
 ## Problem
 
-The event hero uses a 1480px rail while the lower sections use a separate
-1120px rail. On a 4K display this creates an oversized RSVP card, a visually
-detached poster, and a second alignment for the supporting content. The
-desktop grid also persists too long on narrower screens, compressing the
-decision content before the 640px mobile breakpoint.
-
-After the first responsive pass, desktop still assigned the poster to both
-grid rows with `"decision poster"`. Because the RSVP card is taller than the
-poster, that spanning poster area leaves a large unusable region below the
-poster.
+The first responsive pass unified the page on a centered 1200px rail and
+introduced tablet/mobile poster sizes. Desktop, however, still assigns the
+poster to both grid rows with `"decision poster"`. Because the RSVP card is
+taller than the poster, that spanning poster area leaves a large unusable
+region below the poster.
 
 ## Approved Responsive System
 
@@ -42,14 +37,12 @@ poster.
 - Do not alter unrelated carousel work already present in shared files.
 - Do not add dependencies, breakpoints outside the event-detail block, or a
   new test file.
-- Preserve the staged accessibility fixes from the preceding event-detail
-  work.
+- Preserve existing event-detail accessibility behavior.
 
 ## Verification
 
 - Extend the existing event-detail CSS contract before changing production
   CSS.
-- Update the existing poster-asset contract for the responsive `sizes` value.
 - Run focused event-detail, attendee-preview, poster, and roster tests.
 - Reuse an existing localhost server for browser checks; do not start a
   duplicate server.
