@@ -36,6 +36,8 @@ import type {
 } from "./types";
 import { MemberMediaUploader } from "./member-media-uploader";
 import { MemberMediaImage } from "./member-profile-screen";
+import { ProfileStudioPreview } from "./profile-studio-preview";
+import styles from "./profile-studio.module.css";
 
 function actionErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -81,6 +83,8 @@ interface EditorRefreshState {
   editor: MemberProfileEditorView;
   draft: ProfileDraft;
   profileDirty: boolean;
+  motorcycleDraft: UpsertMotorcycleInput;
+  motorcycleDirty: boolean;
 }
 
 function profileDraftFromEditor(editor: MemberProfileEditorView): ProfileDraft {
@@ -93,6 +97,27 @@ function profileDraftFromEditor(editor: MemberProfileEditorView): ProfileDraft {
   };
 }
 
+export function motorcycleDraftFromEditor(
+  editor: MemberProfileEditorView,
+): UpsertMotorcycleInput {
+  return {
+    make: editor.motorcycle?.make ?? "",
+    model: editor.motorcycle?.model ?? "",
+    year: editor.motorcycle?.year,
+    displacementCc: editor.motorcycle?.displacementCc,
+    nickname: editor.motorcycle?.nickname ?? "",
+    description: editor.motorcycle?.description ?? "",
+  };
+}
+
+export function reconcileMotorcycleDraft(
+  draft: UpsertMotorcycleInput,
+  dirty: boolean,
+  refreshed: MemberProfileEditorView,
+): UpsertMotorcycleInput {
+  return dirty ? draft : motorcycleDraftFromEditor(refreshed);
+}
+
 export function reconcileEditorRefresh(
   state: EditorRefreshState,
   refreshed: MemberProfileEditorView,
@@ -101,6 +126,12 @@ export function reconcileEditorRefresh(
     editor: refreshed,
     draft: state.profileDirty ? state.draft : profileDraftFromEditor(refreshed),
     profileDirty: state.profileDirty,
+    motorcycleDraft: reconcileMotorcycleDraft(
+      state.motorcycleDraft,
+      state.motorcycleDirty,
+      refreshed,
+    ),
+    motorcycleDirty: state.motorcycleDirty,
   };
 }
 
@@ -172,8 +203,14 @@ function LoadedProfileSettings({
     editor: initialEditor,
     draft: profileDraftFromEditor(initialEditor),
     profileDirty: false,
+    motorcycleDraft: motorcycleDraftFromEditor(initialEditor),
+    motorcycleDirty: false,
   }));
-  const { editor, draft: profileDraft } = profileEditorState;
+  const {
+    editor,
+    draft: profileDraft,
+    motorcycleDraft,
+  } = profileEditorState;
   const [profileStatus, setProfileStatus] = useState("");
   const [motorcycleStatus, setMotorcycleStatus] = useState("");
   const [mediaStatus, setMediaStatus] = useState("");
@@ -195,16 +232,30 @@ function LoadedProfileSettings({
     }));
   };
 
+  const updateMotorcycleDraft = (changes: Partial<UpsertMotorcycleInput>) => {
+    setProfileEditorState((current) => ({
+      ...current,
+      motorcycleDraft: { ...current.motorcycleDraft, ...changes },
+      motorcycleDirty: true,
+    }));
+  };
+
   const handleProfileSave = async (formData: FormData) => {
     setProfilePending(true);
     setProfileStatus("");
     try {
       const saved = await updateMemberProfile(profileInputFromFormData(formData));
-      setProfileEditorState({
+      setProfileEditorState((current) => ({
+        ...current,
         editor: saved,
         draft: profileDraftFromEditor(saved),
         profileDirty: false,
-      });
+        motorcycleDraft: reconcileMotorcycleDraft(
+          current.motorcycleDraft,
+          current.motorcycleDirty,
+          saved,
+        ),
+      }));
       setProfileStatus(saved.isPublished ? "Profile changes saved." : "Private profile saved.");
     } catch (error) {
       setProfileStatus(actionErrorMessage(error));
@@ -213,20 +264,17 @@ function LoadedProfileSettings({
     }
   };
 
-  const handleMotorcycleSave = async (formData: FormData) => {
+  const handleMotorcycleSave = async () => {
     setMotorcyclePending(true);
     setMotorcycleStatus("");
-    const input: UpsertMotorcycleInput = {
-      make: String(formData.get("make") ?? ""),
-      model: String(formData.get("model") ?? ""),
-      year: optionalNumber(formData.get("year")),
-      displacementCc: optionalNumber(formData.get("displacementCc")),
-      nickname: String(formData.get("nickname") ?? ""),
-      description: String(formData.get("description") ?? ""),
-    };
     try {
-      await upsertMotorcycle(input);
-      await refreshEditor();
+      await upsertMotorcycle(motorcycleDraft);
+      const refreshed = await getMemberProfileEditor();
+      setProfileEditorState((current) => ({
+        ...reconcileEditorRefresh(current, refreshed),
+        motorcycleDraft: motorcycleDraftFromEditor(refreshed),
+        motorcycleDirty: false,
+      }));
       setMotorcycleStatus("Motorcycle details saved.");
     } catch (error) {
       setMotorcycleStatus(actionErrorMessage(error));
@@ -292,6 +340,8 @@ function LoadedProfileSettings({
         )}
       </header>
 
+      <div className={styles.studioLayout}>
+      <div className={styles.studioEditor}>
       <form action={handleProfileSave} className="profile-settings__grid">
         <ProfileSaveFieldset pending={profilePending}>
         <Card className="profile-settings__section">
@@ -394,18 +444,19 @@ function LoadedProfileSettings({
       </Card>
 
       <form action={handleMotorcycleSave}>
+        <ProfileSaveFieldset pending={motorcyclePending}>
         <Card className="profile-settings__section">
           <CardHeader>
             <CardTitle><Bike aria-hidden="true" /> Motorcycle</CardTitle>
             <CardDescription>Tambike shows one motorcycle as the centerpiece of your garage card.</CardDescription>
           </CardHeader>
           <CardContent className="profile-fields">
-            <div className="profile-field"><Label htmlFor="motorcycle-make">Make</Label><Input id="motorcycle-make" name="make" required defaultValue={editor.motorcycle?.make ?? ""} placeholder="Honda" /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-model">Model</Label><Input id="motorcycle-model" name="model" required defaultValue={editor.motorcycle?.model ?? ""} placeholder="CB650R" /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-year">Year</Label><Input id="motorcycle-year" name="year" type="number" min={1885} max={2100} defaultValue={editor.motorcycle?.year ?? ""} /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-displacement">Displacement (cc)</Label><Input id="motorcycle-displacement" name="displacementCc" type="number" min={1} max={10000} defaultValue={editor.motorcycle?.displacementCc ?? ""} /></div>
-            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-nickname">Nickname</Label><Input id="motorcycle-nickname" name="nickname" defaultValue={editor.motorcycle?.nickname ?? ""} placeholder="Ember" /></div>
-            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-description">Motorcycle note</Label><textarea id="motorcycle-description" name="description" defaultValue={editor.motorcycle?.description ?? ""} maxLength={500} rows={4} /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-make">Make</Label><Input id="motorcycle-make" name="make" required value={motorcycleDraft.make} onChange={(event) => updateMotorcycleDraft({ make: event.currentTarget.value })} placeholder="Honda" /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-model">Model</Label><Input id="motorcycle-model" name="model" required value={motorcycleDraft.model} onChange={(event) => updateMotorcycleDraft({ model: event.currentTarget.value })} placeholder="CB650R" /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-year">Year</Label><Input id="motorcycle-year" name="year" type="number" min={1885} max={2100} value={motorcycleDraft.year ?? ""} onChange={(event) => updateMotorcycleDraft({ year: optionalNumber(event.currentTarget.value) })} /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-displacement">Displacement (cc)</Label><Input id="motorcycle-displacement" name="displacementCc" type="number" min={1} max={10000} value={motorcycleDraft.displacementCc ?? ""} onChange={(event) => updateMotorcycleDraft({ displacementCc: optionalNumber(event.currentTarget.value) })} /></div>
+            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-nickname">Nickname</Label><Input id="motorcycle-nickname" name="nickname" value={motorcycleDraft.nickname ?? ""} onChange={(event) => updateMotorcycleDraft({ nickname: event.currentTarget.value })} placeholder="Ember" /></div>
+            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-description">Motorcycle note</Label><textarea id="motorcycle-description" name="description" value={motorcycleDraft.description ?? ""} onChange={(event) => updateMotorcycleDraft({ description: event.currentTarget.value })} maxLength={500} rows={4} /></div>
             <div className="profile-settings__save profile-field--wide">
               <Button type="submit" disabled={motorcyclePending}>
                 {motorcyclePending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
@@ -415,6 +466,7 @@ function LoadedProfileSettings({
             </div>
           </CardContent>
         </Card>
+        </ProfileSaveFieldset>
       </form>
 
       <Card className="profile-settings__section">
@@ -449,6 +501,14 @@ function LoadedProfileSettings({
           <p className="profile-settings__media-status" aria-live="polite">{mediaStatus}</p>
         </CardContent>
       </Card>
+      </div>
+
+      <ProfileStudioPreview
+        editor={editor}
+        profileDraft={profileDraft}
+        motorcycleDraft={motorcycleDraft}
+      />
+      </div>
     </div>
   );
 }

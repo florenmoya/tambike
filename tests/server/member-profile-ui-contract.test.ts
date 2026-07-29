@@ -83,6 +83,40 @@ describe("member profile App Router and UI contracts", () => {
       .toMatch(/function MemberMediaImage\(\{\s*alt,\s*\.\.\.props\s*\}/);
   });
 
+  test("renders a draft-aware Garage Studio preview", () => {
+    const preview = source(
+      "src/features/member-profiles/profile-studio-preview.tsx",
+    );
+    expect(preview).toContain("Garage preview");
+    expect(preview).toContain("styles.studioPreview");
+    expect(preview).toContain("Cover photo");
+    expect(preview).not.toMatch(/email|verificationStatus|storageKey/i);
+  });
+
+  test("preserves a dirty motorcycle draft across media refresh", async () => {
+    const settings = await import(
+      "../../src/features/member-profiles/profile-settings"
+    );
+    const reconcile = (settings as unknown as {
+      reconcileMotorcycleDraft?: (
+        draft: Record<string, unknown>,
+        dirty: boolean,
+        refreshed: MemberProfileEditorView,
+      ) => Record<string, unknown>;
+    }).reconcileMotorcycleDraft;
+    expect(reconcile).toBeTypeOf("function");
+    expect(reconcile!(
+      { make: "Draft Make", model: "Draft Model" },
+      true,
+      editor,
+    )).toMatchObject({ make: "Draft Make", model: "Draft Model" });
+    expect(reconcile!(
+      { make: "Old", model: "Old" },
+      false,
+      editor,
+    )).toMatchObject({ make: "Honda", model: "CB650R" });
+  });
+
   test("labels profile visibility, attendance privacy, and explicit save or publish actions", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 
