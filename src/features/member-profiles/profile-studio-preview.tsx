@@ -19,6 +19,11 @@ export function ProfileStudioPreview({
   profileDraft,
   motorcycleDraft,
 }: ProfileStudioPreviewProps) {
+  const visibilityLabel = {
+    PUBLIC: "Public profile",
+    MEMBERS_ONLY: "Members-only profile",
+    PRIVATE: "Private profile",
+  }[profileDraft.visibility];
   const cover = editor.motorcycle?.photos
     .toSorted((left, right) => left.position - right.position)
     .find((photo) => photo.url.startsWith("/media/"));
@@ -45,6 +50,7 @@ export function ProfileStudioPreview({
         <h2>{profileDraft.displayName || "Your rider name"}</h2>
         <p>{profileDraft.area || "Your area"}</p>
       </div>
+      <span className={styles.studioPreviewVisibility}>{visibilityLabel}</span>
       <strong className={styles.studioPreviewSpecification}>
         {motorcycleDraft.make || "Motorcycle make"} {motorcycleDraft.model || "and model"}
       </strong>

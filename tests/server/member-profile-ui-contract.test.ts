@@ -6,6 +6,7 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 import { BackendError } from "../../src/server/backend";
 import { MemberProfileScreen } from "../../src/features/member-profiles/member-profile-screen";
+import { ProfileStudioPreview } from "../../src/features/member-profiles/profile-studio-preview";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
 function source(path: string) {
@@ -91,6 +92,33 @@ describe("member profile App Router and UI contracts", () => {
     expect(preview).toContain("styles.studioPreview");
     expect(preview).toContain("Cover photo");
     expect(preview).not.toMatch(/email|verificationStatus|storageKey/i);
+  });
+
+  test("shows the rider-facing visibility label from the profile draft", () => {
+    const labels = [
+      ["PUBLIC", "Public profile"],
+      ["MEMBERS_ONLY", "Members-only profile"],
+      ["PRIVATE", "Private profile"],
+    ] as const;
+
+    for (const [visibility, label] of labels) {
+      const markup = renderToStaticMarkup(ProfileStudioPreview({
+        editor,
+        profileDraft: {
+          displayName: editor.displayName,
+          area: editor.area,
+          bio: editor.bio,
+          visibility,
+          defaultRosterIdentity: editor.defaultRosterIdentity,
+        },
+        motorcycleDraft: {
+          make: editor.motorcycle?.make ?? "",
+          model: editor.motorcycle?.model ?? "",
+        },
+      }));
+
+      expect(markup).toContain(label);
+    }
   });
 
   test("preserves a dirty motorcycle draft across media refresh", async () => {

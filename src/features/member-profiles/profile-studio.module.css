@@ -41,6 +41,16 @@
   text-transform: uppercase;
 }
 
+.studioPreviewVisibility {
+  justify-self: start;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: #dce1dc;
+  color: #3e6b55;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
 .studioPreviewHero {
   aspect-ratio: 4 / 3;
   overflow: hidden;
