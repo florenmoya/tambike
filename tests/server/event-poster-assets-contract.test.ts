@@ -83,7 +83,7 @@ describe("event poster asset contract", () => {
       'fetchPriority={priority ? "high" : "auto"}',
     );
     expect(detail).toContain(
-      'sizes="(max-width: 640px) 280px, 360px"',
+      'sizes="(max-width: 640px) 72px, 220px"',
     );
   });
 

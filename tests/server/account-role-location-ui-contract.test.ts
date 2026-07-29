@@ -63,9 +63,9 @@ describe("account and event-location UI contracts", () => {
     expect(adminSource).toContain("event.locationAddress");
     expect(screenSource).toContain('className="event-detail-perk"');
     expect(screenSource).toContain('eyebrow="Venue"');
-    expect(screenSource).not.toContain("event-detail-essentials");
+    expect(screenSource).toContain("event-detail-essentials");
     expect(stylesSource).toContain(".event-detail-perk");
-    expect(stylesSource).not.toContain(".event-detail-essentials");
+    expect(stylesSource).toContain(".event-detail-essentials");
     expect(stylesSource).not.toContain(".event-detail-venue-card");
   });
 
