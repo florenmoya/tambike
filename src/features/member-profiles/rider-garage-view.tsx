@@ -124,6 +124,7 @@ export function RiderGarageView({
                     width={photo.width || 400}
                     height={photo.height || 300}
                     sizes="(max-width: 640px) 32vw, 208px"
+                    loading={prioritizeMedia && index === 0 ? "eager" : undefined}
                   />
                   <span>{String(index + 1).padStart(2, "0")}</span>
                 </li>

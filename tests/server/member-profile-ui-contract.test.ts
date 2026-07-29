@@ -160,18 +160,21 @@ describe("member profile App Router and UI contracts", () => {
     expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
-  test("eagerly loads only above-fold garage media in public and profile preview", () => {
+  test("eagerly loads the garage cover wherever its source appears", () => {
     const markup = renderToStaticMarkup(createElement(RiderGarageView, {
       profile: publicProfile,
       prioritizeMedia: true,
     }));
     const images = [...markup.matchAll(/<img\b[^>]*>/g)].map((match) => match[0]);
 
-    expect(images.map((image) => image.includes('loading="eager"'))).toEqual([
-      true,
-      true,
-      false,
-      false,
+    expect(images.map((image) => ({
+      src: image.match(/\bsrc="([^"]+)"/)?.[1],
+      loading: image.includes('loading="eager"') ? "eager" : "lazy",
+    }))).toEqual([
+      { src: "/media/avatar-1", loading: "eager" },
+      { src: "/media/bike-1", loading: "eager" },
+      { src: "/media/bike-1", loading: "eager" },
+      { src: "/media/bike-2", loading: "lazy" },
     ]);
     expect(source("src/features/member-profiles/profile-settings.tsx"))
       .toContain("<RiderGarageView profile={previewProfile} prioritizeMedia />");
