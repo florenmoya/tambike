@@ -337,7 +337,7 @@ describe("private member media infrastructure contract", () => {
     expect(template).toMatch(/EnablePreviewAccess:[\s\S]*Default: "false"[\s\S]*AllowedValues:[\s\S]*- "false"[\s\S]*- "true"/);
   });
 
-  test("ships a separate development-only role with read-only access to existing media objects", () => {
+  test("ships a separate development-only role with least-privilege lifecycle access to existing media objects", () => {
     const template = source("infra/aws/tambike-member-media-local-read.yaml");
 
     expect(template).toContain("Type: AWS::IAM::Role");
@@ -350,10 +350,21 @@ describe("private member media infrastructure contract", () => {
     expect(template).not.toContain("environment:preview");
     expect(template).not.toContain("project:*");
     expect(template).toContain("sts:AssumeRoleWithWebIdentity");
-    expect(template).toContain("s3:GetObject");
-    expect(template).toContain("arn:${AWS::Partition}:s3:::${ExistingBucketName}/media/*");
-    expect(template).not.toContain("s3:PutObject");
-    expect(template).not.toContain("s3:DeleteObject");
+    const actions = [...template.matchAll(/^\s+- (s3:[A-Za-z*]+)\s*$/gm)].map((match) => match[1]);
+    expect(new Set(actions)).toEqual(new Set([
+      "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
+    ]));
+    expect(actions).toHaveLength(3);
+    const resources = [...template.matchAll(
+      /^\s+- !Sub (arn:\$\{AWS::Partition\}:s3:::\$\{ExistingBucketName\}\/[^\s]+)\s*$/gm,
+    )].map((match) => match[1]);
+    expect(new Set(resources)).toEqual(new Set([
+      "arn:${AWS::Partition}:s3:::${ExistingBucketName}/tmp/*",
+      "arn:${AWS::Partition}:s3:::${ExistingBucketName}/media/*",
+    ]));
+    expect(resources).toHaveLength(2);
     expect(template).not.toContain("s3:ListBucket");
     expect(template).not.toMatch(/^\s*Action:\s*["']?\*["']?\s*$/m);
     expect(template).not.toMatch(/^\s*- [a-z0-9-]+:\*\s*$/mi);

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Development-only read access to existing Tambike member media.
+Description: Development-only object lifecycle access to existing Tambike member media.
 
 Parameters:
   VercelTeamSlug:
@@ -23,7 +23,7 @@ Resources:
   DevelopmentReadRole:
     Type: AWS::IAM::Role
     Properties:
-      Description: Read-only local development access to published Tambike member media.
+      Description: Local development access to upload, finalize, fetch, and delete Tambike member media.
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Fn::Sub:
@@ -46,21 +46,24 @@ Resources:
             }
           - OidcProviderArn: !Ref ExistingOidcProviderArn
       Policies:
-        - PolicyName: TambikeDevelopmentMemberMediaRead
+        - PolicyName: TambikeDevelopmentMemberMediaObjects
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: ReadPublishedMemberMediaObjects
+              - Sid: ManageDevelopmentMemberMediaObjects
                 Effect: Allow
                 Action:
+                  - s3:PutObject
                   - s3:GetObject
+                  - s3:DeleteObject
                 Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${ExistingBucketName}/tmp/*
                   - !Sub arn:${AWS::Partition}:s3:::${ExistingBucketName}/media/*
       Tags:
         - Key: Application
           Value: tambike
         - Key: Purpose
-          Value: local-member-media-read
+          Value: local-member-media-development
 
 Outputs:
   DevelopmentReadRoleArn:
