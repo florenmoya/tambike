@@ -1,0 +1,97 @@
+.brief {
+  display: grid;
+  gap: clamp(0.65rem, 1vw, 0.9rem);
+  padding: clamp(1rem, 2vw, 1.5rem);
+  border: 1px solid rgba(255, 190, 69, 0.28);
+  border-radius: 1rem;
+  background:
+    linear-gradient(135deg, rgba(255, 190, 69, 0.055), transparent 42%),
+    rgba(17, 17, 20, 0.78);
+}
+
+.eyebrow {
+  color: var(--signal);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.heading {
+  margin: 0;
+  color: #f8f6f2;
+  font-size: clamp(1.35rem, 2.2vw, 2rem);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.description {
+  max-width: 72ch;
+  margin: 0;
+  color: rgba(248, 246, 242, 0.72);
+  font-size: clamp(0.95rem, 1.2vw, 1.05rem);
+  line-height: 1.6;
+}
+
+.notes {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.notesLabel {
+  flex: 0 0 auto;
+  color: rgba(248, 246, 242, 0.5);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.rule {
+  padding: 0.3rem 0.58rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  color: rgba(248, 246, 242, 0.68);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+@media (max-width: 640px) {
+  .brief {
+    border-radius: 0.85rem;
+  }
+
+  .heading {
+    font-size: 1.3rem;
+  }
+
+  .description {
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+
+  .notes {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .rule {
+    padding: 0.28rem 0.5rem;
+    font-size: 0.74rem;
+  }
+}
