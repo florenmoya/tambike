@@ -223,6 +223,20 @@ describe("member profile App Router and UI contracts", () => {
     );
   });
 
+  test("explains the next rider-facing profile action", () => {
+    const settings = source("src/features/member-profiles/profile-settings.tsx");
+
+    expect(settings).toContain("Show riders what you ride");
+    expect(settings).toContain("Ready for your next meetup");
+    expect(settings).toContain("Your rider card is live");
+    expect(settings).toContain("Identity");
+    expect(settings).toContain("Motorcycle");
+    expect(settings).toContain("Photo");
+    expect(settings).not.toContain("4 of 4 ready");
+    expect(settings).not.toContain("Not published");
+    expect(settings).not.toContain("Profile readiness");
+  });
+
   test("composes the profile editor as a professional Garage Studio", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
     const styles = source(
@@ -231,10 +245,14 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toContain("Garage Studio");
     expect(settings).toContain("MotorcyclePhotoWorkspace");
     expect(settings).toContain("styles.studioEditor");
-    expect(settings).toContain("Profile readiness");
-    expect(settings).toContain("readyItems.length");
+    expect(settings).toContain("Rider card status");
+    expect(settings).toContain("riderSignals");
     expect(settings).toContain("styles.mediaStatus");
     expect(styles).toContain(".studio");
+    expect(styles).toContain(".studioStatus");
+    expect(styles).toContain(".studioStatusSignals");
+    expect(styles).toMatch(/@media\s*\(max-width:\s*640px\)[\s\S]*?\.studioStatus\s*\{/);
+    expect(styles).not.toContain(".readiness");
     expect(styles).toContain(".motorcyclePhotoCardCover");
     expect(styles).toMatch(
       /:global\(\.ambient-main\):has\(\.studio\)\s*\{[\s\S]*?overflow:\s*visible;/,

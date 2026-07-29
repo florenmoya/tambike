@@ -11,7 +11,6 @@ import {
   UserRound,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -210,7 +209,7 @@ function LoadedProfileSettings({
     draft: profileDraft,
     motorcycleDraft,
   } = profileEditorState;
-  const [profileStatus, setProfileStatus] = useState("");
+  const [profileSaveStatus, setProfileSaveStatus] = useState("");
   const [motorcycleStatus, setMotorcycleStatus] = useState("");
   const [mediaStatus, setMediaStatus] = useState("");
   const [profilePending, setProfilePending] = useState(false);
@@ -247,7 +246,7 @@ function LoadedProfileSettings({
 
   const handleProfileSave = async (formData: FormData) => {
     setProfilePending(true);
-    setProfileStatus("");
+    setProfileSaveStatus("");
     try {
       const saved = await updateMemberProfile(profileInputFromFormData(formData));
       setProfileEditorState((current) => ({
@@ -261,9 +260,9 @@ function LoadedProfileSettings({
           saved,
         ),
       }));
-      setProfileStatus(saved.isPublished ? "Profile changes saved." : "Private profile saved.");
+      setProfileSaveStatus(saved.isPublished ? "Profile changes saved." : "Private profile saved.");
     } catch (error) {
-      setProfileStatus(actionErrorMessage(error));
+      setProfileSaveStatus(actionErrorMessage(error));
     } finally {
       setProfilePending(false);
     }
@@ -357,7 +356,40 @@ function LoadedProfileSettings({
     },
     { label: "Photos", ready: photos.length > 0 },
   ];
-  const readyItems = readinessItems.filter((item) => item.ready);
+  const riderSignals = [
+    readinessItems[0],
+    readinessItems[2],
+    { label: "Photo", ready: photos.length > 0 },
+  ];
+  const firstMissingSignal = riderSignals.find((item) => !item.ready);
+  const profileStatus = editor.isPublished
+    ? {
+        title: "Your rider card is live",
+        description: "Other riders can now find your bike and recognize you at a meetup.",
+        action: "view" as const,
+      }
+    : riderSignals.every((item) => item.ready)
+      ? {
+          title: "Ready for your next meetup",
+          description: "Your rider card is complete. Publish it when you want other riders to see it.",
+          action: "publish" as const,
+        }
+      : {
+          title: "Show riders what you ride",
+          description: "Your name, home base, bike, and one photo help riders recognize you at the next meetup.",
+          action: "next" as const,
+        };
+
+  const nextStep = firstMissingSignal?.label === "Identity"
+    ? { label: "Add your identity", href: "#profile-identity" }
+    : firstMissingSignal?.label === "Motorcycle"
+      ? { label: "Add your motorcycle", href: "#profile-motorcycle" }
+      : { label: "Add a bike photo", href: "#motorcycle-photos" };
+
+  const submitProfileForm = () => {
+    const form = document.getElementById("profile-settings-form");
+    if (form instanceof HTMLFormElement) form.requestSubmit();
+  };
 
   return (
     <div
@@ -388,21 +420,33 @@ function LoadedProfileSettings({
             Preview profile
           </Button>
         </div>
-        {editor.slug ? (
-          <Button asChild>
-            <Link href={`/riders/${editor.slug}`}>View rider page</Link>
-          </Button>
-        ) : (
-          <Badge>Not published</Badge>
-        )}
-        <div className={styles.readiness} aria-label="Profile readiness">
-          <strong>{readyItems.length} of {readinessItems.length} ready</strong>
-          <span>
-            {readinessItems
-              .filter((item) => !item.ready)
-              .map((item) => item.label)
-              .join(" · ") || "Your garage card is ready"}
-          </span>
+        <div className={styles.studioStatus} aria-label="Rider card status">
+          <div className={styles.studioStatusCopy}>
+            <span className={styles.studioStatusEyebrow}>Rider card</span>
+            <h2>{profileStatus.title}</h2>
+            <p>{profileStatus.description}</p>
+          </div>
+          <div className={styles.studioStatusActions}>
+            {profileStatus.action === "view" && editor.slug ? (
+              <Button asChild>
+                <Link href={`/riders/${editor.slug}`}>View your rider page</Link>
+              </Button>
+            ) : profileStatus.action === "publish" ? (
+              <Button type="button" onClick={submitProfileForm}>{publishLabel}</Button>
+            ) : (
+              <Button asChild variant="outline">
+                <a href={nextStep.href}>{nextStep.label}</a>
+              </Button>
+            )}
+          </div>
+          <ul className={styles.studioStatusSignals} aria-label="Rider card details">
+            {riderSignals.map((item) => (
+              <li key={item.label} data-ready={item.ready}>
+                <span aria-hidden="true">{item.ready ? "✓" : "○"}</span>
+                {item.label}
+              </li>
+            ))}
+          </ul>
         </div>
       </header>
 
@@ -410,9 +454,9 @@ function LoadedProfileSettings({
         hidden={studioMode !== "edit"}
         className={styles.studioEditor}
       >
-      <form action={handleProfileSave} className="profile-settings__grid">
+       <form id="profile-settings-form" action={handleProfileSave} className="profile-settings__grid">
         <ProfileSaveFieldset pending={profilePending}>
-        <Card className="profile-settings__section">
+         <Card id="profile-identity" className="profile-settings__section">
           <CardHeader>
             <CardTitle><UserRound aria-hidden="true" /> Identity</CardTitle>
             <CardDescription>This is the name, area, and story shown on your garage card.</CardDescription>
@@ -479,12 +523,12 @@ function LoadedProfileSettings({
             {profilePending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
             {profilePending ? "Saving…" : publishLabel}
           </Button>
-          <p aria-live="polite">{profileStatus}</p>
+           <p aria-live="polite">{profileSaveStatus}</p>
         </div>
         </ProfileSaveFieldset>
       </form>
 
-      <Card className="profile-settings__section profile-settings__media-section">
+       <Card id="profile-avatar" className="profile-settings__section profile-settings__media-section">
         <CardHeader>
           <CardTitle><Camera aria-hidden="true" /> Avatar</CardTitle>
           <CardDescription>The identity plate crops this image to a centered square.</CardDescription>
@@ -513,7 +557,7 @@ function LoadedProfileSettings({
 
       <form action={handleMotorcycleSave}>
         <ProfileSaveFieldset pending={motorcyclePending}>
-        <Card className="profile-settings__section">
+         <Card id="profile-motorcycle" className="profile-settings__section">
           <CardHeader>
             <CardTitle><Bike aria-hidden="true" /> Motorcycle</CardTitle>
             <CardDescription>Tambike shows one motorcycle as the centerpiece of your garage card.</CardDescription>
@@ -537,15 +581,17 @@ function LoadedProfileSettings({
         </ProfileSaveFieldset>
       </form>
 
-      <MotorcyclePhotoWorkspace
-        photos={photos}
-        uploadEnabled={Boolean(editor.motorcycle)}
-        mediaPending={mediaPending}
-        onUploaded={refreshEditor}
-        onMove={movePhoto}
-        onReorder={reorderPhoto}
-        onDelete={removeMedia}
-      />
+       <div id="motorcycle-photos">
+         <MotorcyclePhotoWorkspace
+           photos={photos}
+           uploadEnabled={Boolean(editor.motorcycle)}
+           mediaPending={mediaPending}
+           onUploaded={refreshEditor}
+           onMove={movePhoto}
+           onReorder={reorderPhoto}
+           onDelete={removeMedia}
+         />
+       </div>
       <p
         className={`profile-settings__media-status ${styles.mediaStatus}`}
         aria-live="polite"

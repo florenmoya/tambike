@@ -83,28 +83,88 @@
   color: var(--studio-asphalt);
 }
 
-.readiness {
+.studioStatus {
   grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.35rem 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem 1.5rem;
   min-width: 0;
-  padding: 0.75rem 0.875rem;
-  border-left: 3px solid var(--studio-green);
+  padding: 1rem 1.125rem;
+  border-left: 3px solid var(--studio-amber);
+  border-radius: 0.5rem;
   background: color-mix(in srgb, var(--studio-paper) 7%, transparent);
 }
 
-.readiness strong {
-  color: var(--studio-paper);
-  font-size: 0.875rem;
+.studioStatusCopy {
+  min-width: 0;
 }
 
-.readiness span {
-  color: color-mix(in srgb, var(--studio-paper) 65%, transparent);
-  font-size: 0.8125rem;
-  overflow-wrap: anywhere;
+.studioStatusEyebrow {
+  color: var(--studio-amber);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.studioStatusCopy h2 {
+  margin: 0.2rem 0 0.25rem;
+  color: var(--studio-paper);
+  font-size: clamp(1.125rem, 2vw, 1.5rem);
+  line-height: 1.15;
+}
+
+.studioStatusCopy p {
+  max-width: 44rem;
+  margin: 0;
+  color: color-mix(in srgb, var(--studio-paper) 68%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.studioStatusActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.studioStatusActions :global([data-slot="button"]) {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.studioStatusSignals {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studioStatusSignals li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 32px;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--studio-steel) 32%, transparent);
+  border-radius: 999px;
+  color: var(--studio-steel);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.studioStatusSignals li[data-ready="true"] {
+  border-color: color-mix(in srgb, var(--studio-green) 65%, transparent);
+  color: #91c5a5;
+}
+
+.studioStatusSignals li span {
+  font-size: 0.875rem;
+  line-height: 1;
 }
 
 .studioEditor {
@@ -374,9 +434,21 @@
     justify-self: start;
   }
 
+  .studioStatusActions {
+    align-items: start;
+  }
+
 }
 
 @media (max-width: 640px) {
+  .studioStatus {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .studioStatusActions {
+    justify-content: flex-start;
+  }
+
   .studioModeSwitch {
     width: 100%;
   }
