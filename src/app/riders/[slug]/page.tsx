@@ -4,7 +4,15 @@ import { MemberProfileScreen } from "@/features/member-profiles/member-profile-s
 import type { MemberProfileView } from "@/features/member-profiles/types";
 import { TambikeAppShell } from "@/features/tambike-demo/tambike-screen";
 import { getMemberProfileAction } from "@/server/actions";
-import { BackendError } from "@/server/backend";
+
+function isBackendNotFound(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "NOT_FOUND"
+  );
+}
 
 export async function loadRiderProfile(
   slug: string,
@@ -14,7 +22,7 @@ export async function loadRiderProfile(
   try {
     return await getProfile(slug);
   } catch (error) {
-    if (error instanceof BackendError && error.code === "NOT_FOUND") {
+    if (isBackendNotFound(error)) {
       return showNotFound();
     }
     throw error;

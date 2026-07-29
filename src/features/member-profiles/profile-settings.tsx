@@ -132,6 +132,101 @@ export function reconcileEditorRefresh(
   };
 }
 
+export function reorderedMotorcyclePhotos(
+  photos: NonNullable<MemberProfileEditorView["motorcycle"]>["photos"],
+  fromIndex: number,
+  toIndex: number,
+) {
+  if (
+    fromIndex < 0 ||
+    fromIndex >= photos.length ||
+    toIndex < 0 ||
+    toIndex >= photos.length ||
+    fromIndex === toIndex
+  ) {
+    return photos;
+  }
+
+  const reordered = [...photos];
+  const [moved] = reordered.splice(fromIndex, 1);
+  reordered.splice(toIndex, 0, moved);
+  return reordered.map((photo, position) => ({ ...photo, position }));
+}
+
+function editorHasMotorcyclePhotoOrder(
+  editor: MemberProfileEditorView,
+  intendedMediaIds: string[],
+) {
+  const savedPhotos =
+    editor.motorcycle?.photos.toSorted((left, right) => left.position - right.position) ?? [];
+  return (
+    savedPhotos.length === intendedMediaIds.length &&
+    savedPhotos.every(
+      (photo, position) =>
+        photo.position === position &&
+        mediaIdFromUrl(photo.url) === intendedMediaIds[position],
+    )
+  );
+}
+
+export async function persistMotorcyclePhotoOrder(
+  intendedPhotos: NonNullable<MemberProfileEditorView["motorcycle"]>["photos"],
+  dependencies: {
+    reorderMotorcyclePhotos: (mediaIds: string[]) => Promise<MemberProfileEditorView>;
+    getMemberProfileEditor: () => Promise<MemberProfileEditorView>;
+  },
+) {
+  const intendedMediaIds = intendedPhotos.map((photo) => mediaIdFromUrl(photo.url));
+  const actionEditor = await dependencies.reorderMotorcyclePhotos(intendedMediaIds);
+  if (editorHasMotorcyclePhotoOrder(actionEditor, intendedMediaIds)) {
+    return actionEditor;
+  }
+
+  const refreshedEditor = await dependencies.getMemberProfileEditor();
+  if (editorHasMotorcyclePhotoOrder(refreshedEditor, intendedMediaIds)) {
+    return refreshedEditor;
+  }
+
+  throw new Error("MOTORCYCLE_PHOTO_ORDER_NOT_SAVED");
+}
+
+export function ProfileViewAction({
+  viewAction,
+  profileDirty,
+  motorcycleDirty,
+}: {
+  viewAction: { label: string; href: string };
+  profileDirty: boolean;
+  motorcycleDirty: boolean;
+}) {
+  if (profileDirty || motorcycleDirty) {
+    return (
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          disabled
+          aria-describedby="profile-view-action-help"
+        >
+          {viewAction.label}
+        </Button>
+        <span
+          id="profile-view-action-help"
+          className={styles.studioViewActionHint}
+        >
+          Save changes before viewing your profile.
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <Button asChild variant="outline">
+      <Link href={viewAction.href}>{viewAction.label}</Link>
+    </Button>
+  );
+}
+
 export function ProfileSaveFieldset({
   pending,
   children,
@@ -204,7 +299,9 @@ function LoadedProfileSettings({
   const {
     editor,
     draft: profileDraft,
+    profileDirty,
     motorcycleDraft,
+    motorcycleDirty,
   } = profileEditorState;
   const [profileSaveStatus, setProfileSaveStatus] = useState("");
   const [motorcycleStatus, setMotorcycleStatus] = useState("");
@@ -216,6 +313,7 @@ function LoadedProfileSettings({
   const presentation = getProfileEditorPresentation({
     isPublished: editor.isPublished,
     slug: editor.slug,
+    visibility: editor.visibility,
     displayName: profileDraft.displayName,
     area: profileDraft.area,
     make: motorcycleDraft.make,
@@ -304,14 +402,14 @@ function LoadedProfileSettings({
   const movePhoto = async (index: number, direction: -1 | 1) => {
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= photos.length) return;
-    const reordered = [...photos];
-    [reordered[index], reordered[nextIndex]] = [reordered[nextIndex], reordered[index]];
+    const reordered = reorderedMotorcyclePhotos(photos, index, nextIndex);
     setMediaPending(true);
     setMediaStatus("");
     try {
-      const refreshed = await reorderMotorcyclePhotos(
-        reordered.map((photo) => mediaIdFromUrl(photo.url)),
-      );
+      const refreshed = await persistMotorcyclePhotoOrder(reordered, {
+        reorderMotorcyclePhotos,
+        getMemberProfileEditor,
+      });
       setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
       setMediaStatus(`Photo ${index + 1} moved ${direction < 0 ? "left" : "right"}.`);
     } catch (error) {
@@ -323,15 +421,14 @@ function LoadedProfileSettings({
 
   const reorderPhoto = async (fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
-    const reordered = [...photos];
-    const [moved] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, moved);
+    const reordered = reorderedMotorcyclePhotos(photos, fromIndex, toIndex);
     setMediaPending(true);
     setMediaStatus("");
     try {
-      const refreshed = await reorderMotorcyclePhotos(
-        reordered.map((photo) => mediaIdFromUrl(photo.url)),
-      );
+      const refreshed = await persistMotorcyclePhotoOrder(reordered, {
+        reorderMotorcyclePhotos,
+        getMemberProfileEditor,
+      });
       setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
       setMediaStatus("Motorcycle photo order saved.");
     } catch (error) {
@@ -365,11 +462,11 @@ function LoadedProfileSettings({
           <span className={styles.studioState} data-state={presentation.state}>
             {presentation.label}
           </span>
-          <Button asChild variant="outline">
-            <Link href={presentation.viewAction.href}>
-              {presentation.viewAction.label}
-            </Link>
-          </Button>
+          <ProfileViewAction
+            viewAction={presentation.viewAction}
+            profileDirty={profileDirty}
+            motorcycleDirty={motorcycleDirty}
+          />
         </div>
         <div className={styles.studioStatus}>
           <p>{presentation.description}</p>

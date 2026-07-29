@@ -1,6 +1,7 @@
 export interface ProfileEditorPresentationInput {
   isPublished: boolean;
   slug: string | null;
+  visibility: "PUBLIC" | "MEMBERS_ONLY" | "PRIVATE";
   displayName: string;
   area: string;
   make: string;
@@ -58,7 +59,14 @@ export function getProfileEditorPresentation(
   ];
   const complete = requirements.every((requirement) => requirement.ready);
   const firstMissing = requirements.find((requirement) => !requirement.ready);
-  const state = input.isPublished ? "live" : complete ? "ready" : "incomplete";
+  const state =
+    input.isPublished && input.visibility === "PRIVATE"
+      ? "private"
+      : input.isPublished
+        ? "live"
+        : complete
+          ? "ready"
+          : "incomplete";
   const signals = complete || input.isPublished
     ? []
     : [
@@ -78,12 +86,16 @@ export function getProfileEditorPresentation(
     label:
       state === "live"
         ? "Live"
+        : state === "private"
+          ? "Private"
         : state === "ready"
           ? "Ready to publish"
           : "Complete your profile",
     description:
       state === "live"
         ? "Other riders can view your rider profile."
+        : state === "private"
+          ? "Only you can see this profile."
         : state === "ready"
           ? "Your required details are complete."
           : `${firstMissing!.label} is required to publish.`,
@@ -91,7 +103,7 @@ export function getProfileEditorPresentation(
     signals,
     firstMissing,
     viewAction:
-      input.isPublished && input.slug
+      state === "live" && input.slug
         ? {
             label: "View public profile",
             href: `/riders/${input.slug}`,

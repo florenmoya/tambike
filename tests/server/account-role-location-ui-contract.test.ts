@@ -84,6 +84,7 @@ describe("account and event-location UI contracts", () => {
       "login",
       "signup",
       "profile",
+      "profile-preview",
       "event-register",
       "event-test-ride",
     ]);

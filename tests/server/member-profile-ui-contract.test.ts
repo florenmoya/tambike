@@ -49,9 +49,58 @@ const editor: MemberProfileEditorView = {
   defaultRosterIdentity: "ANONYMOUS",
 };
 
+type MotorcyclePhotos = NonNullable<MemberProfileEditorView["motorcycle"]>["photos"];
+
+const intendedMotorcyclePhotoOrder: MotorcyclePhotos = [
+  { url: "/media/selected", position: 0, width: 1200, height: 800 },
+  { url: "/media/cover", position: 1, width: 1200, height: 800 },
+  { url: "/media/last", position: 2, width: 1200, height: 800 },
+];
+
+const staleMotorcyclePhotoOrder: MotorcyclePhotos = [
+  { url: "/media/cover", position: 0, width: 1200, height: 800 },
+  { url: "/media/selected", position: 1, width: 1200, height: 800 },
+  { url: "/media/last", position: 2, width: 1200, height: 800 },
+];
+
+function editorWithMotorcyclePhotos(photos: MotorcyclePhotos): MemberProfileEditorView {
+  return {
+    ...editor,
+    motorcycle: {
+      ...editor.motorcycle!,
+      photos,
+    },
+  };
+}
+
+async function loadPersistMotorcyclePhotoOrder() {
+  const settings = await import("../../src/features/member-profiles/profile-settings");
+  return (settings as unknown as {
+    persistMotorcyclePhotoOrder?: (
+      photos: MotorcyclePhotos,
+      dependencies: {
+        reorderMotorcyclePhotos: (mediaIds: string[]) => Promise<MemberProfileEditorView>;
+        getMemberProfileEditor: () => Promise<MemberProfileEditorView>;
+      },
+    ) => Promise<MemberProfileEditorView>;
+  }).persistMotorcyclePhotoOrder;
+}
+
+async function loadProfileViewAction() {
+  const settings = await import("../../src/features/member-profiles/profile-settings");
+  return (settings as unknown as {
+    ProfileViewAction?: (props: {
+      viewAction: { label: string; href: string };
+      profileDirty: boolean;
+      motorcycleDirty: boolean;
+    }) => ReactNode;
+  }).ProfileViewAction;
+}
+
 const completeProfileInput: ProfileEditorPresentationInput = {
   isPublished: false,
   slug: "mika-santos",
+  visibility: "PUBLIC",
   displayName: "Mika Santos",
   area: "Davao City",
   make: "Honda",
@@ -141,6 +190,26 @@ describe("member profile App Router and UI contracts", () => {
     });
   });
 
+  test("keeps a published private profile private and preview-only", () => {
+    const privateProfile = getProfileEditorPresentation({
+      ...completeProfileInput,
+      isPublished: true,
+      visibility: "PRIVATE",
+    });
+
+    expect(privateProfile).toMatchObject({
+      state: "private",
+      label: "Private",
+      description: "Only you can see this profile.",
+      signals: [],
+      viewAction: {
+        label: "Preview profile",
+        href: "/profile/preview",
+      },
+    });
+    expect(privateProfile.viewAction.href).not.toContain("/riders/");
+  });
+
   test("awaits the rider slug, queries on the server, and hides lookup failures", () => {
     const route = source("src/app/riders/[slug]/page.tsx");
 
@@ -210,6 +279,9 @@ describe("member profile App Router and UI contracts", () => {
     const route = source("src/app/profile/preview/page.tsx");
     const preview = source("src/features/member-profiles/profile-preview.tsx");
     const screen = source("src/features/tambike-demo/tambike-screen.tsx");
+    const garageMarkup = renderToStaticMarkup(createElement(RiderGarageView, {
+      profile: toSavedProfilePreviewView(editor),
+    }));
 
     expect(route).toContain('<TambikeScreen view="profile-preview"');
     expect(screen).toContain('| "profile-preview"');
@@ -219,8 +291,33 @@ describe("member profile App Router and UI contracts", () => {
     expect(preview).toContain("Back to edit");
     expect(preview).toContain("<RiderGarageView");
     expect(preview).toContain("toSavedProfilePreviewView");
-    expect(preview).not.toContain("Your rider profile");
+    expect(preview).toContain('aria-label="Your rider profile preview"');
+    expect(preview).not.toMatch(/<h1\b/);
+    expect(garageMarkup.match(/<h1\b/g)).toHaveLength(1);
     expect(preview).not.toContain("Complete your profile");
+  });
+
+  test("keeps signed-out preview guidance and the narrow preview layout explicit", () => {
+    const screen = source("src/features/tambike-demo/tambike-screen.tsx");
+    const styles = source("src/features/member-profiles/profile-studio.module.css");
+    const narrowStart = styles.indexOf("@media (max-width: 390px)");
+    const narrowEnd = styles.indexOf("@media (prefers-reduced-motion", narrowStart);
+    const narrowStyles = styles.slice(narrowStart, narrowEnd);
+
+    expect(screen).toContain('title="Log in to preview profile"');
+    expect(screen).toContain(
+      'body="Your preview is only available from your rider account."',
+    );
+    expect(narrowStart).toBeGreaterThanOrEqual(0);
+    expect(narrowStyles).toMatch(
+      /\.previewNotice\s*\{[\s\S]*?flex-wrap:\s*wrap;/,
+    );
+    expect(narrowStyles).toMatch(
+      /\.previewNotice\s*>\s*:global\(\[data-slot="button"\]\)\s*\{[\s\S]*?width:\s*100%;/,
+    );
+    expect(narrowStyles).toMatch(
+      /\.motorcyclePhotoGrid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/,
+    );
   });
 
   test("eagerly loads the public garage cover when requested", () => {
@@ -249,13 +346,60 @@ describe("member profile App Router and UI contracts", () => {
       "Add the details riders see when they open your profile.",
     );
     expect(settings).toContain("getProfileEditorPresentation");
-    expect(settings).toContain("presentation.viewAction.href");
+    expect(settings).toContain("<ProfileViewAction");
+    expect(settings).toContain("viewAction={presentation.viewAction}");
     expect(settings).not.toContain("StudioMode");
     expect(settings).not.toContain("studioMode");
     expect(settings).not.toContain("<RiderGarageView");
     expect(settings).not.toContain("toProfilePreviewView");
     expect(settings).not.toContain("Edit profile");
     expect(settings).not.toContain("View your rider page");
+  });
+
+  test.each([
+    { profileDirty: true, motorcycleDirty: false },
+    { profileDirty: false, motorcycleDirty: true },
+  ])(
+    "blocks the saved profile action when a draft is dirty: $profileDirty/$motorcycleDirty",
+    async ({ profileDirty, motorcycleDirty }) => {
+      const ProfileViewAction = await loadProfileViewAction();
+      expect(ProfileViewAction).toBeTypeOf("function");
+
+      const markup = renderToStaticMarkup(ProfileViewAction!({
+        viewAction: { label: "Preview profile", href: "/profile/preview" },
+        profileDirty,
+        motorcycleDirty,
+      }));
+
+      expect(markup).toMatch(/<button\b[^>]*disabled=""/);
+      expect(markup).toContain('data-variant="outline"');
+      expect(markup).toContain("Preview profile");
+      expect(markup).toContain("Save changes before viewing your profile.");
+      expect(markup).not.toContain("<a ");
+      expect(markup).not.toContain('href="/profile/preview"');
+    },
+  );
+
+  test.each([
+    { label: "Preview profile", href: "/profile/preview" },
+    { label: "View public profile", href: "/riders/mika-santos" },
+  ])("keeps the clean $label action navigable", async (viewAction) => {
+    const ProfileViewAction = await loadProfileViewAction();
+    expect(ProfileViewAction).toBeTypeOf("function");
+
+    const markup = renderToStaticMarkup(ProfileViewAction!({
+      viewAction,
+      profileDirty: false,
+      motorcycleDirty: false,
+    }));
+
+    expect(markup).toMatch(
+      new RegExp(`<a\\b[^>]*href="${viewAction.href.replaceAll("/", "\\/")}"`),
+    );
+    expect(markup).toContain('data-variant="outline"');
+    expect(markup).toContain(viewAction.label);
+    expect(markup).not.toContain("<button");
+    expect(markup).not.toContain("Save changes before viewing your profile.");
   });
 
   test("visibly marks every publish requirement and optional profile field", () => {
@@ -311,6 +455,15 @@ describe("member profile App Router and UI contracts", () => {
     );
     expect(styles).toMatch(
       /@media\s*\(max-width:\s*900px\)[\s\S]*?\.studioHeaderActions\s*\{[\s\S]*?justify-content:\s*flex-start;/,
+    );
+    expect(styles).toMatch(
+      /\.studioHeaderActions\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]\)\s*\{[\s\S]*?background:\s*var\(--studio-paper\);[\s\S]*?border-color:\s*var\(--studio-paper\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
+    );
+    expect(styles).toMatch(
+      /\.studioHeaderActions\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]:hover\)\s*\{[\s\S]*?background:/,
+    );
+    expect(styles).toMatch(
+      /\.studioHeaderActions\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]:focus-visible\)\s*\{[\s\S]*?outline:/,
     );
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
@@ -459,6 +612,101 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).not.toContain("Move later");
     expect(settings).toContain('direction < 0 ? "left" : "right"');
     expect(settings).not.toContain('"earlier" : "later"');
+  });
+
+  test("moves the selected saved motorcycle photo to the requested position", async () => {
+    const settings = await import("../../src/features/member-profiles/profile-settings");
+    const reorder = (settings as unknown as {
+      reorderedMotorcyclePhotos?: (
+        photos: NonNullable<MemberProfileEditorView["motorcycle"]>["photos"],
+        fromIndex: number,
+        toIndex: number,
+      ) => NonNullable<MemberProfileEditorView["motorcycle"]>["photos"];
+    }).reorderedMotorcyclePhotos;
+    expect(reorder).toBeTypeOf("function");
+
+    const photos = [
+      { url: "/media/cover", position: 0, width: 1200, height: 800 },
+      { url: "/media/selected", position: 1, width: 1200, height: 800 },
+      { url: "/media/last", position: 2, width: 1200, height: 800 },
+    ];
+    expect(reorder!(photos, 1, 0)).toEqual([
+      { url: "/media/selected", position: 0, width: 1200, height: 800 },
+      { url: "/media/cover", position: 1, width: 1200, height: 800 },
+      { url: "/media/last", position: 2, width: 1200, height: 800 },
+    ]);
+  });
+
+  test("sends the intended saved motorcycle media ID order", async () => {
+    const persist = await loadPersistMotorcyclePhotoOrder();
+    expect(persist).toBeTypeOf("function");
+    let requestedMediaIds: string[] = [];
+    const matching = editorWithMotorcyclePhotos(intendedMotorcyclePhotoOrder);
+
+    await persist!(intendedMotorcyclePhotoOrder, {
+      reorderMotorcyclePhotos: async (mediaIds) => {
+        requestedMediaIds = mediaIds;
+        return matching;
+      },
+      getMemberProfileEditor: async () => {
+        throw new Error("refresh must not run");
+      },
+    });
+
+    expect(requestedMediaIds).toEqual(["selected", "cover", "last"]);
+  });
+
+  test("accepts a matching motorcycle order action response without refreshing", async () => {
+    const persist = await loadPersistMotorcyclePhotoOrder();
+    expect(persist).toBeTypeOf("function");
+    const matching = editorWithMotorcyclePhotos(intendedMotorcyclePhotoOrder);
+    let refreshCount = 0;
+
+    const saved = await persist!(intendedMotorcyclePhotoOrder, {
+      reorderMotorcyclePhotos: async () => matching,
+      getMemberProfileEditor: async () => {
+        refreshCount += 1;
+        return matching;
+      },
+    });
+
+    expect(saved).toBe(matching);
+    expect(refreshCount).toBe(0);
+  });
+
+  test("recovers a stale motorcycle order action response with one matching refresh", async () => {
+    const persist = await loadPersistMotorcyclePhotoOrder();
+    expect(persist).toBeTypeOf("function");
+    const stale = editorWithMotorcyclePhotos(staleMotorcyclePhotoOrder);
+    const matching = editorWithMotorcyclePhotos(intendedMotorcyclePhotoOrder);
+    let refreshCount = 0;
+
+    const saved = await persist!(intendedMotorcyclePhotoOrder, {
+      reorderMotorcyclePhotos: async () => stale,
+      getMemberProfileEditor: async () => {
+        refreshCount += 1;
+        return matching;
+      },
+    });
+
+    expect(saved).toBe(matching);
+    expect(refreshCount).toBe(1);
+  });
+
+  test("rejects a motorcycle order that still mismatches after one refresh", async () => {
+    const persist = await loadPersistMotorcyclePhotoOrder();
+    expect(persist).toBeTypeOf("function");
+    const stale = editorWithMotorcyclePhotos(staleMotorcyclePhotoOrder);
+    let refreshCount = 0;
+
+    await expect(persist!(intendedMotorcyclePhotoOrder, {
+      reorderMotorcyclePhotos: async () => stale,
+      getMemberProfileEditor: async () => {
+        refreshCount += 1;
+        return stale;
+      },
+    })).rejects.toThrow("MOTORCYCLE_PHOTO_ORDER_NOT_SAVED");
+    expect(refreshCount).toBe(1);
   });
 
   test("keeps the public rider garage below the mobile header", () => {
@@ -621,9 +869,27 @@ describe("member profile App Router and UI contracts", () => {
     await expect(load!("hidden", async () => { throw hidden; }, () => { throw notFoundMarker; }))
       .rejects.toBe(notFoundMarker);
 
+    const reloadedBackendNotFound = Object.assign(new Error("NOT_FOUND"), {
+      code: "NOT_FOUND",
+    });
+    await expect(load!(
+      "hidden-after-reload",
+      async () => { throw reloadedBackendNotFound; },
+      () => { throw notFoundMarker; },
+    )).rejects.toBe(notFoundMarker);
+
     const outage = new Error("database unavailable");
     await expect(load!("mika", async () => { throw outage; }, () => { throw notFoundMarker; }))
       .rejects.toBe(outage);
+
+    for (const code of ["INVALID_INPUT", "UNAUTHENTICATED"] as const) {
+      const serialized = { code };
+      await expect(load!(
+        `serialized-${code.toLowerCase()}`,
+        async () => { throw serialized; },
+        () => { throw notFoundMarker; },
+      )).rejects.toBe(serialized);
+    }
   });
 
   test("rejects invalid files locally and gives stable presign and storage guidance", async () => {
