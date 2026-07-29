@@ -3,11 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
   Bike,
   Camera,
-  ExternalLink,
   LoaderCircle,
   Save,
   Trash2,
@@ -36,6 +33,7 @@ import type {
 } from "./types";
 import { MemberMediaUploader } from "./member-media-uploader";
 import { MemberMediaImage } from "./member-profile-screen";
+import { MotorcyclePhotoWorkspace } from "./motorcycle-photo-workspace";
 import { ProfileStudioPreview } from "./profile-studio-preview";
 import styles from "./profile-studio.module.css";
 
@@ -182,15 +180,13 @@ export function ProfileSettings() {
     );
   }
 
-  return <LoadedProfileSettings initialEditor={initialEditor} accountEmail={currentUser.email} />;
+  return <LoadedProfileSettings initialEditor={initialEditor} />;
 }
 
 function LoadedProfileSettings({
   initialEditor,
-  accountEmail,
 }: {
   initialEditor: MemberProfileEditorView;
-  accountEmail: string;
 }) {
   const {
     getMemberProfileEditor,
@@ -317,27 +313,70 @@ function LoadedProfileSettings({
     }
   };
 
+  const reorderPhoto = async (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const reordered = [...photos];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    setMediaPending(true);
+    setMediaStatus("");
+    try {
+      const refreshed = await reorderMotorcyclePhotos(
+        reordered.map((photo) => mediaIdFromUrl(photo.url)),
+      );
+      setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
+      setMediaStatus("Motorcycle photo order saved.");
+    } catch (error) {
+      setMediaStatus(actionErrorMessage(error));
+    } finally {
+      setMediaPending(false);
+    }
+  };
+
   const publishLabel = !editor.isPublished && profileDraft.visibility !== "PRIVATE"
     ? "Publish profile"
     : "Save profile changes";
+  const readinessItems = [
+    {
+      label: "Identity",
+      ready: Boolean(profileDraft.displayName.trim() && profileDraft.area.trim()),
+    },
+    { label: "Avatar", ready: Boolean(editor.profilePhotoUrl) },
+    {
+      label: "Motorcycle",
+      ready: Boolean(motorcycleDraft.make.trim() && motorcycleDraft.model.trim()),
+    },
+    { label: "Photos", ready: photos.length > 0 },
+  ];
+  const readyItems = readinessItems.filter((item) => item.ready);
 
   return (
-    <div className="profile-settings" aria-labelledby="profile-settings-title">
-      <header className="profile-settings__header">
+    <div
+      className={`profile-settings ${styles.studio}`}
+      aria-labelledby="profile-settings-title"
+    >
+      <header className={styles.studioHeader}>
         <div>
-          <span>Garage settings</span>
-          <h1 id="profile-settings-title">Keep your rider card current</h1>
-          <p>Your account email is {accountEmail}. It is never shown on your rider page.</p>
+          <span>Rider profile</span>
+          <h1 id="profile-settings-title">Garage Studio</h1>
+          <p>Build the rider card people see before the next meetup.</p>
         </div>
         {editor.slug ? (
-          <Button asChild variant="outline">
-            <Link href={`/riders/${editor.slug}`}>
-              View rider page <ExternalLink aria-hidden="true" />
-            </Link>
+          <Button asChild>
+            <Link href={`/riders/${editor.slug}`}>View rider page</Link>
           </Button>
         ) : (
-          <Badge variant="secondary">Not published</Badge>
+          <Badge>Not published</Badge>
         )}
+        <div className={styles.readiness} aria-label="Profile readiness">
+          <strong>{readyItems.length} of {readinessItems.length} ready</strong>
+          <span>
+            {readinessItems
+              .filter((item) => !item.ready)
+              .map((item) => item.label)
+              .join(" · ") || "Your garage card is ready"}
+          </span>
+        </div>
       </header>
 
       <div className={styles.studioLayout}>
@@ -469,45 +508,25 @@ function LoadedProfileSettings({
         </ProfileSaveFieldset>
       </form>
 
-      <Card className="profile-settings__section">
-        <CardHeader>
-          <CardTitle>Motorcycle photos</CardTitle>
-          <CardDescription>Photo 1 becomes the wide hero. Arrange up to five frames in the order you want them seen.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {editor.motorcycle ? (
-            <MemberMediaUploader purpose="motorcycle-photo" photos={photos} onUploaded={refreshEditor} />
-          ) : (
-            <p className="profile-settings__direction">Save motorcycle details before adding photos.</p>
-          )}
-
-          {photos.length ? (
-            <ol className="profile-photo-editor" aria-label="Ordered motorcycle photos">
-              {photos.map((photo, index) => (
-                <li key={photo.url}>
-                  <MemberMediaImage src={photo.url} alt={`Motorcycle photo ${index + 1}`} width={photo.width || 400} height={photo.height || 300} sizes="(max-width: 640px) 45vw, 220px" />
-                  <span>Frame {String(index + 1).padStart(2, "0")}</span>
-                  <div className="profile-photo-editor__actions">
-                    <Button type="button" size="icon-sm" variant="outline" title="Move motorcycle photo earlier" aria-label={`Move motorcycle photo ${index + 1} earlier`} disabled={mediaPending || index === 0} onClick={() => movePhoto(index, -1)}><ArrowLeft aria-hidden="true" /></Button>
-                    <Button type="button" size="icon-sm" variant="outline" title="Move motorcycle photo later" aria-label={`Move motorcycle photo ${index + 1} later`} disabled={mediaPending || index === photos.length - 1} onClick={() => movePhoto(index, 1)}><ArrowRight aria-hidden="true" /></Button>
-                    <Button type="button" size="icon-sm" variant="destructive" aria-label={`Delete motorcycle photo ${index + 1}`} disabled={mediaPending} onClick={() => removeMedia(photo.url, `Photo ${index + 1}`)}><Trash2 aria-hidden="true" /></Button>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="profile-settings__direction">No motorcycle photos yet. Add one to create the garage hero.</p>
-          )}
-          <p className="profile-settings__media-status" aria-live="polite">{mediaStatus}</p>
-        </CardContent>
-      </Card>
+      <MotorcyclePhotoWorkspace
+        photos={photos}
+        disabled={!editor.motorcycle}
+        mediaPending={mediaPending}
+        onUploaded={refreshEditor}
+        onMove={movePhoto}
+        onReorder={reorderPhoto}
+        onDelete={removeMedia}
+      />
+      <p className="profile-settings__media-status" aria-live="polite">{mediaStatus}</p>
       </div>
 
-      <ProfileStudioPreview
-        editor={editor}
-        profileDraft={profileDraft}
-        motorcycleDraft={motorcycleDraft}
-      />
+      <div className={styles.studioPreviewColumn}>
+        <ProfileStudioPreview
+          editor={editor}
+          profileDraft={profileDraft}
+          motorcycleDraft={motorcycleDraft}
+        />
+      </div>
       </div>
     </div>
   );

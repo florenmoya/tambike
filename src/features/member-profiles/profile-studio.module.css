@@ -6,34 +6,146 @@
   border-radius: 0.5rem;
 }
 
+.studio {
+  --studio-asphalt: #17191c;
+  --studio-paper: #f4f1ea;
+  --studio-steel: #aeb4b8;
+  --studio-amber: #f2a41d;
+  --studio-red: #b83b32;
+  --studio-green: #3e6b55;
+
+  min-width: 0;
+  max-width: 100%;
+  padding: clamp(1rem, 2.5vw, 2rem);
+  overflow: clip;
+  border: 1px solid color-mix(in srgb, var(--studio-steel) 20%, transparent);
+  border-radius: 1rem;
+  background:
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--studio-amber) 12%, transparent),
+      transparent 34rem
+    ),
+    var(--studio-asphalt);
+  color: var(--studio-paper);
+}
+
+.studioHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 1rem clamp(1rem, 3vw, 2rem);
+  min-width: 0;
+  padding: 0 0 clamp(1.25rem, 3vw, 2rem);
+  border-bottom: 1px solid color-mix(in srgb, var(--studio-steel) 24%, transparent);
+}
+
+.studioHeader > div:first-child {
+  min-width: 0;
+}
+
+.studioHeader > div:first-child > span {
+  color: var(--studio-amber);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.studioHeader h1 {
+  max-width: 15ch;
+  margin: 0.35rem 0 0.65rem;
+  color: var(--studio-paper);
+  font-size: clamp(2.25rem, 6vw, 4.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+
+.studioHeader p {
+  max-width: 42rem;
+  margin: 0;
+  color: color-mix(in srgb, var(--studio-paper) 68%, transparent);
+  line-height: 1.55;
+}
+
+.studioHeader :global([data-slot="button"]) {
+  border-color: var(--studio-amber);
+  background: var(--studio-amber);
+  color: var(--studio-asphalt);
+}
+
+.readiness {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  min-width: 0;
+  padding: 0.75rem 0.875rem;
+  border-left: 3px solid var(--studio-green);
+  background: color-mix(in srgb, var(--studio-paper) 7%, transparent);
+}
+
+.readiness strong {
+  color: var(--studio-paper);
+  font-size: 0.875rem;
+}
+
+.readiness span {
+  color: color-mix(in srgb, var(--studio-paper) 65%, transparent);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
 .studioLayout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.46fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
   align-items: start;
   gap: clamp(1.25rem, 3vw, 2.5rem);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .studioEditor {
   display: grid;
   gap: 1.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.studioEditor :global(.profile-settings__section) {
+  min-width: 0;
+  max-width: 100%;
+  border-color: color-mix(in srgb, var(--studio-steel) 55%, transparent);
+  background: var(--studio-paper);
+}
+
+.studioPreviewColumn {
+  position: sticky;
+  top: 96px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .studioPreview {
-  position: sticky;
-  top: 1.5rem;
   display: grid;
   gap: 0.875rem;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   padding: 1rem;
-  border: 1px solid #aeb4b8;
+  border: 1px solid var(--studio-steel);
   border-radius: 0.875rem;
-  background: #f4f1ea;
-  color: #17191c;
+  background: var(--studio-paper);
+  color: var(--studio-asphalt);
+  box-shadow: 0 1.25rem 3rem color-mix(in srgb, var(--studio-asphalt) 55%, transparent);
 }
 
 .studioPreviewEyebrow,
 .studioPreviewSpecification {
-  color: #3e6b55;
+  color: var(--studio-green);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   font-weight: 700;
@@ -45,21 +157,24 @@
   justify-self: start;
   padding: 0.25rem 0.5rem;
   border-radius: 999px;
-  background: #dce1dc;
-  color: #3e6b55;
+  background: color-mix(in srgb, var(--studio-green) 14%, var(--studio-paper));
+  color: var(--studio-green);
   font-size: 0.8125rem;
   font-weight: 700;
 }
 
 .studioPreviewHero {
   aspect-ratio: 4 / 3;
+  max-width: 100%;
   overflow: hidden;
   border-radius: 0.625rem;
-  background: #dce1dc;
+  background: color-mix(in srgb, var(--studio-green) 14%, var(--studio-paper));
 }
 
 .studioPreviewHero img {
+  display: block;
   width: 100%;
+  max-width: 100%;
   height: 100%;
   object-fit: cover;
 }
@@ -69,7 +184,7 @@
   width: 100%;
   height: 100%;
   place-items: center;
-  color: #3e6b55;
+  color: var(--studio-green);
 }
 
 .studioPreviewEmpty svg {
@@ -95,9 +210,10 @@
 
 .studioPreviewIdentity p,
 .studioPreviewNote {
-  color: #5c625e;
+  color: color-mix(in srgb, var(--studio-asphalt) 68%, var(--studio-paper));
   font-size: 0.9375rem;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .studioPreviewNote {
@@ -107,7 +223,14 @@
 .motorcyclePhotoWorkspace {
   display: grid;
   gap: 1rem;
-  color: #17191c;
+  min-width: 0;
+  max-width: 100%;
+  padding: clamp(0.875rem, 2vw, 1.25rem);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--studio-steel) 55%, transparent);
+  border-radius: 0.75rem;
+  background: var(--studio-paper);
+  color: var(--studio-asphalt);
 }
 
 .motorcyclePhotoDropzone {
@@ -115,33 +238,48 @@
   justify-items: center;
   gap: 0.5rem;
   min-height: 12rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 1.25rem;
-  border: 2px dashed #aeb4b8;
+  overflow: hidden;
+  border: 2px dashed var(--studio-steel);
   border-radius: 0.75rem;
-  background: #f4f1ea;
+  background: color-mix(in srgb, var(--studio-steel) 9%, var(--studio-paper));
   text-align: center;
 }
 
 .motorcyclePhotoDropzone > svg {
-  color: #f2a41d;
+  color: var(--studio-amber);
 }
 
 .motorcyclePhotoDropzone > span,
 .motorcyclePhotoProgress,
 .motorcyclePhotoQueueItem span {
-  color: #3e6b55;
+  color: var(--studio-green);
   font-size: 0.875rem;
+  overflow-wrap: anywhere;
 }
 
+.studio :global([data-slot="button"]),
+.motorcyclePhotoDropzone label {
+  min-height: 44px;
+}
+
+.studio :global([data-slot="button"]):focus-visible,
+.studio :global(input):focus-visible,
+.studio :global(textarea):focus-visible,
+.studio :global([data-slot="select-trigger"]):focus-visible,
+.motorcyclePhotoDropzone label:focus-visible,
 .motorcyclePhotoDropzone :focus-visible,
 .motorcyclePhotoActions :focus-visible,
 .motorcyclePhotoQueueItem :focus-visible {
-  outline: 3px solid #f2a41d;
+  outline: 3px solid var(--studio-amber);
   outline-offset: 3px;
 }
 
 .motorcyclePhotoProgress {
   min-height: 1.25rem;
+  max-width: 100%;
 }
 
 .motorcyclePhotoQueue,
@@ -150,6 +288,8 @@
   gap: 0.75rem;
   margin: 0;
   padding: 0;
+  min-width: 0;
+  max-width: 100%;
   list-style: none;
 }
 
@@ -158,18 +298,23 @@
   grid-template-columns: 4rem minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.75rem;
-  border: 1px solid #aeb4b8;
+  overflow: hidden;
+  border: 1px solid var(--studio-steel);
   border-radius: 0.5rem;
-  background: #f4f1ea;
+  background: var(--studio-paper);
 }
 
 .motorcyclePhotoQueueItem[data-status="failed"] {
-  border-color: #b83b32;
+  border-color: var(--studio-red);
 }
 
 .motorcyclePhotoQueueItem img {
+  display: block;
   width: 4rem;
+  max-width: 100%;
   height: 4rem;
   object-fit: cover;
   border-radius: 0.25rem;
@@ -194,14 +339,19 @@
 .motorcyclePhotoCard {
   display: grid;
   gap: 0.625rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.625rem;
-  border: 1px solid #aeb4b8;
+  overflow: hidden;
+  border: 1px solid var(--studio-steel);
   border-radius: 0.5rem;
-  background: #f4f1ea;
+  background: var(--studio-paper);
 }
 
 .motorcyclePhotoCard > img {
+  display: block;
   width: 100%;
+  max-width: 100%;
   height: 10rem;
   object-fit: cover;
   border-radius: 0.25rem;
@@ -209,7 +359,7 @@
 
 .motorcyclePhotoCardCover {
   grid-column: 1 / -1;
-  border: 2px solid #f2a41d;
+  border: 2px solid var(--studio-amber);
 }
 
 .motorcyclePhotoCardCover > img {
@@ -217,7 +367,7 @@
 }
 
 .motorcyclePhotoCardLabel {
-  color: #3e6b55;
+  color: var(--studio-green);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   letter-spacing: 0.08em;
@@ -225,13 +375,20 @@
 }
 
 .motorcyclePhotoCardCover .motorcyclePhotoCardLabel {
-  color: #f2a41d;
+  color: var(--studio-amber);
 }
 
 .motorcyclePhotoActions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.motorcyclePhotoActions :global([data-slot="button"]) {
+  min-width: 0;
+  white-space: normal;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -245,15 +402,26 @@
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
+  .studioHeader {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .studioHeader :global([data-slot="button"]) {
+    justify-self: start;
+  }
+
   .studioLayout {
     grid-template-columns: 1fr;
   }
 
-  .studioPreview {
+  .studioPreviewColumn {
     position: static;
   }
+}
 
+@media (max-width: 640px) {
   .motorcyclePhotoQueueItem {
     grid-template-columns: 3.5rem minmax(0, 1fr);
   }
@@ -261,8 +429,35 @@
   .motorcyclePhotoQueueItem > :nth-child(n + 3) {
     grid-column: 2;
   }
+}
 
+@media (max-width: 390px) {
   .motorcyclePhotoGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .motorcyclePhotoCard > img {
+    height: 7rem;
+  }
+
+  .motorcyclePhotoCardCover > img {
+    height: 12rem;
+  }
+
+  .motorcyclePhotoActions {
+    display: grid;
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio *,
+  .studio *::before,
+  .studio *::after,
+  .motorcyclePhotoProgress {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

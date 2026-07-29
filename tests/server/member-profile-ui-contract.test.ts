@@ -94,6 +94,24 @@ describe("member profile App Router and UI contracts", () => {
     expect(preview).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
+  test("composes the profile editor as a professional Garage Studio", () => {
+    const settings = source("src/features/member-profiles/profile-settings.tsx");
+    const styles = source(
+      "src/features/member-profiles/profile-studio.module.css",
+    );
+    expect(settings).toContain("Garage Studio");
+    expect(settings).toContain("ProfileStudioPreview");
+    expect(settings).toContain("MotorcyclePhotoWorkspace");
+    expect(settings).toContain("styles.studioEditor");
+    expect(settings).toContain("styles.studioPreviewColumn");
+    expect(settings).toContain("Profile readiness");
+    expect(settings).toContain("readyItems.length");
+    expect(styles).toContain(".studio");
+    expect(styles).toContain(".motorcyclePhotoCardCover");
+    expect(styles).toMatch(/@media\s*\(max-width:\s*900px\)/);
+    expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
+  });
+
   test("shows the rider-facing visibility label from the profile draft", () => {
     const labels = [
       ["PUBLIC", "Public profile"],
@@ -156,7 +174,11 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toMatch(/Publish profile|Save profile changes/);
     expect(settings).toMatch(/Identity/);
     expect(settings).toMatch(/Attendance privacy/);
-    expect(settings).toMatch(/Motorcycle photos/);
+    expect(source("src/features/member-profiles/motorcycle-photo-workspace.tsx"))
+      .toMatch(/Motorcycle photos/i);
+    expect(settings).not.toContain(
+      '<MemberMediaUploader purpose="motorcycle-photo"',
+    );
     expect(settings).toContain(
       "This setting applies to all current and future event rosters.",
     );
