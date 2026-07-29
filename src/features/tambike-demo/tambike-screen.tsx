@@ -43,6 +43,7 @@ import { useDemo } from "./demo-provider";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
 import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
+import { ProfilePreview } from "@/features/member-profiles/profile-preview";
 import { ProfileSettings } from "@/features/member-profiles/profile-settings";
 import { EventAttendeePreview } from "@/features/member-profiles/event-attendee-preview";
 import {
@@ -72,6 +73,7 @@ export type TambikeView =
   | "login"
   | "signup"
   | "profile"
+  | "profile-preview"
   | "event-register"
   | "event-test-ride";
 
@@ -283,6 +285,7 @@ export function TambikeScreen({
       {view === "login" && <LoginScreen nextHref={nextHref} />}
       {view === "signup" && <SignupScreen />}
       {view === "profile" && <ProfileScreen />}
+      {view === "profile-preview" && <ProfilePreviewScreen />}
     </>
   );
   return <TambikeAppShell>{content}</TambikeAppShell>;
@@ -1719,6 +1722,25 @@ function ProfileScreen() {
   }
 
   return <LightView><ProfileSettings /></LightView>;
+}
+
+function ProfilePreviewScreen() {
+  const { currentUser } = useDemo();
+
+  if (!currentUser) {
+    return (
+      <AuthRequired
+        title="Log in to preview profile"
+        body="Your preview is only available from your rider account."
+      />
+    );
+  }
+
+  return (
+    <LightView>
+      <ProfilePreview />
+    </LightView>
+  );
 }
 
 function AuthRequired({ title, body }: { title: string; body: string }) {

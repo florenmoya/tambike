@@ -39,3 +39,26 @@ export function toProfilePreviewView(
       : undefined,
   };
 }
+
+export function toSavedProfilePreviewView(
+  editor: MemberProfileEditorView,
+): MemberProfileView {
+  return toProfilePreviewView(
+    editor,
+    {
+      displayName: editor.displayName,
+      area: editor.area,
+      bio: editor.bio,
+      visibility: editor.visibility,
+      defaultRosterIdentity: editor.defaultRosterIdentity,
+    },
+    {
+      make: editor.motorcycle?.make ?? "",
+      model: editor.motorcycle?.model ?? "",
+      year: editor.motorcycle?.year,
+      displacementCc: editor.motorcycle?.displacementCc,
+      nickname: editor.motorcycle?.nickname,
+      description: editor.motorcycle?.description,
+    },
+  );
+}

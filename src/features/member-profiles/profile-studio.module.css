@@ -6,6 +6,29 @@
   border-radius: 0.5rem;
 }
 
+.previewPage {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 1rem;
+}
+
+.previewNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255, 190, 69, 0.4);
+  border-radius: 0.75rem;
+  background: rgba(255, 190, 69, 0.1);
+  color: #fff8eb;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
 :global(.ambient-main):has(.studio) {
   overflow: visible;
 }
@@ -411,6 +434,14 @@
 }
 
 @media (max-width: 390px) {
+  .previewNotice {
+    flex-wrap: wrap;
+  }
+
+  .previewNotice > :global([data-slot="button"]) {
+    width: 100%;
+  }
+
   .motorcyclePhotoGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

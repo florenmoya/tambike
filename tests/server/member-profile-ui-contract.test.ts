@@ -10,6 +10,9 @@ import {
   getProfileEditorPresentation,
   type ProfileEditorPresentationInput,
 } from "../../src/features/member-profiles/profile-editor-presentation";
+import {
+  toSavedProfilePreviewView,
+} from "../../src/features/member-profiles/profile-preview-adapter";
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
@@ -121,6 +124,8 @@ describe("member profile App Router and UI contracts", () => {
     expect(route).toContain("getMemberProfileAction");
     expect(route).toContain("notFound()");
     expect(route).not.toContain('"use client"');
+    expect(route).not.toContain("ProfilePreview");
+    expect(route).not.toContain("Back to edit");
   });
 
   test("renders a private-media garage card without account fields", () => {
@@ -166,6 +171,31 @@ describe("member profile App Router and UI contracts", () => {
     expect(garage).toContain("garage-motorcycle-hero");
     expect(garage).toContain("garage-contact-strip");
     expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
+  });
+
+  test("maps saved editor data into the public-safe owner preview", () => {
+    const preview = toSavedProfilePreviewView(editor);
+
+    expect(preview).toMatchObject(publicProfile);
+    expect(preview).not.toHaveProperty("defaultRosterIdentity");
+    expect(preview).not.toHaveProperty("isPublished");
+  });
+
+  test("routes owner preview through the shared public garage renderer", () => {
+    const route = source("src/app/profile/preview/page.tsx");
+    const preview = source("src/features/member-profiles/profile-preview.tsx");
+    const screen = source("src/features/tambike-demo/tambike-screen.tsx");
+
+    expect(route).toContain('<TambikeScreen view="profile-preview"');
+    expect(screen).toContain('| "profile-preview"');
+    expect(screen).toContain('view === "profile-preview"');
+    expect(preview).toContain("Preview — only you can see this");
+    expect(preview).toContain('href="/profile"');
+    expect(preview).toContain("Back to edit");
+    expect(preview).toContain("<RiderGarageView");
+    expect(preview).toContain("toSavedProfilePreviewView");
+    expect(preview).not.toContain("Your rider profile");
+    expect(preview).not.toContain("Complete your profile");
   });
 
   test("eagerly loads the public garage cover when requested", () => {
