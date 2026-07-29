@@ -11,6 +11,7 @@
     "db:seed": "prisma db seed",
     "start": "next start",
     "lint": "eslint",
+    "clean:public-seed-labels": "tsx --conditions=react-server scripts/clean-public-seed-labels.ts",
     "smoke:member-media-s3": "tsx scripts/smoke-member-media-s3.ts",
     "provision:sample-raffles": "tsx --conditions=react-server scripts/provision-sample-raffles.ts",
     "provision:sample-rider": "tsx --conditions=react-server scripts/provision-sample-rider.ts",
