@@ -58,6 +58,7 @@ describe("motorcycle photo upload orchestration", () => {
     };
 
     const first = harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload,
       refresh,
@@ -70,6 +71,7 @@ describe("motorcycle photo upload orchestration", () => {
       "upload:queue:a.webp",
     ]);
     await expect(harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload,
       refresh,
@@ -89,6 +91,7 @@ describe("motorcycle photo upload orchestration", () => {
     ]);
 
     await harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 1,
       upload: async (next) => harness.events.push(`upload:${next.id}`),
       refresh,
@@ -108,6 +111,7 @@ describe("motorcycle photo upload orchestration", () => {
     };
 
     await harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload: async () => {
         uploads += 1;
@@ -135,6 +139,7 @@ describe("motorcycle photo upload orchestration", () => {
     const uploads: string[] = [];
 
     await harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload: async (next, position) => {
         uploads.push(`${next.id}:${position}`);
@@ -151,6 +156,7 @@ describe("motorcycle photo upload orchestration", () => {
     ]);
 
     await expect(harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload: async (next, position) => {
         uploads.push(`${next.id}:${position}`);
@@ -166,6 +172,7 @@ describe("motorcycle photo upload orchestration", () => {
     });
 
     await harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: refreshedPosition,
       upload: async (next, position) => {
         uploads.push(`${next.id}:${position}`);
@@ -181,6 +188,7 @@ describe("motorcycle photo upload orchestration", () => {
     const harness = schedulerHarness([item("a.webp")]);
 
     await harness.scheduler.processNext({
+      uploadEnabled: true,
       motorcyclePhotoPosition: 0,
       upload: async () => {
         throw new Error("PHOTO_LIMIT");
@@ -199,6 +207,34 @@ describe("motorcycle photo upload orchestration", () => {
       message: "Log in again before uploading an image.",
       retryable: false,
     });
+  });
+
+  test("keeps selected photos queued until a persisted motorcycle enables upload", async () => {
+    const harness = schedulerHarness([item("a.webp"), item("b.webp")]);
+    const uploads: string[] = [];
+
+    const process = (uploadEnabled: boolean) => harness.scheduler.processNext({
+      uploadEnabled,
+      motorcyclePhotoPosition: 0,
+      upload: async (next) => {
+        uploads.push(next.id);
+      },
+      refresh: async () => undefined,
+      describeFailure: memberMediaUploadFailure,
+    });
+
+    await expect(process(false)).resolves.toBe(false);
+    expect(uploads).toEqual([]);
+    expect(harness.queue()).toMatchObject([
+      { id: "queue:a.webp", status: "ready" },
+      { id: "queue:b.webp", status: "ready" },
+    ]);
+
+    await expect(process(true)).resolves.toBe(true);
+    expect(uploads).toEqual(["queue:a.webp"]);
+    expect(harness.queue()).toMatchObject([
+      { id: "queue:b.webp", status: "ready" },
+    ]);
   });
 
   test("creates and registers preview descriptors before replayable queue updates", () => {

@@ -102,17 +102,19 @@ export function createMotorcyclePhotoUploadScheduler({
 
   return {
     async processNext({
+      uploadEnabled,
       motorcyclePhotoPosition,
       upload,
       refresh,
       describeFailure,
     }: {
+      uploadEnabled: boolean;
       motorcyclePhotoPosition: number;
       upload: (item: MotorcyclePhotoQueueItem, motorcyclePhotoPosition: number) => Promise<void>;
       refresh: () => Promise<void>;
       describeFailure: (error: unknown) => MemberMediaUploadFailure;
     }) {
-      if (uploadInFlight) return false;
+      if (!uploadEnabled || uploadInFlight) return false;
       const items = getItems();
       if (items.some((item) => item.status === "uploaded")) return false;
       const next = nextReadyMotorcyclePhoto(items);

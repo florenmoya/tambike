@@ -510,7 +510,7 @@ function LoadedProfileSettings({
 
       <MotorcyclePhotoWorkspace
         photos={photos}
-        disabled={!editor.motorcycle}
+        uploadEnabled={Boolean(editor.motorcycle)}
         mediaPending={mediaPending}
         onUploaded={refreshEditor}
         onMove={movePhoto}

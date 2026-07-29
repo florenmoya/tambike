@@ -122,6 +122,27 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
 
+  test("allows local photo selection before motorcycle persistence", () => {
+    const settings = source(
+      "src/features/member-profiles/profile-settings.tsx",
+    );
+    const workspace = source(
+      "src/features/member-profiles/motorcycle-photo-workspace.tsx",
+    );
+
+    expect(settings).toContain(
+      "uploadEnabled={Boolean(editor.motorcycle)}",
+    );
+    expect(workspace).toContain("uploadEnabled: boolean");
+    expect(workspace).toContain(
+      "Photos are ready. Save your motorcycle to start uploading.",
+    );
+    expect(workspace).toContain("disabled={availableSlots === 0}");
+    expect(workspace).toContain("uploadEnabled,");
+    expect(workspace).not.toContain("disabled={!editor.motorcycle}");
+    expect(workspace).not.toContain("if (disabled || files.length === 0)");
+  });
+
   test("shows the rider-facing visibility label from the profile draft", () => {
     const labels = [
       ["PUBLIC", "Public profile"],

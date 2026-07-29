@@ -29,7 +29,7 @@ import type { MotorcycleShowcase } from "./types";
 
 export interface MotorcyclePhotoWorkspaceProps {
   photos: MotorcycleShowcase["photos"];
-  disabled: boolean;
+  uploadEnabled: boolean;
   mediaPending: boolean;
   onUploaded: () => Promise<void>;
   onMove: (index: number, direction: -1 | 1) => Promise<void>;
@@ -46,10 +46,16 @@ function activeQueueCount(queue: MotorcyclePhotoQueueItem[]) {
   ).length;
 }
 
-function queueStatus(queue: MotorcyclePhotoQueueItem[]) {
+function queueStatus(
+  queue: MotorcyclePhotoQueueItem[],
+  uploadEnabled: boolean,
+) {
   const uploading = queue.filter((item) => item.status === "uploading").length;
   const failed = queue.filter((item) => item.status === "failed").length;
   const ready = queue.filter((item) => item.status === "ready").length;
+  if (!uploadEnabled && ready) {
+    return "Photos are ready. Save your motorcycle to start uploading.";
+  }
   if (uploading) return `Uploading ${uploading} motorcycle photo${uploading === 1 ? "" : "s"}.`;
   if (ready) return `${ready} motorcycle photo${ready === 1 ? "" : "s"} waiting to upload.`;
   if (failed) return `${failed} motorcycle photo${failed === 1 ? " needs" : "s need"} attention.`;
@@ -58,7 +64,7 @@ function queueStatus(queue: MotorcyclePhotoQueueItem[]) {
 
 export function MotorcyclePhotoWorkspace({
   photos,
-  disabled,
+  uploadEnabled,
   mediaPending,
   onUploaded,
   onMove,
@@ -73,10 +79,10 @@ export function MotorcyclePhotoWorkspace({
   const [previewRegistry] = useState(() => createMotorcyclePhotoPreviewRegistry(URL.revokeObjectURL));
 
   const availableSlots = Math.max(0, 5 - photos.length - activeQueueCount(queue));
-  const queueSummary = queueStatus(queue);
+  const queueSummary = queueStatus(queue, uploadEnabled);
 
   const addFiles = (files: File[]) => {
-    if (disabled || files.length === 0) return;
+    if (files.length === 0) return;
     const descriptors = createMotorcyclePhotoQueueDescriptors({
       files,
       createObjectUrl: (file) => URL.createObjectURL(file),
@@ -117,10 +123,10 @@ export function MotorcyclePhotoWorkspace({
   }, [previewRegistry]);
 
   useEffect(() => {
-    if (disabled) return;
     const scheduler = schedulerRef.current;
     if (!scheduler) return;
     void scheduler.processNext({
+      uploadEnabled,
       motorcyclePhotoPosition: photos.length,
       upload: (item, motorcyclePhotoPosition) => performMemberMediaUpload({
         file: item.file,
@@ -134,7 +140,7 @@ export function MotorcyclePhotoWorkspace({
       refresh: onUploaded,
       describeFailure: memberMediaUploadFailure,
     });
-  }, [disabled, onUploaded, photos.length, queue]);
+  }, [onUploaded, photos.length, queue, uploadEnabled]);
 
   useEffect(() => () => {
     previewRegistry.releaseAll();
@@ -163,7 +169,7 @@ export function MotorcyclePhotoWorkspace({
         {/* MemberMediaDropInput keeps the multiple file selection behavior shared with this workspace. */}
         <MemberMediaDropInput
           inputId={inputId}
-          disabled={disabled || availableSlots === 0}
+          disabled={availableSlots === 0}
           onFilesSelected={addFiles}
         />
       </div>
