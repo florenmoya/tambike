@@ -6,6 +6,10 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 import { BackendError } from "../../src/server/backend";
 import { MemberProfileScreen } from "../../src/features/member-profiles/member-profile-screen";
+import {
+  getProfileEditorPresentation,
+  type ProfileEditorPresentationInput,
+} from "../../src/features/member-profiles/profile-editor-presentation";
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
 import { toProfilePreviewView } from "../../src/features/member-profiles/profile-preview-adapter";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
@@ -42,7 +46,74 @@ const editor: MemberProfileEditorView = {
   defaultRosterIdentity: "ANONYMOUS",
 };
 
+const completeProfileInput: ProfileEditorPresentationInput = {
+  isPublished: false,
+  slug: "mika-santos",
+  displayName: "Mika Santos",
+  area: "Davao City",
+  make: "Honda",
+  model: "CB650R",
+  photoCount: 1,
+};
+
 describe("member profile App Router and UI contracts", () => {
+  test("names the first missing publish requirement and shows only incomplete signals", () => {
+    const presentation = getProfileEditorPresentation({
+      ...completeProfileInput,
+      displayName: "",
+      area: "",
+      photoCount: 0,
+    });
+
+    expect(presentation.state).toBe("incomplete");
+    expect(presentation.label).toBe("Complete your profile");
+    expect(presentation.description).toBe("Display name is required to publish.");
+    expect(presentation.requirements.map(({ label, required, ready }) => ({
+      label,
+      required,
+      ready,
+    }))).toEqual([
+      { label: "Display name", required: true, ready: false },
+      { label: "Area / city", required: true, ready: false },
+      { label: "Make", required: true, ready: true },
+      { label: "Model", required: true, ready: true },
+      { label: "Motorcycle photos", required: true, ready: false },
+    ]);
+    expect(presentation.signals).toEqual([
+      { label: "Identity", ready: false },
+      { label: "Motorcycle", ready: true },
+      { label: "Photo", ready: false },
+    ]);
+    expect(presentation.viewAction).toEqual({
+      label: "Preview profile",
+      href: "/profile/preview",
+    });
+  });
+
+  test("returns compact ready and live states with one contextual viewing action", () => {
+    const ready = getProfileEditorPresentation(completeProfileInput);
+    expect(ready).toMatchObject({
+      state: "ready",
+      label: "Ready to publish",
+      signals: [],
+      viewAction: { label: "Preview profile", href: "/profile/preview" },
+    });
+
+    const live = getProfileEditorPresentation({
+      ...completeProfileInput,
+      isPublished: true,
+    });
+    expect(live).toMatchObject({
+      state: "live",
+      label: "Live",
+      signals: [],
+      viewAction: {
+        label: "View public profile",
+        href: "/riders/mika-santos",
+      },
+    });
+  });
+
   test("awaits the rider slug, queries on the server, and hides lookup failures", () => {
     const route = source("src/app/riders/[slug]/page.tsx");
 
