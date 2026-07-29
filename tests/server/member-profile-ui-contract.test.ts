@@ -152,11 +152,63 @@ describe("member profile App Router and UI contracts", () => {
   });
 
   test("keeps motorcycle photo controls keyboard-operable and explicitly labeled", () => {
-    const settings = source("src/features/member-profiles/profile-settings.tsx");
+    const workspace = source("src/features/member-profiles/motorcycle-photo-workspace.tsx");
 
-    expect(settings).toMatch(/<button[\s\S]*?Move [^"{]*(?:left|right|earlier|later)/i);
-    expect(settings).toMatch(/<button[\s\S]*?Delete motorcycle photo/i);
-    expect(settings).not.toMatch(/<div[^>]+onClick=/);
+    expect(workspace).toMatch(/<Button[\s\S]*?Move [^"{]*(?:left|right|earlier|later)/i);
+    expect(workspace).toMatch(/<Button[\s\S]*?Delete motorcycle photo/i);
+    expect(workspace).not.toMatch(/<div[^>]+onClick=/);
+  });
+
+  test("offers a multi-file drag and drop motorcycle workspace", () => {
+    const workspace = source(
+      "src/features/member-profiles/motorcycle-photo-workspace.tsx",
+    );
+    expect(workspace).toContain("multiple");
+    expect(workspace).toContain("onDrop");
+    expect(workspace).toContain("Drop motorcycle photos here");
+    expect(workspace).toContain("nextReadyMotorcyclePhoto");
+    expect(workspace).toContain("performMemberMediaUpload");
+    expect(workspace).toContain('aria-live="polite"');
+    expect(workspace).toContain("styles.motorcyclePhotoDropzone");
+    expect(workspace).toContain("styles.motorcyclePhotoCardCover");
+    expect(workspace).toContain("draggable");
+    expect(workspace).toContain("onDragStart");
+    expect(workspace).toContain("onDrop");
+    expect(workspace).toMatch(/Cover/);
+    expect(workspace).toMatch(/Retry/);
+    expect(workspace).toMatch(/Remove/);
+    expect(workspace).toMatch(/Move motorcycle photo .* earlier/);
+    expect(workspace).toMatch(/Move motorcycle photo .* later/);
+  });
+
+  test("allows a multiple file picker while preserving the five-photo cap", async () => {
+    const uploader = await import(
+      "../../src/features/member-profiles/member-media-uploader"
+    );
+    const DropInput = (uploader as unknown as {
+      MemberMediaDropInput?: (props: {
+        inputId: string;
+        disabled: boolean;
+        onFilesSelected: (files: File[]) => void;
+      }) => ReactNode;
+    }).MemberMediaDropInput;
+    expect(DropInput).toBeTypeOf("function");
+    const markup = renderToStaticMarkup(DropInput!({
+      inputId: "motorcycle-files",
+      disabled: false,
+      onFilesSelected: () => undefined,
+    }));
+    expect(markup).toMatch(/<input[^>]*multiple=""/);
+    expect(markup).toContain("image/jpeg,image/png,image/webp");
+  });
+
+  test("shows and cleans up an avatar preview before upload", () => {
+    const uploader = source(
+      "src/features/member-profiles/member-media-uploader.tsx",
+    );
+    expect(uploader).toContain("URL.createObjectURL");
+    expect(uploader).toContain("URL.revokeObjectURL");
+    expect(uploader).toContain("Selected avatar preview");
   });
 
   test("merges saved public profile identity into the signed-in account immediately", async () => {

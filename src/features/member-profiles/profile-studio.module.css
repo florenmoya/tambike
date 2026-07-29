@@ -1,0 +1,162 @@
+.avatarSelectionPreview {
+  width: 112px;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid #aeb4b8;
+  border-radius: 0.5rem;
+}
+
+.motorcyclePhotoWorkspace {
+  display: grid;
+  gap: 1rem;
+  color: #17191c;
+}
+
+.motorcyclePhotoDropzone {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  min-height: 12rem;
+  padding: 1.25rem;
+  border: 2px dashed #aeb4b8;
+  border-radius: 0.75rem;
+  background: #f4f1ea;
+  text-align: center;
+}
+
+.motorcyclePhotoDropzone > svg {
+  color: #f2a41d;
+}
+
+.motorcyclePhotoDropzone > span,
+.motorcyclePhotoProgress,
+.motorcyclePhotoQueueItem span {
+  color: #3e6b55;
+  font-size: 0.875rem;
+}
+
+.motorcyclePhotoDropzone :focus-visible,
+.motorcyclePhotoActions :focus-visible,
+.motorcyclePhotoQueueItem :focus-visible {
+  outline: 3px solid #f2a41d;
+  outline-offset: 3px;
+}
+
+.motorcyclePhotoProgress {
+  min-height: 1.25rem;
+}
+
+.motorcyclePhotoQueue,
+.motorcyclePhotoGrid {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.motorcyclePhotoQueueItem {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #aeb4b8;
+  border-radius: 0.5rem;
+  background: #f4f1ea;
+}
+
+.motorcyclePhotoQueueItem[data-status="failed"] {
+  border-color: #b83b32;
+}
+
+.motorcyclePhotoQueueItem img {
+  width: 4rem;
+  height: 4rem;
+  object-fit: cover;
+  border-radius: 0.25rem;
+}
+
+.motorcyclePhotoQueueItem div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.motorcyclePhotoQueueItem strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.motorcyclePhotoGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.motorcyclePhotoCard {
+  display: grid;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border: 1px solid #aeb4b8;
+  border-radius: 0.5rem;
+  background: #f4f1ea;
+}
+
+.motorcyclePhotoCard > img {
+  width: 100%;
+  height: 10rem;
+  object-fit: cover;
+  border-radius: 0.25rem;
+}
+
+.motorcyclePhotoCardCover {
+  grid-column: 1 / -1;
+  border: 2px solid #f2a41d;
+}
+
+.motorcyclePhotoCardCover > img {
+  height: clamp(12rem, 28vw, 20rem);
+}
+
+.motorcyclePhotoCardLabel {
+  color: #3e6b55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.motorcyclePhotoCardCover .motorcyclePhotoCardLabel {
+  color: #f2a41d;
+}
+
+.motorcyclePhotoActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .motorcyclePhotoCard,
+  .motorcyclePhotoQueueItem {
+    transition: border-color 160ms ease, transform 160ms ease;
+  }
+
+  .motorcyclePhotoCard[draggable="true"]:hover {
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 640px) {
+  .motorcyclePhotoQueueItem {
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+  }
+
+  .motorcyclePhotoQueueItem > :nth-child(n + 3) {
+    grid-column: 2;
+  }
+
+  .motorcyclePhotoGrid {
+    grid-template-columns: 1fr;
+  }
+}
