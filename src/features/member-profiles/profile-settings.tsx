@@ -313,7 +313,7 @@ function LoadedProfileSettings({
         reordered.map((photo) => mediaIdFromUrl(photo.url)),
       );
       setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
-      setMediaStatus(`Photo ${index + 1} moved ${direction < 0 ? "earlier" : "later"}.`);
+      setMediaStatus(`Photo ${index + 1} moved ${direction < 0 ? "left" : "right"}.`);
     } catch (error) {
       setMediaStatus(actionErrorMessage(error));
     } finally {

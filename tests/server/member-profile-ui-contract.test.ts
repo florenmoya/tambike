@@ -396,6 +396,7 @@ describe("member profile App Router and UI contracts", () => {
     const workspace = source(
       "src/features/member-profiles/motorcycle-photo-workspace.tsx",
     );
+    const settings = source("src/features/member-profiles/profile-settings.tsx");
 
     expect(workspace).toContain("Set as cover");
     expect(workspace).toContain("Move left");
@@ -406,8 +407,19 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).toMatch(/Set motorcycle photo \$\{index \+ 1\} as cover/);
     expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} left/);
     expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} right/);
+    expect(workspace).toContain('loading={index === 0 ? "eager" : undefined}');
     expect(workspace).not.toContain("Move earlier");
     expect(workspace).not.toContain("Move later");
+    expect(settings).toContain('direction < 0 ? "left" : "right"');
+    expect(settings).not.toContain('"earlier" : "later"');
+  });
+
+  test("keeps the public rider garage below the mobile header", () => {
+    const styles = source("src/app/globals.css");
+
+    expect(styles).toMatch(
+      /@media \(max-width: 560px\)[\s\S]*?\.garage-profile-page\s*\{[\s\S]*?padding-top:\s*84px;/,
+    );
   });
 
   test("offers a multi-file drag and drop motorcycle workspace", () => {

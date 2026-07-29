@@ -218,6 +218,7 @@ export function MotorcyclePhotoWorkspace({
               width={photo.width || 800}
               height={photo.height || 600}
               sizes="(max-width: 640px) 45vw, 280px"
+              loading={index === 0 ? "eager" : undefined}
             />
             <div className={styles.motorcyclePhotoCardMeta}>
               <span>Photo {index + 1} of {photos.length}</span>
