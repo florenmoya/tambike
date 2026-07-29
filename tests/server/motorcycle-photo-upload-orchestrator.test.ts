@@ -130,6 +130,53 @@ describe("motorcycle photo upload orchestration", () => {
     expect(harness.events).toContain("revoke:blob:a.webp");
   });
 
+  test("pauses later uploads until a finalized photo's refresh-only recovery updates its position", async () => {
+    const harness = schedulerHarness([item("a.webp"), item("b.webp")]);
+    const uploads: string[] = [];
+
+    await harness.scheduler.processNext({
+      motorcyclePhotoPosition: 0,
+      upload: async (next, position) => {
+        uploads.push(`${next.id}:${position}`);
+      },
+      refresh: async () => {
+        throw new Error("refresh unavailable");
+      },
+      describeFailure: memberMediaUploadFailure,
+    });
+
+    expect(harness.queue()).toMatchObject([
+      { id: "queue:a.webp", status: "uploaded", retryable: false },
+      { id: "queue:b.webp", status: "ready" },
+    ]);
+
+    await expect(harness.scheduler.processNext({
+      motorcyclePhotoPosition: 0,
+      upload: async (next, position) => {
+        uploads.push(`${next.id}:${position}`);
+      },
+      refresh: async () => undefined,
+      describeFailure: memberMediaUploadFailure,
+    })).resolves.toBe(false);
+    expect(uploads).toEqual(["queue:a.webp:0"]);
+
+    let refreshedPosition = 0;
+    await harness.scheduler.refreshUploaded("queue:a.webp", async () => {
+      refreshedPosition = 1;
+    });
+
+    await harness.scheduler.processNext({
+      motorcyclePhotoPosition: refreshedPosition,
+      upload: async (next, position) => {
+        uploads.push(`${next.id}:${position}`);
+      },
+      refresh: async () => undefined,
+      describeFailure: memberMediaUploadFailure,
+    });
+
+    expect(uploads).toEqual(["queue:a.webp:0", "queue:b.webp:1"]);
+  });
+
   test("uses a stable non-retryable message for permanent upload failures", async () => {
     const harness = schedulerHarness([item("a.webp")]);
 

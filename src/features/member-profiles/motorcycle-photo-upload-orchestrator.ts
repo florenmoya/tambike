@@ -113,7 +113,9 @@ export function createMotorcyclePhotoUploadScheduler({
       describeFailure: (error: unknown) => MemberMediaUploadFailure;
     }) {
       if (uploadInFlight) return false;
-      const next = nextReadyMotorcyclePhoto(getItems());
+      const items = getItems();
+      if (items.some((item) => item.status === "uploaded")) return false;
+      const next = nextReadyMotorcyclePhoto(items);
       if (!next) return false;
 
       uploadInFlight = true;
