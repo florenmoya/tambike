@@ -265,18 +265,24 @@ describe("public giveaway spotlight", () => {
     expect(mobileCss).toContain("padding: 0.8rem");
   });
 
-  test("keeps winner results compact on desktop and stacked on small screens", () => {
+  test("keeps the open raffle and recent winner on one desktop row", () => {
+    const primaryGroupsRule =
+      raffleCss.match(/\.primaryGroups\s*\{[^}]+\}/)?.[0] ?? "";
     const winnerBodyRule = raffleCss.match(/\.winnerBody\s*\{[^}]+\}/)?.[0] ?? "";
-    const smallScreenCss = raffleCss.slice(
-      raffleCss.indexOf("@media (max-width: 699px)"),
+    const winnerImageRule =
+      raffleCss.match(/\.winnerBody \.prizeImage\s*\{[^}]+\}/)?.[0] ?? "";
+    const stackedCss = raffleCss.slice(
+      raffleCss.indexOf("@media (max-width: 899px)"),
     );
 
-    expect(winnerBodyRule).toContain(
-      "grid-template-columns: minmax(11rem, 18rem) minmax(0, 1fr)",
+    expect(primaryGroupsRule).toContain(
+      "grid-template-columns: minmax(0, 1.8fr) minmax(19rem, 0.8fr)",
     );
-    expect(smallScreenCss).toContain(".winnerBody");
-    expect(smallScreenCss).toContain("grid-template-columns: 1fr");
-    expect(smallScreenCss).toContain("width: min(70%, 15rem)");
+    expect(winnerBodyRule).toContain("grid-template-columns: 1fr");
+    expect(winnerImageRule).toContain("width: min(100%, 18rem)");
+    expect(stackedCss).toContain(".primaryGroups");
+    expect(stackedCss).toContain("grid-template-columns: 1fr");
+    expect(stackedCss).toContain("width: min(70%, 15rem)");
   });
 
   test("keeps duplicate result nodes stable when unrelated results are inserted or reordered", async () => {

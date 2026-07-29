@@ -136,63 +136,67 @@ export function PublicGiveawayPanel({ eventId, viewerRole = "guest" }: PublicGiv
         </div>
       ) : (
         <>
-          {primaryOpen ? (
-            <section
-              className={styles.campaignGroup}
-              aria-labelledby={`open-raffles-${eventId}`}
-            >
-              <h3 className={styles.groupHeading} id={`open-raffles-${eventId}`}>
-                Open raffles
-              </h3>
-              <div className={styles.spotlightGrid}>
-                <OpenGiveawaySpotlight
-                  campaign={primaryOpen}
-                  eventId={eventId}
-                  viewerRole={viewerRole}
-                />
-              </div>
-              {additionalOpenCampaigns.length > 0 ? (
-                <div className={styles.compactGrid}>
-                  {additionalOpenCampaigns.map((campaign) => (
-                    <CompactGiveawayCard
-                      key={campaign.giveaway.id}
-                      campaign={campaign}
+          {primaryOpen || latestWinner ? (
+            <div className={styles.primaryGroups}>
+              {primaryOpen ? (
+                <section
+                  className={styles.campaignGroup}
+                  aria-labelledby={`open-raffles-${eventId}`}
+                >
+                  <h3 className={styles.groupHeading} id={`open-raffles-${eventId}`}>
+                    Open raffles
+                  </h3>
+                  <div className={styles.spotlightGrid}>
+                    <OpenGiveawaySpotlight
+                      campaign={primaryOpen}
                       eventId={eventId}
                       viewerRole={viewerRole}
                     />
-                  ))}
-                </div>
+                  </div>
+                  {additionalOpenCampaigns.length > 0 ? (
+                    <div className={styles.compactGrid}>
+                      {additionalOpenCampaigns.map((campaign) => (
+                        <CompactGiveawayCard
+                          key={campaign.giveaway.id}
+                          campaign={campaign}
+                          eventId={eventId}
+                          viewerRole={viewerRole}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
-            </section>
-          ) : null}
-          {latestWinner ? (
-            <section
-              className={styles.campaignGroup}
-              aria-labelledby={`recent-winners-${eventId}`}
-            >
-              <h3 className={styles.groupHeading} id={`recent-winners-${eventId}`}>
-                Recent winners
-              </h3>
-              <div className={styles.spotlightGrid}>
-                <CompletedGiveawayResult
-                  campaign={latestWinner}
-                  eventId={eventId}
-                  viewerRole={viewerRole}
-                />
-              </div>
-              {additionalWinnerCampaigns.length > 0 ? (
-                <div className={styles.compactGrid}>
-                  {additionalWinnerCampaigns.map((campaign) => (
-                    <CompactGiveawayCard
-                      key={campaign.giveaway.id}
-                      campaign={campaign}
+              {latestWinner ? (
+                <section
+                  className={`${styles.campaignGroup} ${styles.winnerGroup}`}
+                  aria-labelledby={`recent-winners-${eventId}`}
+                >
+                  <h3 className={styles.groupHeading} id={`recent-winners-${eventId}`}>
+                    Recent winners
+                  </h3>
+                  <div className={styles.spotlightGrid}>
+                    <CompletedGiveawayResult
+                      campaign={latestWinner}
                       eventId={eventId}
                       viewerRole={viewerRole}
                     />
-                  ))}
-                </div>
+                  </div>
+                  {additionalWinnerCampaigns.length > 0 ? (
+                    <div className={styles.compactGrid}>
+                      {additionalWinnerCampaigns.map((campaign) => (
+                        <CompactGiveawayCard
+                          key={campaign.giveaway.id}
+                          campaign={campaign}
+                          eventId={eventId}
+                          viewerRole={viewerRole}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
-            </section>
+            </div>
           ) : null}
           {compactCampaigns.length > 0 ? (
             <div className={styles.compactGrid}>
