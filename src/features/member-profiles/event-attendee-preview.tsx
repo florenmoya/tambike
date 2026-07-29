@@ -98,7 +98,7 @@ export function EventAttendeePreview({
       <div className={styles.footer}>
         {canOpenRoster ? (
           <Link className={styles.action} href={`/events/${eventId}/attendees`}>
-            See more
+            View all bikes
           </Link>
         ) : null}
       </div>

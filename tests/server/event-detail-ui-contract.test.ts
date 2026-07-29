@@ -17,6 +17,13 @@ const attendeePreviewSource = readFileSync(
   ),
   "utf8",
 );
+const attendeePreviewCss = readFileSync(
+  join(
+    process.cwd(),
+    "src/features/member-profiles/event-attendee-preview.module.css",
+  ),
+  "utf8",
+);
 
 function componentSource(componentName: string) {
   const start = screenSource.indexOf(`function ${componentName}(`);
@@ -30,18 +37,18 @@ function componentSource(componentName: string) {
   );
 }
 
-function cssRule(selector: string, fromIndex = 0) {
-  const start = css.indexOf(`${selector} {`, fromIndex);
+function cssRule(selector: string, fromIndex = 0, source = css) {
+  const start = source.indexOf(`${selector} {`, fromIndex);
 
   expect(start, `CSS rule not found: ${selector}`).toBeGreaterThanOrEqual(0);
 
-  const openingBrace = css.indexOf("{", start + selector.length);
+  const openingBrace = source.indexOf("{", start + selector.length);
   let depth = 0;
 
-  for (let index = openingBrace; index < css.length; index += 1) {
-    if (css[index] === "{") depth += 1;
-    if (css[index] === "}") depth -= 1;
-    if (depth === 0) return css.slice(start, index + 1);
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
   }
 
   throw new Error(`CSS rule is not closed: ${selector}`);
@@ -137,11 +144,35 @@ describe("event detail decision-first UI contract", () => {
     expect(attendeePreviewSource).toContain("styles.bikeTile");
     expect(attendeePreviewSource).toContain("rider.bikePhoto.url");
     expect(attendeePreviewSource).toContain('href={`/riders/${rider.slug}`}');
-    expect(attendeePreviewSource).toContain("See more");
+    expect(attendeePreviewSource).toContain("View all bikes");
+    expect(attendeePreviewSource).not.toContain("See more");
     expect(attendeePreviewSource).not.toContain("styles.names");
     expect(attendeePreviewSource).not.toContain("Log in to see riders");
     expect(attendeePreviewSource).not.toContain("rider.profilePhoto");
     expect(attendeePreviewSource).not.toMatch(/email|userId|verification|make|model/);
+  });
+
+  test("treats the attendee preview as a compact footer instead of a second card", () => {
+    const preview = cssRule(".preview", 0, attendeePreviewCss);
+    const mobile = sourceIndex(
+      attendeePreviewCss,
+      "@media (max-width: 640px)",
+    );
+    const mobilePreview = cssRule(".preview", mobile, attendeePreviewCss);
+    const mobileBikeGrid = cssRule(".bikeGrid", mobile, attendeePreviewCss);
+
+    expect(preview).toContain(
+      'grid-template-areas: "heading bikes action"',
+    );
+    expect(preview).toContain("border-top:");
+    expect(preview).not.toContain("border-radius:");
+    expect(preview).not.toContain("background:");
+    expect(mobilePreview).toContain('"heading"');
+    expect(mobilePreview).toContain('"bikes"');
+    expect(mobilePreview).toContain('"action"');
+    expect(mobileBikeGrid).toContain(
+      "grid-template-columns: repeat(2, minmax(0, 1fr))",
+    );
   });
 
   test("uses a compact responsive poster and readable title system", () => {

@@ -65,7 +65,7 @@ describe("event attendee preview", () => {
     expect(markup).toContain('href="/riders/paolo-reyes"');
     expect(markup).toContain("15 riders");
     expect(markup).toContain("15 interested · ~55 expected");
-    expect(markup).toContain("See more");
+    expect(markup).toContain("View all bikes");
     expect(markup).not.toContain("15 riders are going");
     expect(markup).not.toContain("See who’s going");
     expect(markup).not.toContain("Around 55 expected");
@@ -91,7 +91,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("15 riders");
-    expect(markup).not.toContain("See more");
+    expect(markup).not.toContain("View all bikes");
     expect(markup).not.toMatch(/organizer|privacy|disabled/i);
   });
 
@@ -103,7 +103,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("12 riders");
-    expect(markup).toContain("See more");
+    expect(markup).toContain("View all bikes");
     expect(markup).toContain('href="/events/ride-1/attendees"');
   });
 
@@ -114,7 +114,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("Rider profiles will appear here as they join");
-    expect(markup).toContain("See more");
+    expect(markup).toContain("View all bikes");
   });
 
   test("removes a failed bike tile without substituting an initial", async () => {
