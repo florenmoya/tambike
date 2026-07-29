@@ -63,16 +63,29 @@ function sourceIndex(source: string, token: string, fromIndex = 0) {
 }
 
 describe("event detail decision-first UI contract", () => {
-  test("renders one decision-first heading and an accessible full-poster link", () => {
+  test("renders an RSVP-first hero and an accessible supporting poster", () => {
     const screen = componentSource("EventDetail");
     const eventType = sourceIndex(screen, 'className="event-detail-type"');
     const heading = sourceIndex(screen, "<h1>");
     const description = sourceIndex(screen, "{event.shortDescription}");
-    const brief = sourceIndex(screen, 'className="event-detail-brief"');
+    const essentials = sourceIndex(
+      screen,
+      'className="event-detail-essentials"',
+    );
+    const decision = sourceIndex(
+      screen,
+      'className="event-detail-decision"',
+    );
     const actions = sourceIndex(screen, 'className="event-detail-actions"');
     const attendeePreview = sourceIndex(screen, "<EventAttendeePreview");
     const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
 
+    expect(screen).toContain("{event.type} · {event.date}");
+    expect(screen).toContain('aria-label="Event essentials"');
+    expect(screen).toContain('id="event-rsvp-title"');
+    expect(screen).toContain("Are you joining?");
+    expect(screen).toContain("I’m going");
+    expect(screen).not.toContain('className="event-detail-brief"');
     expect(screen).toContain('className="event-detail-poster-link"');
     expect(screen).toContain('target="_blank"');
     expect(screen).toContain('rel="noreferrer"');
@@ -80,7 +93,7 @@ describe("event detail decision-first UI contract", () => {
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
     expect(screen).toContain(
-      'sizes="(max-width: 640px) 280px, 360px"',
+      'sizes="(max-width: 640px) 72px, 220px"',
     );
     expect(screen).toContain("preload");
     expect(screen).toContain("View full poster");
@@ -93,8 +106,9 @@ describe("event detail decision-first UI contract", () => {
 
     expect(eventType).toBeLessThan(heading);
     expect(heading).toBeLessThan(description);
-    expect(description).toBeLessThan(brief);
-    expect(brief).toBeLessThan(actions);
+    expect(description).toBeLessThan(essentials);
+    expect(essentials).toBeLessThan(decision);
+    expect(decision).toBeLessThan(actions);
     expect(actions).toBeLessThan(attendeePreview);
     expect(attendeePreview).toBeLessThan(poster);
   });
@@ -175,8 +189,10 @@ describe("event detail decision-first UI contract", () => {
     );
   });
 
-  test("uses a compact responsive poster and readable title system", () => {
+  test("uses an RSVP-first desktop grid and compact mobile poster", () => {
     const stage = cssRule(".event-detail-stage");
+    const decision = cssRule(".event-detail-decision");
+    const posterWrap = cssRule(".event-detail-poster-wrap");
     const poster = cssRule(".event-detail-poster");
     const posterImage = cssRule(".event-detail-poster img");
     const heading = cssRule(".event-detail-copy h1");
@@ -186,13 +202,42 @@ describe("event detail decision-first UI contract", () => {
       "@media (max-width: 640px)",
       eventDetailStyles,
     );
+    const mobileStage = cssRule(".event-detail-stage", mobile);
     const mobilePoster = cssRule(".event-detail-poster-wrap", mobile);
 
-    expect(stage).toContain('grid-template-areas: "poster copy"');
+    expect(stage).toContain('"copy poster"');
+    expect(stage).toContain('"decision poster"');
+    expect(stage).toContain("minmax(200px, 220px)");
+    expect(decision).toContain("grid-area: decision");
+    expect(posterWrap).toContain("max-width: 220px");
     expect(poster).toContain("aspect-ratio: 1");
     expect(posterImage).toContain("object-fit: contain");
-    expect(heading).toContain("font-size: clamp(2rem, 5vw, 3.5rem)");
-    expect(mobilePoster).toContain("max-width: 280px");
+    expect(heading).toContain("max-width: 14ch");
+    expect(heading).toContain(
+      "font-size: clamp(2.15rem, 4.5vw, 3rem)",
+    );
+    expect(mobileStage).toContain('"copy poster"');
+    expect(mobileStage).toContain('"decision decision"');
+    expect(mobileStage).toContain("72px");
+    expect(mobilePoster).toContain("width: 72px");
+  });
+
+  test("keeps the primary decision clear and secondary event actions flat", () => {
+    const controls = cssRule(
+      [
+        ".event-detail-actions .primary-action,",
+        ".event-detail-actions .ghost-action",
+      ].join("\n"),
+    );
+    const primary = cssRule(".event-detail-actions .primary-action");
+    const secondary = cssRule(".event-detail-actions .ghost-action");
+
+    expect(controls).toContain("min-height: 44px");
+    expect(controls).toContain("box-shadow: none");
+    expect(controls).toContain("border-bottom-width: 1px");
+    expect(primary).toContain("background: var(--event-accent)");
+    expect(secondary).toContain("background: rgba(255, 255, 255, 0.045)");
+    expect(controls).not.toContain("border-bottom: 4px");
   });
 
   test("keeps every event action target at least 44px tall", () => {

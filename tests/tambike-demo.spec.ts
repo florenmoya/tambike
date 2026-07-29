@@ -716,7 +716,7 @@ test("guest can create a rider account, view profile, and register for an event"
   await page.goto("/events/tambike-cafe-classico");
 
   await expect(page.getByRole("heading", { name: /Tambike at Cafe Classico/i })).toBeVisible();
-  await page.getByRole("button", { name: /^Going$/i }).click();
+  await page.getByRole("button", { name: /^I’m going$/i }).click();
   await expect(page.getByRole("heading", { name: /Log in to get your Tambike Pass/i })).toBeVisible();
 
   const riderEmail = `rsvp.rider.${testInfo.project.name}.${Date.now()}@example.com`;
@@ -727,7 +727,7 @@ test("guest can create a rider account, view profile, and register for an event"
   await expect(page.getByText(new RegExp(riderEmail, "i"))).toBeVisible();
 
   await page.goto("/events/tambike-cafe-classico");
-  await page.getByRole("button", { name: /^Going$/i }).click();
+  await page.getByRole("button", { name: /^I’m going$/i }).click();
   await page.getByLabel(/Go directly to the event location/i).check();
   await page.getByRole("button", { name: /Get Tambike Pass/i }).click();
 
@@ -874,7 +874,7 @@ test("share controls show copied or shared feedback", async ({ page }, testInfo)
   await signUpRider(page, `share.rider.${testInfo.project.name}.${Date.now()}@example.com`, "Share Rider");
   await expect(page).toHaveURL(/\/profile/);
   await page.goto("/events/tambike-cafe-classico");
-  await page.getByRole("button", { name: /^Going$/i }).click();
+  await page.getByRole("button", { name: /^I’m going$/i }).click();
   await page.getByRole("button", { name: /Get Tambike Pass/i }).click();
   await expect(page).toHaveURL(/\/passes\/pass-tambike-cafe-classico/);
 
@@ -886,7 +886,7 @@ test("past events show closed registration state", async ({ page }) => {
   await page.goto("/events/fullprint-manila-tambike");
 
   await expect(page.getByText(/Past event/i)).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Going$/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^I’m going$/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Interested/i })).toHaveCount(0);
 });
 

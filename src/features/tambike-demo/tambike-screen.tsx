@@ -973,21 +973,33 @@ function EventDetail({
       <div className="event-detail-shell">
         <section className="event-detail-stage">
           <div className="event-detail-copy">
-            <span className="event-detail-type">{event.type}</span>
+            <span className="event-detail-type">
+              {event.type} · {event.date}
+            </span>
             <h1>{event.title}</h1>
             <p>{event.shortDescription}</p>
 
-            <div className="event-detail-brief" aria-label="Event schedule and location">
-              <Detail label="Date" value={event.date} />
-              <Detail label="Time" value={event.time} />
-              <Detail label="Location" value={event.locationName} />
+            <div className="event-detail-essentials" aria-label="Event essentials">
+              <span>{event.time}</span>
+              <span>{event.locationName}</span>
+              <span>{event.area}</span>
+            </div>
+          </div>
+
+          <section
+            className="event-detail-decision"
+            aria-labelledby="event-rsvp-title"
+          >
+            <div className="event-detail-decision-heading">
+              <span>RSVP</span>
+              <h2 id="event-rsvp-title">Are you joining?</h2>
             </div>
 
             <div className="event-detail-actions">
               {cta.canRegister ? (
                 <>
                   <button className="primary-action" type="button" onClick={openRegistration}>
-                    Going
+                    I’m going
                   </button>
                   <button
                     className="ghost-action"
@@ -1014,6 +1026,7 @@ function EventDetail({
                 Share
               </button>
             </div>
+
             {shareFeedback ? (
               <p className="inline-feedback" aria-live="polite">{shareFeedback}</p>
             ) : null}
@@ -1027,7 +1040,7 @@ function EventDetail({
               expected={event.expectedRiders}
               preview={attendeePreview}
             />
-          </div>
+          </section>
 
           <div className="event-detail-poster-wrap">
             <figure className="event-detail-poster">
@@ -1036,7 +1049,7 @@ function EventDetail({
                 alt={`${event.title} poster`}
                 fill
                 placeholder={typeof poster === "string" ? "empty" : "blur"}
-                sizes="(max-width: 640px) 280px, 360px"
+                sizes="(max-width: 640px) 72px, 220px"
                 preload
               />
             </figure>
@@ -1046,7 +1059,8 @@ function EventDetail({
               target="_blank"
               rel="noreferrer"
             >
-              View full poster <span className="sr-only">(opens in a new tab)</span>
+              View full poster{" "}
+              <span className="sr-only">(opens in a new tab)</span>
             </a>
           </div>
         </section>
