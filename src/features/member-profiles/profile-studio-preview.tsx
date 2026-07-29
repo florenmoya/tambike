@@ -1,6 +1,6 @@
 import { Bike } from "lucide-react";
 
-import { MemberMediaImage } from "./member-profile-screen";
+import { MemberMediaImage } from "./member-media-image";
 import styles from "./profile-studio.module.css";
 import type {
   MemberProfileEditorView,

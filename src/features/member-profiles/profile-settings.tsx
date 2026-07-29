@@ -32,7 +32,7 @@ import type {
   UpsertMotorcycleInput,
 } from "./types";
 import { MemberMediaUploader } from "./member-media-uploader";
-import { MemberMediaImage } from "./member-profile-screen";
+import { MemberMediaImage } from "./member-media-image";
 import { MotorcyclePhotoWorkspace } from "./motorcycle-photo-workspace";
 import { ProfileStudioPreview } from "./profile-studio-preview";
 import styles from "./profile-studio.module.css";

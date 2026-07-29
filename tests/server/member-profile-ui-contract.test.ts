@@ -6,6 +6,8 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 import { BackendError } from "../../src/server/backend";
 import { MemberProfileScreen } from "../../src/features/member-profiles/member-profile-screen";
+import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
+import { toProfilePreviewView } from "../../src/features/member-profiles/profile-preview-adapter";
 import { ProfileStudioPreview } from "../../src/features/member-profiles/profile-studio-preview";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
@@ -53,17 +55,19 @@ describe("member profile App Router and UI contracts", () => {
   });
 
   test("renders a private-media garage card without account fields", () => {
-    const profile = source("src/features/member-profiles/member-profile-screen.tsx");
+    const garage = source("src/features/member-profiles/rider-garage-view.tsx");
+    const image = source("src/features/member-profiles/member-media-image.tsx");
 
-    expect(profile).toContain('from "next/image"');
-    expect(profile).toMatch(/<Image[\s\S]*?alt=/);
-    expect(profile).toMatch(/width=\{\d+\}/);
-    expect(profile).toMatch(/height=\{\d+\}/);
-    expect(profile).toContain("sizes=");
-    expect(profile).toMatch(/garage-card/);
-    expect(profile).toMatch(/Organizer/);
-    expect(profile).toMatch(/No motorcycle added yet/);
-    expect(profile).not.toMatch(/email|verificationStatus|verification status/i);
+    expect(image).toContain('from "next/image"');
+    expect(image).toMatch(/<Image[\s\S]*?alt=/);
+    expect(image).toMatch(/function MemberMediaImage\(\{\s*alt,\s*\.\.\.props\s*\}/);
+    expect(garage).toMatch(/width=\{\d+\}/);
+    expect(garage).toMatch(/height=\{\d+\}/);
+    expect(garage).toContain("sizes=");
+    expect(garage).toMatch(/garage-card/);
+    expect(garage).toMatch(/Organizer/);
+    expect(garage).toMatch(/No motorcycle added yet/);
+    expect(garage).not.toMatch(/email|verificationStatus|verification status/i);
   });
 
   test("renders every authorized media image directly and does not nest a main landmark", () => {
@@ -80,8 +84,81 @@ describe("member profile App Router and UI contracts", () => {
     expect(markup).not.toContain("/_next/image");
     expect(markup).not.toContain("<main");
     expect(markup).toContain("<section");
-    expect(source("src/features/member-profiles/member-profile-screen.tsx"))
+    expect(source("src/features/member-profiles/member-media-image.tsx"))
       .toMatch(/function MemberMediaImage\(\{\s*alt,\s*\.\.\.props\s*\}/);
+  });
+
+  test("derives a public-safe preview from unsaved profile and motorcycle drafts", () => {
+    const preview = toProfilePreviewView(
+      editor,
+      {
+        displayName: "Draft Rider",
+        area: "Cebu City",
+        bio: "Draft garage note.",
+        visibility: "MEMBERS_ONLY",
+        defaultRosterIdentity: "VISIBLE",
+      },
+      {
+        make: "Yamaha",
+        model: "XSR900",
+        year: 2025,
+        displacementCc: 890,
+        nickname: "Midnight",
+        description: "Unsaved motorcycle note.",
+      },
+    );
+
+    expect(preview).toMatchObject({
+      slug: "mika-santos",
+      displayName: "Draft Rider",
+      area: "Cebu City",
+      bio: "Draft garage note.",
+      visibility: "MEMBERS_ONLY",
+      role: "organizer",
+      joinedAt: "July 22, 2026",
+      profilePhotoUrl: "/media/avatar-1",
+      organizer: { hostedEventCount: 3 },
+      motorcycle: {
+        make: "Yamaha",
+        model: "XSR900",
+        year: 2025,
+        displacementCc: 890,
+        nickname: "Midnight",
+        description: "Unsaved motorcycle note.",
+        photos: editor.motorcycle?.photos,
+      },
+    });
+    expect(preview).not.toHaveProperty("defaultRosterIdentity");
+    expect(preview).not.toHaveProperty("isPublished");
+  });
+
+  test("uses the public empty-garage state for an incomplete motorcycle draft", () => {
+    const preview = toProfilePreviewView(
+      editor,
+      {
+        displayName: editor.displayName,
+        area: editor.area,
+        bio: editor.bio,
+        visibility: editor.visibility,
+        defaultRosterIdentity: editor.defaultRosterIdentity,
+      },
+      { make: "Honda", model: "" },
+    );
+
+    expect(preview.motorcycle).toBeUndefined();
+    expect(renderToStaticMarkup(createElement(RiderGarageView, { profile: preview })))
+      .toContain("No motorcycle added yet");
+  });
+
+  test("uses one shared rider garage view for public and editor presentation", () => {
+    const screen = source("src/features/member-profiles/member-profile-screen.tsx");
+    const garage = source("src/features/member-profiles/rider-garage-view.tsx");
+
+    expect(screen).toContain("<RiderGarageView");
+    expect(garage).toContain("garage-identity-plate");
+    expect(garage).toContain("garage-motorcycle-hero");
+    expect(garage).toContain("garage-contact-strip");
+    expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
   test("renders a draft-aware Garage Studio preview", () => {

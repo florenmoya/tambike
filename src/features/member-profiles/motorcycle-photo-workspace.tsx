@@ -11,7 +11,7 @@ import {
   MemberMediaDropInput,
   performMemberMediaUpload,
 } from "./member-media-uploader";
-import { MemberMediaImage } from "./member-profile-screen";
+import { MemberMediaImage } from "./member-media-image";
 import {
   createMotorcyclePhotoPreviewRegistry,
   createMotorcyclePhotoQueueDescriptors,
