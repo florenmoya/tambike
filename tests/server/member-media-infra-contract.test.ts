@@ -282,6 +282,39 @@ describe("private member media infrastructure contract", () => {
     }
   });
 
+  test("optionally allows only the exact localhost development origin for browser uploads", () => {
+    const template = source("infra/aws/tambike-member-media.yaml");
+    const localOrigin = template.match(
+      /LocalDevelopmentOrigin:[\s\S]*?AllowedPattern: '([^'\r\n]+)'/,
+    )?.[1];
+    expect(localOrigin).toBeDefined();
+
+    const pattern = new RegExp(localOrigin!);
+    expect(pattern.test("")).toBe(true);
+    expect(pattern.test("http://localhost:3000")).toBe(true);
+    for (const origin of [
+      "https://localhost:3000",
+      "http://localhost",
+      "http://localhost:3001",
+      "http://127.0.0.1:3000",
+      "http://example.com:3000",
+      "http://localhost:3000/path",
+    ]) {
+      expect(pattern.test(origin), origin).toBe(false);
+    }
+
+    expect(template).toContain(
+      'AllowLocalDevelopmentOrigin: !Not [!Equals [!Ref LocalDevelopmentOrigin, ""]]',
+    );
+    const cors = template.slice(
+      template.indexOf("      CorsConfiguration:"),
+      template.indexOf("      Tags:", template.indexOf("      CorsConfiguration:")),
+    );
+    expect(cors).toMatch(
+      /AllowedOrigins:[\s\S]*- !Ref AllowedOrigin[\s\S]*- !If[\s\S]*- AllowLocalDevelopmentOrigin[\s\S]*- !Ref LocalDevelopmentOrigin[\s\S]*- !Ref AWS::NoValue/,
+    );
+  });
+
   test("binds Vercel team-mode OIDC to exact production claims and bounded opt-in preview", () => {
     const template = source("infra/aws/tambike-member-media.yaml");
 

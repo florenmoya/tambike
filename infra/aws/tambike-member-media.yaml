@@ -14,6 +14,12 @@ Parameters:
     Type: String
     Description: Exact HTTPS Tambike browser origin allowed to submit presigned POSTs.
     AllowedPattern: '^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$'
+  LocalDevelopmentOrigin:
+    Type: String
+    Default: ""
+    Description: Optional exact localhost origin allowed to submit presigned POSTs during local development.
+    AllowedPattern: '^$|^http://localhost:3000$'
+    ConstraintDescription: Must be empty or exactly http://localhost:3000.
   ExistingOidcProviderArn:
     Type: String
     Default: ""
@@ -36,6 +42,7 @@ Parameters:
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
   AllowPreviewAccess: !Equals [!Ref EnablePreviewAccess, "true"]
+  AllowLocalDevelopmentOrigin: !Not [!Equals [!Ref LocalDevelopmentOrigin, ""]]
 
 Resources:
   MemberMediaBucket:
@@ -82,6 +89,10 @@ Resources:
               - POST
             AllowedOrigins:
               - !Ref AllowedOrigin
+              - !If
+                - AllowLocalDevelopmentOrigin
+                - !Ref LocalDevelopmentOrigin
+                - !Ref AWS::NoValue
             MaxAge: 300
       Tags:
         - Key: Application
