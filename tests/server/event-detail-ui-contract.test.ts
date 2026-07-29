@@ -93,7 +93,7 @@ describe("event detail decision-first UI contract", () => {
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
     expect(screen).toContain(
-      'sizes="(max-width: 640px) 72px, 220px"',
+      'sizes="(max-width: 640px) 72px, (max-width: 1024px) 140px, 200px"',
     );
     expect(screen).toContain("preload");
     expect(screen).toContain("View full poster");
@@ -190,14 +190,23 @@ describe("event detail decision-first UI contract", () => {
     );
   });
 
-  test("uses an RSVP-first desktop grid and compact mobile poster", () => {
+  test("uses one responsive rail from wide screens through mobile", () => {
+    const shell = cssRule(".event-detail-shell");
     const stage = cssRule(".event-detail-stage");
     const decision = cssRule(".event-detail-decision");
     const posterWrap = cssRule(".event-detail-poster-wrap");
     const poster = cssRule(".event-detail-poster");
     const posterImage = cssRule(".event-detail-poster img");
     const heading = cssRule(".event-detail-copy h1");
+    const sections = cssRule(".event-detail-sections");
     const eventDetailStyles = sourceIndex(css, ".event-detail-stage");
+    const tablet = sourceIndex(
+      css,
+      "@media (max-width: 1024px)",
+      eventDetailStyles,
+    );
+    const tabletStage = cssRule(".event-detail-stage", tablet);
+    const tabletPoster = cssRule(".event-detail-poster-wrap", tablet);
     const mobile = sourceIndex(
       css,
       "@media (max-width: 640px)",
@@ -206,17 +215,26 @@ describe("event detail decision-first UI contract", () => {
     const mobileStage = cssRule(".event-detail-stage", mobile);
     const mobilePoster = cssRule(".event-detail-poster-wrap", mobile);
 
+    expect(shell).toContain(
+      "width: min(1200px, calc(100% - clamp(24px, 5vw, 72px)))",
+    );
     expect(stage).toContain('"copy poster"');
     expect(stage).toContain('"decision poster"');
-    expect(stage).toContain("minmax(200px, 220px)");
+    expect(stage).toContain("minmax(180px, 200px)");
     expect(decision).toContain("grid-area: decision");
-    expect(posterWrap).toContain("max-width: 220px");
+    expect(posterWrap).toContain("max-width: 200px");
     expect(poster).toContain("aspect-ratio: 1");
     expect(posterImage).toContain("object-fit: contain");
     expect(heading).toContain("max-width: 14ch");
     expect(heading).toContain(
       "font-size: clamp(2.15rem, 4.5vw, 3rem)",
     );
+    expect(sections).toContain("width: 100%");
+    expect(tabletStage).toContain('"copy poster"');
+    expect(tabletStage).toContain('"decision decision"');
+    expect(tabletStage).toContain("140px");
+    expect(tabletPoster).toContain("width: 140px");
+    expect(tabletPoster).toContain("max-width: 140px");
     expect(mobileStage).toContain('"copy poster"');
     expect(mobileStage).toContain('"decision decision"');
     expect(mobileStage).toContain("72px");

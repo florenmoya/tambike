@@ -1049,7 +1049,7 @@ function EventDetail({
                 alt={`${event.title} poster`}
                 fill
                 placeholder={typeof poster === "string" ? "empty" : "blur"}
-                sizes="(max-width: 640px) 72px, 220px"
+                sizes="(max-width: 640px) 72px, (max-width: 1024px) 140px, 200px"
                 preload
               />
             </figure>

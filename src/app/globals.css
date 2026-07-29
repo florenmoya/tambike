@@ -3602,7 +3602,7 @@ svg {
 }
 
 .event-detail-shell {
-  width: min(1480px, calc(100% - clamp(24px, 5vw, 72px)));
+  width: min(1200px, calc(100% - clamp(24px, 5vw, 72px)));
   margin-inline: auto;
   padding: clamp(18px, 3vw, 46px) 0 clamp(52px, 6vw, 90px);
 }
@@ -3612,7 +3612,7 @@ svg {
   grid-template-areas:
     "copy poster"
     "decision poster";
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 220px);
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 200px);
   align-items: start;
   gap: 1rem clamp(1.5rem, 4vw, 3rem);
 }
@@ -3635,7 +3635,7 @@ svg {
 .event-detail-poster-wrap {
   grid-area: poster;
   width: 100%;
-  max-width: 220px;
+  max-width: 200px;
   display: grid;
   justify-items: center;
   gap: 0.5rem;
@@ -3829,7 +3829,7 @@ svg {
 }
 
 .event-detail-sections {
-  width: min(100%, 1120px);
+  width: 100%;
   display: grid;
   gap: 1rem;
   margin: clamp(1.75rem, 3vw, 2.75rem) auto 0;
@@ -3952,7 +3952,16 @@ svg {
   }
 
   .event-detail-stage {
-    gap: clamp(1.5rem, 4vw, 3rem);
+    grid-template-areas:
+      "copy poster"
+      "decision decision";
+    grid-template-columns: minmax(0, 1fr) 140px;
+    gap: 1rem 1.5rem;
+  }
+
+  .event-detail-poster-wrap {
+    width: 140px;
+    max-width: 140px;
   }
 }
 
