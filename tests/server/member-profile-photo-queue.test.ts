@@ -52,6 +52,33 @@ describe("motorcycle photo queue", () => {
     expect(result.items[1]).toMatchObject({ status: "ready" });
   });
 
+  test("keeps uploaded queue entries in the cap until persisted media refresh removes them", () => {
+    const uploaded = ["a.webp", "b.webp", "c.webp", "d.webp", "e.webp"].map((name) => {
+      const file = image(name);
+      return {
+        id: `queue:${name}`,
+        file,
+        previewUrl: `blob:${name}`,
+        status: "uploaded" as const,
+        retryable: false,
+      };
+    });
+
+    const result = enqueueMotorcyclePhotoFiles({
+      current: uploaded,
+      files: [image("sixth.webp")],
+      persistedCount: 0,
+      createObjectUrl: (file) => `blob:${file.name}`,
+      createId: (file) => `queue:${file.name}`,
+    });
+
+    expect(result.items.at(-1)).toMatchObject({
+      status: "failed",
+      retryable: false,
+      error: "Your garage has room for 0 more photos.",
+    });
+  });
+
   test("selects only the first ready item and supports retry and removal transitions", () => {
     const queued = enqueueMotorcyclePhotoFiles({
       current: [],

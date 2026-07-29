@@ -29,6 +29,7 @@ export function enqueueMotorcyclePhotoFiles(input: EnqueueMotorcyclePhotoFilesIn
   const activeCount = input.current.filter((item) =>
     item.status === "ready" ||
     item.status === "uploading" ||
+    item.status === "uploaded" ||
     (item.status === "failed" && item.retryable),
   ).length;
   let remainingSlots = Math.max(0, 5 - input.persistedCount - activeCount);
