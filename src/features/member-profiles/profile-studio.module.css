@@ -226,7 +226,36 @@
   color: var(--studio-asphalt);
 }
 
-.motorcyclePhotoDropzone {
+.motorcyclePhotoHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.motorcyclePhotoHeading > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.motorcyclePhotoHeading span,
+.motorcyclePhotoCapacity {
+  color: var(--studio-green);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.motorcyclePhotoCapacity {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.motorcyclePhotoDropzone,
+.motorcyclePhotoFull {
   display: grid;
   justify-items: center;
   gap: 0.5rem;
@@ -241,11 +270,13 @@
   text-align: center;
 }
 
-.motorcyclePhotoDropzone > svg {
+.motorcyclePhotoDropzone > svg,
+.motorcyclePhotoFull > svg {
   color: var(--studio-amber);
 }
 
 .motorcyclePhotoDropzone > span,
+.motorcyclePhotoFull > span,
 .motorcyclePhotoProgress,
 .motorcyclePhotoQueueItem span {
   color: var(--studio-green);

@@ -14,6 +14,7 @@ import {
   toSavedProfilePreviewView,
 } from "../../src/features/member-profiles/profile-preview-adapter";
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
+import { motorcyclePhotoCapacityLabel } from "../../src/features/member-profiles/motorcycle-photo-workspace";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
 function source(path: string) {
@@ -59,6 +60,30 @@ const completeProfileInput: ProfileEditorPresentationInput = {
 };
 
 describe("member profile App Router and UI contracts", () => {
+  test("explains empty, partial, and full motorcycle gallery capacity", () => {
+    expect(motorcyclePhotoCapacityLabel(0))
+      .toBe("0 of 5 photos · Add up to 5");
+    expect(motorcyclePhotoCapacityLabel(2))
+      .toBe("2 of 5 photos · Add up to 3 more");
+    expect(motorcyclePhotoCapacityLabel(5))
+      .toBe("5 of 5 photos · Delete one to add another");
+  });
+
+  test("replaces the chooser when the saved motorcycle gallery is full", () => {
+    const workspace = source(
+      "src/features/member-profiles/motorcycle-photo-workspace.tsx",
+    );
+
+    expect(workspace).toContain("Motorcycle photos *");
+    expect(workspace).toContain(
+      "The first photo is your cover. JPEG, PNG, or WebP · Up to 8 MB each.",
+    );
+    expect(workspace).toContain("motorcyclePhotoCapacityLabel(photos.length)");
+    expect(workspace).toMatch(
+      /photos\.length >= 5[\s\S]*?motorcyclePhotoFull[\s\S]*?:[\s\S]*?motorcyclePhotoDropzone/,
+    );
+  });
+
   test("names the first missing publish requirement and shows only incomplete signals", () => {
     const presentation = getProfileEditorPresentation({
       ...completeProfileInput,

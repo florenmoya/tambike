@@ -46,6 +46,19 @@ function activeQueueCount(queue: MotorcyclePhotoQueueItem[]) {
   ).length;
 }
 
+export function motorcyclePhotoCapacityLabel(photoCount: number) {
+  const count = Math.min(5, Math.max(0, photoCount));
+  const remaining = 5 - count;
+
+  if (remaining === 0) {
+    return "5 of 5 photos · Delete one to add another";
+  }
+  if (count === 0) {
+    return "0 of 5 photos · Add up to 5";
+  }
+  return `${count} of 5 photos · Add up to ${remaining} more`;
+}
+
 function queueStatus(
   queue: MotorcyclePhotoQueueItem[],
   uploadEnabled: boolean,
@@ -157,22 +170,41 @@ export function MotorcyclePhotoWorkspace({
 
   return (
     <section className={styles.motorcyclePhotoWorkspace} aria-labelledby="motorcycle-photo-title">
-      <div
-        className={styles.motorcyclePhotoDropzone}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={handleDrop}
-      >
-        <ImagePlus aria-hidden="true" />
-        <strong id="motorcycle-photo-title">Drop motorcycle photos here</strong>
-        <span>JPEG, PNG, or WebP · 8 MB each · up to 5 photos</span>
-        <Label htmlFor={inputId}>Choose photos</Label>
-        {/* MemberMediaDropInput keeps the multiple file selection behavior shared with this workspace. */}
-        <MemberMediaDropInput
-          inputId={inputId}
-          disabled={availableSlots === 0}
-          onFilesSelected={addFiles}
-        />
+      <div className={styles.motorcyclePhotoHeading}>
+        <div>
+          <strong id="motorcycle-photo-title">Motorcycle photos *</strong>
+          <span>
+            The first photo is your cover. JPEG, PNG, or WebP · Up to 8 MB each.
+          </span>
+        </div>
+        <span className={styles.motorcyclePhotoCapacity} aria-live="polite">
+          {motorcyclePhotoCapacityLabel(photos.length)}
+        </span>
       </div>
+      {photos.length >= 5 ? (
+        <div className={styles.motorcyclePhotoFull}>
+          <ImagePlus aria-hidden="true" />
+          <strong>Gallery full</strong>
+          <span>5 of 5 photos · Delete one to add another</span>
+        </div>
+      ) : (
+        <div
+          className={styles.motorcyclePhotoDropzone}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handleDrop}
+        >
+          <ImagePlus aria-hidden="true" />
+          <strong>Drop motorcycle photos here</strong>
+          <span>JPEG, PNG, or WebP · 8 MB each · up to 5 photos</span>
+          <Label htmlFor={inputId}>Choose photos</Label>
+          {/* MemberMediaDropInput keeps the multiple file selection behavior shared with this workspace. */}
+          <MemberMediaDropInput
+            inputId={inputId}
+            disabled={availableSlots === 0}
+            onFilesSelected={addFiles}
+          />
+        </div>
+      )}
       <div className={styles.motorcyclePhotoProgress} aria-live="polite">{queueSummary}</div>
       <ul className={styles.motorcyclePhotoQueue} aria-label="Photos waiting to upload">
         {queue.map((item) => (
