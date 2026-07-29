@@ -78,7 +78,24 @@ async function createPreviewHarness() {
     });
   }
 
-  return { backend, addBikePhoto };
+  async function addProfilePhoto(
+    rider: { sessionToken: string; user: { id: string } },
+    label: string,
+  ) {
+    const tempKey = `tmp/users/${rider.user.id}/${label}`;
+    objects.set(tempKey, {
+      body: Buffer.from("jpeg"),
+      contentType: "image/jpeg",
+      lastModified: new Date(),
+    });
+    return backend.finalizeMemberMedia(rider.sessionToken, {
+      purpose: "avatar",
+      tempKey,
+      claimedMimeType: "image/jpeg",
+    });
+  }
+
+  return { backend, addBikePhoto, addProfilePhoto };
 }
 
 async function addPreviewCandidate(input: {
@@ -114,7 +131,11 @@ async function addPreviewCandidate(input: {
 
 describe("public event attendee preview", () => {
   test("returns only public visible Going riders in the anonymous preview", async () => {
-    const { backend, addBikePhoto } = await createPreviewHarness();
+    const {
+      backend,
+      addBikePhoto,
+      addProfilePhoto,
+    } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview");
     const event = await createPublishedTestEvent(backend, actors, {
       date: "Fri · December 31, 2099",
@@ -134,6 +155,7 @@ describe("public event attendee preview", () => {
       rosterIdentity: "VISIBLE",
     });
     await addBikePhoto(actors.rider, "public-rider");
+    await addProfilePhoto(actors.rider, "public-rider-avatar");
 
     await backend.updateMemberProfile(actors.outsider.sessionToken, {
       ...visibleProfile,
@@ -158,6 +180,7 @@ describe("public event attendee preview", () => {
         slug: "public-rider",
         displayName: "Public Rider",
         area: "Quezon City",
+        profilePhotoUrl: "/media/preview-bike-2",
         bikePhoto: {
           url: "/media/preview-bike-1",
           width: 1200,
@@ -166,7 +189,7 @@ describe("public event attendee preview", () => {
       },
     ]);
     expect(JSON.stringify(preview)).not.toMatch(
-      /Members Rider|profilePhoto|email|userId|rsvpId|verification|storageKey|make|model/i,
+      /Members Rider|email|userId|rsvpId|verification|storageKey|make|model/i,
     );
 
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {

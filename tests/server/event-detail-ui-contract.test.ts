@@ -157,12 +157,14 @@ describe("event detail decision-first UI contract", () => {
     expect(attendeePreviewSource).toContain("styles.bikeGrid");
     expect(attendeePreviewSource).toContain("styles.bikeTile");
     expect(attendeePreviewSource).toContain("rider.bikePhoto.url");
+    expect(attendeePreviewSource).toContain("rider.profilePhotoUrl");
+    expect(attendeePreviewSource).toContain("styles.profileOverlay");
     expect(attendeePreviewSource).toContain('href={`/riders/${rider.slug}`}');
-    expect(attendeePreviewSource).toContain("View all bikes");
+    expect(attendeePreviewSource).toContain("View More");
+    expect(attendeePreviewSource).not.toContain("View all bikes");
     expect(attendeePreviewSource).not.toContain("See more");
     expect(attendeePreviewSource).not.toContain("styles.names");
     expect(attendeePreviewSource).not.toContain("Log in to see riders");
-    expect(attendeePreviewSource).not.toContain("rider.profilePhoto");
     expect(attendeePreviewSource).not.toMatch(/email|userId|verification|make|model/);
   });
 
@@ -312,12 +314,12 @@ describe("event detail decision-first UI contract", () => {
       attendeePreviewCss,
     );
     const bikeImageMotion = cssRule(
-      ".bikeTile img",
+      ".bikePhoto",
       attendeeReducedMotion,
       attendeePreviewCss,
     );
     const bikeHoverMotion = cssRule(
-      ".bikeTile:hover img",
+      ".bikeTile:hover .bikePhoto",
       attendeeReducedMotion,
       attendeePreviewCss,
     );

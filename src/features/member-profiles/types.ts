@@ -57,7 +57,7 @@ export interface EventAttendeePreviewBikePhoto {
 
 export type EventAttendeePreviewRider = Pick<
   MemberProfileView,
-  "slug" | "displayName" | "area"
+  "slug" | "displayName" | "area" | "profilePhotoUrl"
 > & {
   bikePhoto: EventAttendeePreviewBikePhoto;
 };

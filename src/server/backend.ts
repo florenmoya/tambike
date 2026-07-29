@@ -4529,6 +4529,7 @@ export class TambikeBackend {
           slug: profile.slug,
           displayName: profile.displayName,
           area: profile.area,
+          profilePhotoUrl: profile.profilePhotoUrl,
           bikePhoto: {
             url: photo.url,
             width: photo.width,

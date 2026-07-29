@@ -23,6 +23,7 @@ const memberPreview: EventAttendeePreviewData = {
       slug: "mika-santos",
       displayName: "Mika Santos",
       area: "Davao City",
+      profilePhotoUrl: "/media/avatar-mika",
       bikePhoto: {
         url: "/media/bike-mika",
         width: 1200,
@@ -33,6 +34,7 @@ const memberPreview: EventAttendeePreviewData = {
       slug: "paolo-reyes",
       displayName: "Paolo Reyes",
       area: "Quezon City",
+      profilePhotoUrl: "/media/avatar-paolo",
       bikePhoto: {
         url: "/media/bike-paolo",
         width: 1200,
@@ -59,25 +61,29 @@ function render(
 }
 
 describe("event attendee preview", () => {
-  test("shows public bike links without a login gate or long name list", () => {
+  test("shows public rider identities over their bike backgrounds", () => {
     const markup = render(memberPreview);
 
     expect(markup).toContain('href="/riders/mika-santos"');
     expect(markup).toContain('href="/riders/paolo-reyes"');
     expect(markup).toContain("15 riders");
     expect(markup).toContain("15 interested · ~55 expected");
-    expect(markup).toContain("View all bikes");
+    expect(markup).toContain("View More");
+    expect(markup).not.toContain("View all bikes");
     expect(markup).not.toContain("15 riders are going");
     expect(markup).not.toContain("See who’s going");
     expect(markup).not.toContain("Around 55 expected");
     expect(markup).not.toContain("Log in to see riders");
-    expect(markup).not.toContain("Mika Santos, Paolo Reyes");
+    expect(markup).toContain("Mika Santos");
+    expect(markup).toContain("Paolo Reyes");
     expect(markup).toContain('src="/media/bike-mika"');
     expect(markup).toContain('src="/media/bike-paolo"');
+    expect(markup).toContain('src="/media/avatar-mika"');
+    expect(markup).toContain('src="/media/avatar-paolo"');
+    expect(markup).toContain(styles.profileOverlay);
     expect(markup).toContain("View Mika Santos’s bike and rider profile");
-    expect(markup).not.toContain("/media/mika");
     expect(markup).not.toMatch(
-      /anonymous riders|visible riders|profilePhoto|email|userId|verification|make|model/i,
+      /anonymous riders|visible riders|email|userId|verification|make|model/i,
     );
   });
 
@@ -92,7 +98,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("15 riders");
-    expect(markup).not.toContain("View all bikes");
+    expect(markup).not.toContain("View More");
     expect(markup).not.toContain(styles.footer);
     expect(markup).not.toMatch(/organizer|privacy|disabled/i);
   });
@@ -105,7 +111,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("12 riders");
-    expect(markup).toContain("View all bikes");
+    expect(markup).toContain("View More");
     expect(markup).toContain('href="/events/ride-1/attendees"');
   });
 
@@ -116,7 +122,7 @@ describe("event attendee preview", () => {
     });
 
     expect(markup).toContain("Rider profiles will appear here as they join");
-    expect(markup).toContain("View all bikes");
+    expect(markup).toContain("View More");
   });
 
   test("removes a failed bike tile without substituting an initial", async () => {
@@ -157,6 +163,53 @@ describe("event attendee preview", () => {
         container.querySelector('a[href="/riders/paolo-reyes"]'),
       ).not.toBeNull();
       expect(container.textContent).not.toContain(">M<");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  test("keeps the rider card when only the public avatar fails", async () => {
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(EventAttendeePreview, {
+            eventId: "ride-1",
+            fallbackGoing: 15,
+            interested: 15,
+            expected: 55,
+            preview: memberPreview,
+          }),
+        );
+      });
+      const failedAvatar = container.querySelector(
+        'img[src$="/media/avatar-mika"]',
+      );
+      expect(failedAvatar).not.toBeNull();
+
+      await act(async () => {
+        failedAvatar!.dispatchEvent(new Event("error"));
+      });
+
+      expect(
+        container.querySelector('a[href="/riders/mika-santos"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('img[src$="/media/bike-mika"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('img[src$="/media/avatar-mika"]'),
+      ).toBeNull();
+      expect(container.textContent).toContain("Mika Santos");
     } finally {
       await act(async () => root.unmount());
       container.remove();

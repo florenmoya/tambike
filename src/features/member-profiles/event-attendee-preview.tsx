@@ -50,6 +50,9 @@ export function EventAttendeePreview({
   const [failedBikePhotos, setFailedBikePhotos] = useState<Set<string>>(
     () => new Set(),
   );
+  const [failedProfilePhotos, setFailedProfilePhotos] = useState<Set<string>>(
+    () => new Set(),
+  );
   const bikeRiders = riders.filter(
     (rider) => !failedBikePhotos.has(rider.slug),
   );
@@ -73,6 +76,7 @@ export function EventAttendeePreview({
                 aria-label={`View ${rider.displayName}’s bike and rider profile`}
               >
                 <Image
+                  className={styles.bikePhoto}
                   src={rider.bikePhoto.url}
                   alt=""
                   width={rider.bikePhoto.width}
@@ -87,6 +91,30 @@ export function EventAttendeePreview({
                     });
                   }}
                 />
+                <span className={styles.profileOverlay}>
+                  {rider.profilePhotoUrl &&
+                  !failedProfilePhotos.has(rider.slug) ? (
+                    <span className={styles.avatar}>
+                      <Image
+                        src={rider.profilePhotoUrl}
+                        alt=""
+                        fill
+                        sizes="32px"
+                        unoptimized
+                        onError={() => {
+                          setFailedProfilePhotos((current) => {
+                            const next = new Set(current);
+                            next.add(rider.slug);
+                            return next;
+                          });
+                        }}
+                      />
+                    </span>
+                  ) : null}
+                  <span className={styles.riderName}>
+                    {rider.displayName}
+                  </span>
+                </span>
               </Link>
             ))}
           </div>
@@ -98,7 +126,7 @@ export function EventAttendeePreview({
       {canOpenRoster ? (
         <div className={styles.footer}>
           <Link className={styles.action} href={`/events/${eventId}/attendees`}>
-            View all bikes
+            View More
           </Link>
         </div>
       ) : null}
