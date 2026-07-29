@@ -210,6 +210,19 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).not.toContain(".studioPreviewHero");
   });
 
+  test("keeps both profile workspace mode labels readable", () => {
+    const styles = source(
+      "src/features/member-profiles/profile-studio.module.css",
+    );
+
+    expect(styles).toMatch(
+      /\.studioModeSwitch\s+:global\(\[data-slot="button"\]\[aria-pressed="true"\]\)[\s\S]*?background:\s*var\(--studio-amber\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
+    );
+    expect(styles).toMatch(
+      /\.studioModeSwitch\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]\[aria-pressed="false"\]\)[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*var\(--studio-paper\);/,
+    );
+  });
+
   test("composes the profile editor as a professional Garage Studio", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
     const styles = source(

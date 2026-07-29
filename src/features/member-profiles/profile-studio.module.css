@@ -139,6 +139,23 @@
   min-height: 44px;
 }
 
+.studioModeSwitch :global([data-slot="button"][aria-pressed="true"]) {
+  border-color: var(--studio-amber);
+  background: var(--studio-amber);
+  color: var(--studio-asphalt);
+}
+
+.studioModeSwitch :global([data-slot="button"][data-variant="outline"][aria-pressed="false"]) {
+  border-color: color-mix(in srgb, var(--studio-steel) 45%, transparent);
+  background: transparent;
+  color: var(--studio-paper);
+}
+
+.studioModeSwitch :global([data-slot="button"][data-variant="outline"][aria-pressed="false"]):hover {
+  background: color-mix(in srgb, var(--studio-paper) 8%, transparent);
+  color: var(--studio-paper);
+}
+
 .studioPreviewMode {
   display: grid;
   gap: 1rem;
