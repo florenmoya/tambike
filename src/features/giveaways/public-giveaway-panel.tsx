@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, CircleCheckBig, LoaderCircle, TicketCheck } from "lucide-react";
+import { ChevronDown, LoaderCircle, TicketCheck } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
@@ -277,10 +277,6 @@ function CompletedGiveawayResult({
   return (
     <article className={styles.winnerCard}>
       <div className={styles.cardBody}>
-        <div className={styles.winnerHeader}>
-          <CircleCheckBig aria-hidden="true" />
-          Latest winner
-        </div>
         <PublicPrizeImage presentation={presentation} />
         <h3 className={styles.campaignTitle}>{giveaway.title}</h3>
 

@@ -596,9 +596,9 @@ describe("public giveaway spotlight", () => {
     expect(container.querySelector("header h2")?.textContent).toBe("Event raffles");
     expect(text).not.toContain("Prize route");
     expect(text).toContain("Open raffles");
-    expect(text).toContain("Recent winners");
+    expect(text.match(/Recent winners/g)).toHaveLength(1);
     expect(text).toContain("Open now");
-    expect(text).toContain("Latest winner");
+    expect(text).not.toContain("Latest winner");
     expect(text).not.toContain("Ongoing");
     expect(text).not.toContain("Completed");
     expect(text).not.toContain("Boots raffle result");

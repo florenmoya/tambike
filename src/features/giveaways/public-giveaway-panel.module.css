@@ -22,7 +22,6 @@
 
 .heading > span,
 .openStatus,
-.winnerHeader,
 .compactStatus {
   color: var(--raffle-amber);
   font-size: 0.72rem;
@@ -97,21 +96,15 @@
   padding: clamp(1rem, 2.4vw, 1.35rem);
 }
 
-.openStatus,
-.winnerHeader {
+.openStatus {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
 }
 
-.openStatus svg,
-.winnerHeader svg {
+.openStatus svg {
   width: 1rem;
   height: 1rem;
-}
-
-.winnerHeader {
-  color: var(--raffle-green);
 }
 
 .prizeImage {
