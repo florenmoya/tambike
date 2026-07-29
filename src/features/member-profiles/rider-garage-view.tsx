@@ -43,7 +43,7 @@ export function RiderGarageView({
               width={512}
               height={512}
               sizes="(max-width: 640px) 112px, 152px"
-              priority={prioritizeMedia}
+              loading={prioritizeMedia ? "eager" : undefined}
             />
           ) : (
             <span aria-label={`${profile.displayName} profile photo placeholder`}>
@@ -88,7 +88,7 @@ export function RiderGarageView({
                 width={1600}
                 height={1200}
                 sizes="(max-width: 720px) 100vw, 1120px"
-                priority={prioritizeMedia}
+                loading={prioritizeMedia ? "eager" : undefined}
               />
               <span className="garage-photo-index">
                 01 / {String(photos.length).padStart(2, "0")}

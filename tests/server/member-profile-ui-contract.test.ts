@@ -160,6 +160,23 @@ describe("member profile App Router and UI contracts", () => {
     expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
+  test("eagerly loads only above-fold garage media in public and profile preview", () => {
+    const markup = renderToStaticMarkup(createElement(RiderGarageView, {
+      profile: publicProfile,
+      prioritizeMedia: true,
+    }));
+    const images = [...markup.matchAll(/<img\b[^>]*>/g)].map((match) => match[0]);
+
+    expect(images.map((image) => image.includes('loading="eager"'))).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(source("src/features/member-profiles/profile-settings.tsx"))
+      .toContain("<RiderGarageView profile={previewProfile} prioritizeMedia />");
+  });
+
   test("offers edit and exact public-preview modes without unmounting editor state", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 

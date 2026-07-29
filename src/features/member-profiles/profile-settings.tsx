@@ -563,7 +563,7 @@ function LoadedProfileSettings({
         </div>
         <div className="garage-profile-page">
           <div className="garage-profile-shell">
-            <RiderGarageView profile={previewProfile} />
+            <RiderGarageView profile={previewProfile} prioritizeMedia />
           </div>
         </div>
       </section>
