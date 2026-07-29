@@ -185,7 +185,9 @@ export function MotorcyclePhotoWorkspace({
             {item.status === "uploaded" && item.error ? (
               <Button type="button" variant="outline" onClick={() => refreshUploadedItem(item.id)}>Refresh gallery</Button>
             ) : null}
-            <Button type="button" variant="outline" disabled={item.status === "uploading"} onClick={() => removeItem(item.id)}>Remove</Button>
+            {item.status !== "uploaded" ? (
+              <Button type="button" variant="outline" disabled={item.status === "uploading"} onClick={() => removeItem(item.id)}>Remove</Button>
+            ) : null}
           </li>
         ))}
       </ul>

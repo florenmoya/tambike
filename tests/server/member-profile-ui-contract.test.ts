@@ -275,6 +275,19 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).toMatch(/Move motorcycle photo .* later/);
   });
 
+  test("keeps a finalized refresh error locked to refresh-only recovery", () => {
+    const workspace = source(
+      "src/features/member-profiles/motorcycle-photo-workspace.tsx",
+    );
+
+    expect(workspace).toMatch(
+      /item\.status === "uploaded" && item\.error[\s\S]*?>Refresh gallery<\/Button>/,
+    );
+    expect(workspace).toMatch(
+      /\{item\.status !== "uploaded" \? \([\s\S]*?disabled=\{item\.status === "uploading"\}[\s\S]*?>Remove<\/Button>[\s\S]*?\) : null\}/,
+    );
+  });
+
   test("allows a multiple file picker while preserving the five-photo cap", async () => {
     const uploader = await import(
       "../../src/features/member-profiles/member-media-uploader"
