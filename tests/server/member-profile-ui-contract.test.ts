@@ -11,7 +11,6 @@ import {
   type ProfileEditorPresentationInput,
 } from "../../src/features/member-profiles/profile-editor-presentation";
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
-import { toProfilePreviewView } from "../../src/features/member-profiles/profile-preview-adapter";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
 
 function source(path: string) {
@@ -158,69 +157,7 @@ describe("member profile App Router and UI contracts", () => {
       .toMatch(/function MemberMediaImage\(\{\s*alt,\s*\.\.\.props\s*\}/);
   });
 
-  test("derives a public-safe preview from unsaved profile and motorcycle drafts", () => {
-    const preview = toProfilePreviewView(
-      editor,
-      {
-        displayName: "Draft Rider",
-        area: "Cebu City",
-        bio: "Draft garage note.",
-        visibility: "MEMBERS_ONLY",
-        defaultRosterIdentity: "VISIBLE",
-      },
-      {
-        make: "Yamaha",
-        model: "XSR900",
-        year: 2025,
-        displacementCc: 890,
-        nickname: "Midnight",
-        description: "Unsaved motorcycle note.",
-      },
-    );
-
-    expect(preview).toMatchObject({
-      slug: "mika-santos",
-      displayName: "Draft Rider",
-      area: "Cebu City",
-      bio: "Draft garage note.",
-      visibility: "MEMBERS_ONLY",
-      role: "organizer",
-      joinedAt: "July 22, 2026",
-      profilePhotoUrl: "/media/avatar-1",
-      organizer: { hostedEventCount: 3 },
-      motorcycle: {
-        make: "Yamaha",
-        model: "XSR900",
-        year: 2025,
-        displacementCc: 890,
-        nickname: "Midnight",
-        description: "Unsaved motorcycle note.",
-        photos: editor.motorcycle?.photos,
-      },
-    });
-    expect(preview).not.toHaveProperty("defaultRosterIdentity");
-    expect(preview).not.toHaveProperty("isPublished");
-  });
-
-  test("uses the public empty-garage state for an incomplete motorcycle draft", () => {
-    const preview = toProfilePreviewView(
-      editor,
-      {
-        displayName: editor.displayName,
-        area: editor.area,
-        bio: editor.bio,
-        visibility: editor.visibility,
-        defaultRosterIdentity: editor.defaultRosterIdentity,
-      },
-      { make: "Honda", model: "" },
-    );
-
-    expect(preview.motorcycle).toBeUndefined();
-    expect(renderToStaticMarkup(createElement(RiderGarageView, { profile: preview })))
-      .toContain("No motorcycle added yet");
-  });
-
-  test("uses one shared rider garage view for public and editor presentation", () => {
+  test("keeps the public rider garage separate from account fields", () => {
     const screen = source("src/features/member-profiles/member-profile-screen.tsx");
     const garage = source("src/features/member-profiles/rider-garage-view.tsx");
 
@@ -231,7 +168,7 @@ describe("member profile App Router and UI contracts", () => {
     expect(garage).not.toMatch(/email|verificationStatus|storageKey/i);
   });
 
-  test("eagerly loads the garage cover wherever its source appears", () => {
+  test("eagerly loads the public garage cover when requested", () => {
     const markup = renderToStaticMarkup(createElement(RiderGarageView, {
       profile: publicProfile,
       prioritizeMedia: true,
@@ -247,83 +184,66 @@ describe("member profile App Router and UI contracts", () => {
       { src: "/media/bike-1", loading: "eager" },
       { src: "/media/bike-2", loading: "lazy" },
     ]);
-    expect(source("src/features/member-profiles/profile-settings.tsx"))
-      .toContain("<RiderGarageView profile={previewProfile} prioritizeMedia />");
   });
 
-  test("offers edit and exact public-preview modes without unmounting editor state", () => {
+  test("keeps profile editing and profile viewing as separate routes", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 
-    expect(settings).toContain('"edit" | "preview"');
-    expect(settings).toContain("Edit profile");
-    expect(settings).toContain("Preview profile");
-    expect(settings).toContain("Preview — only you can see this");
-    expect(settings).toContain("<RiderGarageView");
-    expect(settings).toContain("toProfilePreviewView(");
-    expect(settings).toContain('hidden={studioMode !== "edit"}');
-    expect(settings).toContain('hidden={studioMode !== "preview"}');
-    expect(settings).not.toContain("ProfileStudioPreview");
-    expect(settings).not.toContain("studioPreviewColumn");
+    expect(settings).toContain("Your rider profile");
+    expect(settings).toContain(
+      "Add the details riders see when they open your profile.",
+    );
+    expect(settings).toContain("getProfileEditorPresentation");
+    expect(settings).toContain("presentation.viewAction.href");
+    expect(settings).not.toContain("StudioMode");
+    expect(settings).not.toContain("studioMode");
+    expect(settings).not.toContain("<RiderGarageView");
+    expect(settings).not.toContain("toProfilePreviewView");
+    expect(settings).not.toContain("Edit profile");
+    expect(settings).not.toContain("View your rider page");
   });
 
-  test("styles the full visitor garage preview instead of a compact sidebar card", () => {
+  test("visibly marks every publish requirement and optional profile field", () => {
+    const settings = source("src/features/member-profiles/profile-settings.tsx");
+
+    for (const label of [
+      "Display name *",
+      "Area / city *",
+      "Make *",
+      "Model *",
+    ]) {
+      expect(settings).toContain(label);
+    }
+    for (const label of [
+      "Garage note (optional)",
+      "Profile photo (optional)",
+      "Year (optional)",
+      "Displacement (cc) (optional)",
+      "Nickname (optional)",
+      "Motorcycle note (optional)",
+    ]) {
+      expect(settings).toContain(label);
+    }
+    expect(settings).toContain("* Required to publish");
+    expect(settings).toContain("<MotorcyclePhotoWorkspace");
+    expect(settings).toContain('required value={profileDraft.displayName}');
+    expect(settings).toContain('required value={profileDraft.area}');
+    expect(settings).toContain('name="make" required');
+    expect(settings).toContain('name="model" required');
+  });
+
+  test("uses a compact, responsive profile editor header", () => {
     const styles = source(
       "src/features/member-profiles/profile-studio.module.css",
     );
 
-    expect(styles).toContain(".studioModeSwitch");
-    expect(styles).toContain(".studioPreviewMode");
-    expect(styles).toContain(".studioPreviewNotice");
-    expect(styles).toMatch(
-      /\.studioPreviewMode\s+:global\(\.garage-profile-page\)[\s\S]*?min-height:\s*auto;/,
-    );
-    expect(styles).not.toContain(".studioPreviewColumn");
-    expect(styles).not.toContain(".studioPreviewHero");
-  });
-
-  test("keeps both profile workspace mode labels readable", () => {
-    const styles = source(
-      "src/features/member-profiles/profile-studio.module.css",
-    );
-
-    expect(styles).toMatch(
-      /\.studioModeSwitch\s+:global\(\[data-slot="button"\]\[aria-pressed="true"\]\)[\s\S]*?background:\s*var\(--studio-amber\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
-    );
-    expect(styles).toMatch(
-      /\.studioModeSwitch\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]\[aria-pressed="false"\]\)[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*var\(--studio-paper\);/,
-    );
-  });
-
-  test("explains the next rider-facing profile action", () => {
-    const settings = source("src/features/member-profiles/profile-settings.tsx");
-
-    expect(settings).toContain("Show riders what you ride");
-    expect(settings).toContain("Ready for your next meetup");
-    expect(settings).toContain("Your rider card is live");
-    expect(settings).toContain("Identity");
-    expect(settings).toContain("Motorcycle");
-    expect(settings).toContain("Photo");
-    expect(settings).not.toContain("4 of 4 ready");
-    expect(settings).not.toContain("Not published");
-    expect(settings).not.toContain("Profile readiness");
-  });
-
-  test("composes the profile editor as a professional Garage Studio", () => {
-    const settings = source("src/features/member-profiles/profile-settings.tsx");
-    const styles = source(
-      "src/features/member-profiles/profile-studio.module.css",
-    );
-    expect(settings).toContain("Garage Studio");
-    expect(settings).toContain("MotorcyclePhotoWorkspace");
-    expect(settings).toContain("styles.studioEditor");
-    expect(settings).toContain("Rider card status");
-    expect(settings).toContain("riderSignals");
-    expect(settings).toContain("styles.mediaStatus");
     expect(styles).toContain(".studio");
+    expect(styles).toContain(".studioHeaderActions");
+    expect(styles).toContain(".studioState");
     expect(styles).toContain(".studioStatus");
-    expect(styles).toContain(".studioStatusSignals");
-    expect(styles).toMatch(/@media\s*\(max-width:\s*640px\)[\s\S]*?\.studioStatus\s*\{/);
-    expect(styles).not.toContain(".readiness");
+    expect(styles).toContain(".requiredLegend");
+    expect(styles).not.toContain(".studioModeSwitch");
+    expect(styles).not.toContain(".studioPreviewMode");
     expect(styles).toContain(".motorcyclePhotoCardCover");
     expect(styles).toMatch(
       /:global\(\.ambient-main\):has\(\.studio\)\s*\{[\s\S]*?overflow:\s*visible;/,
@@ -334,7 +254,9 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toMatch(
       /\.studio\s+\.mediaStatus\s*\{[\s\S]*?color:\s*var\(--studio-paper\);/,
     );
-    expect(styles).toMatch(/@media\s*\(max-width:\s*900px\)/);
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*900px\)[\s\S]*?\.studioHeaderActions\s*\{[\s\S]*?justify-content:\s*flex-start;/,
+    );
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
 

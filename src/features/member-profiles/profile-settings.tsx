@@ -33,8 +33,7 @@ import type {
 import { MemberMediaUploader } from "./member-media-uploader";
 import { MemberMediaImage } from "./member-media-image";
 import { MotorcyclePhotoWorkspace } from "./motorcycle-photo-workspace";
-import { RiderGarageView } from "./rider-garage-view";
-import { toProfilePreviewView } from "./profile-preview-adapter";
+import { getProfileEditorPresentation } from "./profile-editor-presentation";
 import styles from "./profile-studio.module.css";
 
 function actionErrorMessage(error: unknown) {
@@ -84,8 +83,6 @@ interface EditorRefreshState {
   motorcycleDraft: UpsertMotorcycleInput;
   motorcycleDirty: boolean;
 }
-
-type StudioMode = "edit" | "preview";
 
 function profileDraftFromEditor(editor: MemberProfileEditorView): ProfileDraft {
   return {
@@ -215,13 +212,16 @@ function LoadedProfileSettings({
   const [profilePending, setProfilePending] = useState(false);
   const [motorcyclePending, setMotorcyclePending] = useState(false);
   const [mediaPending, setMediaPending] = useState(false);
-  const [studioMode, setStudioMode] = useState<StudioMode>("edit");
   const photos = editor.motorcycle?.photos.toSorted((left, right) => left.position - right.position) ?? [];
-  const previewProfile = toProfilePreviewView(
-    editor,
-    profileDraft,
-    motorcycleDraft,
-  );
+  const presentation = getProfileEditorPresentation({
+    isPublished: editor.isPublished,
+    slug: editor.slug,
+    displayName: profileDraft.displayName,
+    area: profileDraft.area,
+    make: motorcycleDraft.make,
+    model: motorcycleDraft.model,
+    photoCount: photos.length,
+  });
 
   const refreshEditor = async () => {
     const refreshed = await getMemberProfileEditor();
@@ -344,47 +344,6 @@ function LoadedProfileSettings({
   const publishLabel = !editor.isPublished && profileDraft.visibility !== "PRIVATE"
     ? "Publish profile"
     : "Save profile changes";
-  const readinessItems = [
-    {
-      label: "Identity",
-      ready: Boolean(profileDraft.displayName.trim() && profileDraft.area.trim()),
-    },
-    { label: "Avatar", ready: Boolean(editor.profilePhotoUrl) },
-    {
-      label: "Motorcycle",
-      ready: Boolean(motorcycleDraft.make.trim() && motorcycleDraft.model.trim()),
-    },
-    { label: "Photos", ready: photos.length > 0 },
-  ];
-  const riderSignals = [
-    readinessItems[0],
-    readinessItems[2],
-    { label: "Photo", ready: photos.length > 0 },
-  ];
-  const firstMissingSignal = riderSignals.find((item) => !item.ready);
-  const profileStatus = editor.isPublished
-    ? {
-        title: "Your rider card is live",
-        description: "Other riders can now find your bike and recognize you at a meetup.",
-        action: "view" as const,
-      }
-    : riderSignals.every((item) => item.ready)
-      ? {
-          title: "Ready for your next meetup",
-          description: "Your rider card is complete. Publish it when you want other riders to see it.",
-          action: "publish" as const,
-        }
-      : {
-          title: "Show riders what you ride",
-          description: "Your name, home base, bike, and one photo help riders recognize you at the next meetup.",
-          action: "next" as const,
-        };
-
-  const nextStep = firstMissingSignal?.label === "Identity"
-    ? { label: "Add your identity", href: "#profile-identity" }
-    : firstMissingSignal?.label === "Motorcycle"
-      ? { label: "Add your motorcycle", href: "#profile-motorcycle" }
-      : { label: "Add a bike photo", href: "#motorcycle-photos" };
 
   const submitProfileForm = () => {
     const form = document.getElementById("profile-settings-form");
@@ -397,63 +356,49 @@ function LoadedProfileSettings({
       aria-labelledby="profile-settings-title"
     >
       <header className={styles.studioHeader}>
-        <div>
+        <div className={styles.studioHeading}>
           <span>Rider profile</span>
-          <h1 id="profile-settings-title">Garage Studio</h1>
-          <p>Build the rider card people see before the next meetup.</p>
+          <h1 id="profile-settings-title">Your rider profile</h1>
+          <p>Add the details riders see when they open your profile.</p>
         </div>
-        <div className={styles.studioModeSwitch} role="group" aria-label="Profile workspace mode">
-          <Button
-            type="button"
-            variant={studioMode === "edit" ? "default" : "outline"}
-            aria-pressed={studioMode === "edit"}
-            onClick={() => setStudioMode("edit")}
-          >
-            Edit profile
-          </Button>
-          <Button
-            type="button"
-            variant={studioMode === "preview" ? "default" : "outline"}
-            aria-pressed={studioMode === "preview"}
-            onClick={() => setStudioMode("preview")}
-          >
-            Preview profile
+        <div className={styles.studioHeaderActions}>
+          <span className={styles.studioState} data-state={presentation.state}>
+            {presentation.label}
+          </span>
+          <Button asChild variant="outline">
+            <Link href={presentation.viewAction.href}>
+              {presentation.viewAction.label}
+            </Link>
           </Button>
         </div>
-        <div className={styles.studioStatus} aria-label="Rider card status">
-          <div className={styles.studioStatusCopy}>
-            <span className={styles.studioStatusEyebrow}>Rider card</span>
-            <h2>{profileStatus.title}</h2>
-            <p>{profileStatus.description}</p>
-          </div>
-          <div className={styles.studioStatusActions}>
-            {profileStatus.action === "view" && editor.slug ? (
-              <Button asChild>
-                <Link href={`/riders/${editor.slug}`}>View your rider page</Link>
-              </Button>
-            ) : profileStatus.action === "publish" ? (
-              <Button type="button" onClick={submitProfileForm}>{publishLabel}</Button>
-            ) : (
-              <Button asChild variant="outline">
-                <a href={nextStep.href}>{nextStep.label}</a>
-              </Button>
-            )}
-          </div>
-          <ul className={styles.studioStatusSignals} aria-label="Rider card details">
-            {riderSignals.map((item) => (
-              <li key={item.label} data-ready={item.ready}>
-                <span aria-hidden="true">{item.ready ? "✓" : "○"}</span>
-                {item.label}
-              </li>
-            ))}
-          </ul>
+        <div className={styles.studioStatus}>
+          <p>{presentation.description}</p>
+          {presentation.state === "ready" ? (
+            <Button type="button" onClick={submitProfileForm}>
+              Publish profile
+            </Button>
+          ) : presentation.state === "incomplete" && presentation.firstMissing ? (
+            <Button asChild variant="outline">
+              <a href={presentation.firstMissing.href}>
+                Add {presentation.firstMissing.label.toLowerCase()}
+              </a>
+            </Button>
+          ) : null}
+          {presentation.signals.length ? (
+            <ul aria-label="Profile requirements">
+              {presentation.signals.map((signal) => (
+                <li key={signal.label} data-ready={signal.ready}>
+                  <span aria-hidden="true">{signal.ready ? "✓" : "○"}</span>
+                  {signal.label}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       </header>
+      <p className={styles.requiredLegend}>* Required to publish</p>
 
-      <div
-        hidden={studioMode !== "edit"}
-        className={styles.studioEditor}
-      >
+      <div className={styles.studioEditor}>
        <form id="profile-settings-form" action={handleProfileSave} className="profile-settings__grid">
         <ProfileSaveFieldset pending={profilePending}>
          <Card id="profile-identity" className="profile-settings__section">
@@ -463,15 +408,15 @@ function LoadedProfileSettings({
           </CardHeader>
           <CardContent className="profile-fields">
             <div className="profile-field">
-              <Label htmlFor="profile-display-name">Display name</Label>
+              <Label htmlFor="profile-display-name">Display name *</Label>
               <Input id="profile-display-name" name="displayName" required value={profileDraft.displayName} maxLength={80} onChange={(event) => updateProfileDraft({ displayName: event.currentTarget.value })} />
             </div>
             <div className="profile-field">
-              <Label htmlFor="profile-area">Area / city</Label>
+              <Label htmlFor="profile-area">Area / city *</Label>
               <Input id="profile-area" name="area" required value={profileDraft.area} maxLength={80} onChange={(event) => updateProfileDraft({ area: event.currentTarget.value })} />
             </div>
             <div className="profile-field profile-field--wide">
-              <Label htmlFor="profile-bio">Garage note</Label>
+              <Label htmlFor="profile-bio">Garage note (optional)</Label>
               <textarea id="profile-bio" name="bio" value={profileDraft.bio} maxLength={500} rows={5} onChange={(event) => updateProfileDraft({ bio: event.currentTarget.value })} />
               <span>Up to 500 characters. Contact details do not belong here.</span>
             </div>
@@ -530,7 +475,7 @@ function LoadedProfileSettings({
 
        <Card id="profile-avatar" className="profile-settings__section profile-settings__media-section">
         <CardHeader>
-          <CardTitle><Camera aria-hidden="true" /> Avatar</CardTitle>
+          <CardTitle><Camera aria-hidden="true" /> Profile photo (optional)</CardTitle>
           <CardDescription>The identity plate crops this image to a centered square.</CardDescription>
         </CardHeader>
         <CardContent className="profile-avatar-editor">
@@ -563,12 +508,12 @@ function LoadedProfileSettings({
             <CardDescription>Tambike shows one motorcycle as the centerpiece of your garage card.</CardDescription>
           </CardHeader>
           <CardContent className="profile-fields">
-            <div className="profile-field"><Label htmlFor="motorcycle-make">Make</Label><Input id="motorcycle-make" name="make" required value={motorcycleDraft.make} onChange={(event) => updateMotorcycleDraft({ make: event.currentTarget.value })} placeholder="Honda" /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-model">Model</Label><Input id="motorcycle-model" name="model" required value={motorcycleDraft.model} onChange={(event) => updateMotorcycleDraft({ model: event.currentTarget.value })} placeholder="CB650R" /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-year">Year</Label><Input id="motorcycle-year" name="year" type="number" min={1885} max={2100} value={motorcycleDraft.year ?? ""} onChange={(event) => updateMotorcycleDraft({ year: optionalNumber(event.currentTarget.value) })} /></div>
-            <div className="profile-field"><Label htmlFor="motorcycle-displacement">Displacement (cc)</Label><Input id="motorcycle-displacement" name="displacementCc" type="number" min={1} max={10000} value={motorcycleDraft.displacementCc ?? ""} onChange={(event) => updateMotorcycleDraft({ displacementCc: optionalNumber(event.currentTarget.value) })} /></div>
-            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-nickname">Nickname</Label><Input id="motorcycle-nickname" name="nickname" value={motorcycleDraft.nickname ?? ""} onChange={(event) => updateMotorcycleDraft({ nickname: event.currentTarget.value })} placeholder="Ember" /></div>
-            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-description">Motorcycle note</Label><textarea id="motorcycle-description" name="description" value={motorcycleDraft.description ?? ""} onChange={(event) => updateMotorcycleDraft({ description: event.currentTarget.value })} maxLength={500} rows={4} /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-make">Make *</Label><Input id="motorcycle-make" name="make" required value={motorcycleDraft.make} onChange={(event) => updateMotorcycleDraft({ make: event.currentTarget.value })} placeholder="Honda" /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-model">Model *</Label><Input id="motorcycle-model" name="model" required value={motorcycleDraft.model} onChange={(event) => updateMotorcycleDraft({ model: event.currentTarget.value })} placeholder="CB650R" /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-year">Year (optional)</Label><Input id="motorcycle-year" name="year" type="number" min={1885} max={2100} value={motorcycleDraft.year ?? ""} onChange={(event) => updateMotorcycleDraft({ year: optionalNumber(event.currentTarget.value) })} /></div>
+            <div className="profile-field"><Label htmlFor="motorcycle-displacement">Displacement (cc) (optional)</Label><Input id="motorcycle-displacement" name="displacementCc" type="number" min={1} max={10000} value={motorcycleDraft.displacementCc ?? ""} onChange={(event) => updateMotorcycleDraft({ displacementCc: optionalNumber(event.currentTarget.value) })} /></div>
+            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-nickname">Nickname (optional)</Label><Input id="motorcycle-nickname" name="nickname" value={motorcycleDraft.nickname ?? ""} onChange={(event) => updateMotorcycleDraft({ nickname: event.currentTarget.value })} placeholder="Ember" /></div>
+            <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-description">Motorcycle note (optional)</Label><textarea id="motorcycle-description" name="description" value={motorcycleDraft.description ?? ""} onChange={(event) => updateMotorcycleDraft({ description: event.currentTarget.value })} maxLength={500} rows={4} /></div>
             <div className="profile-settings__save profile-field--wide">
               <Button type="submit" disabled={motorcyclePending}>
                 {motorcyclePending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
@@ -599,20 +544,6 @@ function LoadedProfileSettings({
         {mediaStatus}
       </p>
       </div>
-      <section
-        hidden={studioMode !== "preview"}
-        className={styles.studioPreviewMode}
-        aria-label="Profile preview"
-      >
-        <div className={styles.studioPreviewNotice} role="status">
-          Preview — only you can see this
-        </div>
-        <div className="garage-profile-page">
-          <div className="garage-profile-shell">
-            <RiderGarageView profile={previewProfile} prioritizeMedia />
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
