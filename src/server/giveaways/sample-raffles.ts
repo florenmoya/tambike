@@ -32,7 +32,7 @@ export const SAMPLE_RAFFLE_EVENT_ID = "tambike-cafe-classico";
 export const COMPLETED_SAMPLE_RAFFLE_TITLE = "Cafe Classico Helmet Raffle";
 export const ONGOING_SAMPLE_RAFFLE_TITLE = "Weekend Rider Gear Raffle";
 export const SAMPLE_RAFFLE_WINNER_EMAIL = "raffle.winner.sample@tambike.ph";
-export const SAMPLE_RAFFLE_WINNER_NAME = "Raffle Winner — Sample Rider";
+export const SAMPLE_RAFFLE_WINNER_NAME = "Raffle Winner";
 export const SAMPLE_RAFFLE_WINNER_ALIAS = "Cafe Classico Rider";
 
 export interface SampleRaffleManifest {

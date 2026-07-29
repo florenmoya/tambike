@@ -20,7 +20,7 @@ import type { MemberImageMimeType } from "@/server/member-media/types";
 
 const SAMPLE_RIDER_EMAIL = "mika.sample@tambike.ph";
 const SAMPLE_RIDER_EVENT_ID = "tambike-cafe-classico";
-const SAMPLE_RIDER_NAME = "Mika Santos — Sample Rider";
+const SAMPLE_RIDER_NAME = "Mika Santos";
 const SAMPLE_RIDER_AREA = "Davao City";
 const SAMPLE_RIDER_LOCK_KEY = "tambike:production-sample-rider";
 

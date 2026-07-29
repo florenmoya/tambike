@@ -108,7 +108,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         completedTitle: COMPLETED_SAMPLE_RAFFLE_TITLE,
         ongoingTitle: ONGOING_SAMPLE_RAFFLE_TITLE,
         winnerEmail: `integration-sample-raffle-winner-${suffix}@example.test`,
-        winnerName: "Raffle Winner — Sample Rider",
+        winnerName: "Raffle Winner",
         winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
       };
       const provisionOnce = async () => {

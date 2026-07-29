@@ -6,6 +6,7 @@ import {
   COMPLETED_SAMPLE_RAFFLE_TITLE,
   SAMPLE_RAFFLE_EVENT_ID,
   SAMPLE_RAFFLE_WINNER_ALIAS,
+  SAMPLE_RAFFLE_WINNER_NAME,
   completedSampleRaffleInput,
   createDedicatedSampleRaffleLock,
   expectedSampleRafflePresentationComplianceStatus,
@@ -434,6 +435,15 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 }
 
 describe("sample raffle provisioner safety", () => {
+  test("uses clean public identity labels for the seeded winner", () => {
+    expect(SAMPLE_RAFFLE_WINNER_NAME).toBe("Raffle Winner");
+    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Cafe Classico Rider");
+    expect(productionSampleRaffleManifest).toMatchObject({
+      winnerName: "Raffle Winner",
+      winnerAlias: "Cafe Classico Rider",
+    });
+  });
+
   test.each([
     ["draft", "draft"],
     ["open", "approved"],

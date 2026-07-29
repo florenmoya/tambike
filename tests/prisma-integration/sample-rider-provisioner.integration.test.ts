@@ -184,7 +184,7 @@ describe("guarded Prisma sample rider provisioner", () => {
 
       expect(second).toEqual(first);
       expect(secondUser).toMatchObject({
-        displayName: "Mika Santos — Sample Rider",
+        displayName: "Mika Santos",
         role: "rider",
         profileVisibility: "PUBLIC",
         defaultRosterIdentity: "VISIBLE",

@@ -247,7 +247,7 @@ describe("sample rider provisioner domain flow", () => {
 
     expect(state.user).toMatchObject({
       role: "rider",
-      displayName: "Mika Santos — Sample Rider",
+      displayName: "Mika Santos",
       area: "Davao City",
       visibility: "PUBLIC",
       defaultRosterIdentity: "VISIBLE",
@@ -303,7 +303,7 @@ describe("sample rider provisioner domain flow", () => {
       motorcyclePhotos: 4,
       rsvps: 1,
       passes: 1,
-      account: { displayName: "Mika Santos — Sample Rider", area: "Davao City", role: "rider", passwordMatches: true },
+      account: { displayName: "Mika Santos", area: "Davao City", role: "rider", passwordMatches: true },
       profile: {
         bio: "Weekend city rider, coffee-stop regular, and caretaker of a classic inline-four.",
         visibility: "PUBLIC",
