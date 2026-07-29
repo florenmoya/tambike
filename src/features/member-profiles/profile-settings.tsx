@@ -227,6 +227,44 @@ export function ProfileViewAction({
   );
 }
 
+export function ProfileDetailsSaveFooter({
+  pending,
+  status,
+}: {
+  pending: boolean;
+  status: string;
+}) {
+  return (
+    <section
+      className={styles.profileDetailsSaveFooter}
+      aria-label="Save profile details"
+    >
+      <div className={styles.profileDetailsSaveCopy}>
+        <strong>Profile details</strong>
+        <span>Saves identity, visibility, and attendance privacy.</span>
+      </div>
+      <div className={styles.profileDetailsSaveActions}>
+        <Button
+          type="submit"
+          size="lg"
+          disabled={pending}
+          className={styles.profileDetailsSaveButton}
+        >
+          {pending ? (
+            <LoaderCircle className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Save aria-hidden="true" />
+          )}
+          {pending ? "Saving…" : "Save profile details"}
+        </Button>
+        <p className={styles.profileDetailsSaveStatus} aria-live="polite">
+          {status}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export function ProfileSaveFieldset({
   pending,
   children,
@@ -438,10 +476,6 @@ function LoadedProfileSettings({
     }
   };
 
-  const publishLabel = !editor.isPublished && profileDraft.visibility !== "PRIVATE"
-    ? "Publish profile"
-    : "Save profile changes";
-
   const submitProfileForm = () => {
     const form = document.getElementById("profile-settings-form");
     if (form instanceof HTMLFormElement) form.requestSubmit();
@@ -560,13 +594,10 @@ function LoadedProfileSettings({
           </CardContent>
         </Card>
 
-        <div className="profile-settings__save profile-field--wide">
-          <Button type="submit" size="lg" disabled={profilePending}>
-            {profilePending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
-            {profilePending ? "Saving…" : publishLabel}
-          </Button>
-           <p aria-live="polite">{profileSaveStatus}</p>
-        </div>
+        <ProfileDetailsSaveFooter
+          pending={profilePending}
+          status={profileSaveStatus}
+        />
         </ProfileSaveFieldset>
       </form>
 

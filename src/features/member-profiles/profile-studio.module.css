@@ -242,6 +242,55 @@
   font-size: 0.8125rem;
 }
 
+.profileDetailsSaveFooter {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem 1.5rem;
+  min-width: 0;
+  padding: clamp(1rem, 2vw, 1.25rem);
+  border: 1px solid color-mix(in srgb, var(--studio-amber) 42%, transparent);
+  border-radius: 0.75rem;
+  background: var(--studio-paper);
+  color: var(--studio-asphalt);
+}
+
+.profileDetailsSaveCopy,
+.profileDetailsSaveActions {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.profileDetailsSaveCopy strong {
+  font-size: 1rem;
+}
+
+.profileDetailsSaveCopy span,
+.profileDetailsSaveStatus {
+  color: color-mix(in srgb, var(--studio-asphalt) 72%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.profileDetailsSaveButton {
+  background: var(--studio-amber);
+  color: var(--studio-asphalt);
+}
+
+.profileDetailsSaveButton:hover {
+  background: color-mix(in srgb, var(--studio-amber) 84%, white);
+  color: var(--studio-asphalt);
+}
+
+.profileDetailsSaveStatus {
+  min-height: 1.2rem;
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+}
+
 .motorcyclePhotoWorkspace {
   display: grid;
   gap: 1rem;
@@ -327,6 +376,11 @@
 .motorcyclePhotoActions :focus-visible,
 .motorcyclePhotoQueueItem :focus-visible {
   outline: 3px solid var(--studio-amber);
+  outline-offset: 3px;
+}
+
+.studio .profileDetailsSaveButton:focus-visible {
+  outline: 3px solid var(--studio-asphalt);
   outline-offset: 3px;
 }
 
@@ -486,6 +540,18 @@
 
   .studioStatus > :global([data-slot="button"]) {
     width: 100%;
+  }
+
+  .profileDetailsSaveFooter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profileDetailsSaveButton {
+    width: 100%;
+  }
+
+  .profileDetailsSaveStatus {
+    text-align: left;
   }
 
   .motorcyclePhotoQueueItem {

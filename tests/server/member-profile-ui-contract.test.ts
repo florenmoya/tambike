@@ -97,6 +97,16 @@ async function loadProfileViewAction() {
   }).ProfileViewAction;
 }
 
+async function loadProfileDetailsSaveFooter() {
+  const settings = await import("../../src/features/member-profiles/profile-settings");
+  return (settings as unknown as {
+    ProfileDetailsSaveFooter?: (props: {
+      pending: boolean;
+      status: string;
+    }) => ReactNode;
+  }).ProfileDetailsSaveFooter;
+}
+
 const completeProfileInput: ProfileEditorPresentationInput = {
   isPublished: false,
   slug: "mika-santos",
@@ -465,7 +475,60 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toMatch(
       /\.studioHeaderActions\s+:global\(\[data-slot="button"\]\[data-variant="outline"\]:focus-visible\)\s*\{[\s\S]*?outline:/,
     );
+    expect(styles).toMatch(
+      /\.profileDetailsSaveFooter\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1;[\s\S]*?background:\s*var\(--studio-paper\);/,
+    );
+    expect(styles).toMatch(
+      /\.profileDetailsSaveButton[\s\S]*?background:\s*var\(--studio-amber\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
+    );
+    expect(styles).toMatch(
+      /\.studio\s+\.profileDetailsSaveButton:focus-visible\s*\{[\s\S]*?outline:\s*3px solid var\(--studio-asphalt\);/,
+    );
+    const genericButtonFocusRule = styles.indexOf(
+      '.studio :global([data-slot="button"]):focus-visible',
+    );
+    const footerButtonFocusRule = styles.indexOf(
+      ".studio .profileDetailsSaveButton:focus-visible",
+    );
+    expect(genericButtonFocusRule).toBeGreaterThanOrEqual(0);
+    expect(footerButtonFocusRule).toBeGreaterThan(genericButtonFocusRule);
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*640px\)[\s\S]*?\.profileDetailsSaveFooter\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);[\s\S]*?\.profileDetailsSaveButton\s*\{[\s\S]*?width:\s*100%;/,
+    );
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
+  });
+
+  test("attaches a clear save action to profile details", async () => {
+    const ProfileDetailsSaveFooter = await loadProfileDetailsSaveFooter();
+    expect(ProfileDetailsSaveFooter).toBeTypeOf("function");
+
+    const markup = renderToStaticMarkup(ProfileDetailsSaveFooter!({
+      pending: false,
+      status: "Profile changes saved.",
+    }));
+
+    expect(markup).toContain('aria-label="Save profile details"');
+    expect(markup).toContain("Profile details");
+    expect(markup).toContain(
+      "Saves identity, visibility, and attendance privacy.",
+    );
+    expect(markup).toContain("Save profile details");
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain("Profile changes saved.");
+  });
+
+  test("shows a disabled saving state for profile details", async () => {
+    const ProfileDetailsSaveFooter = await loadProfileDetailsSaveFooter();
+    expect(ProfileDetailsSaveFooter).toBeTypeOf("function");
+
+    const markup = renderToStaticMarkup(ProfileDetailsSaveFooter!({
+      pending: true,
+      status: "",
+    }));
+
+    expect(markup).toMatch(/<button\b[^>]*disabled=""/);
+    expect(markup).toContain("Saving…");
+    expect(markup).not.toContain(">Save profile details</button>");
   });
 
   test("allows local photo selection before motorcycle persistence", () => {
