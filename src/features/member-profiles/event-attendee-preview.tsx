@@ -95,13 +95,13 @@ export function EventAttendeePreview({
         <p className={styles.state}>Rider profiles will appear here as they join.</p>
       ) : null}
 
-      <div className={styles.footer}>
-        {canOpenRoster ? (
+      {canOpenRoster ? (
+        <div className={styles.footer}>
           <Link className={styles.action} href={`/events/${eventId}/attendees`}>
             View all bikes
           </Link>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </section>
   );
 }

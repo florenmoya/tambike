@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import { EventAttendeePreview } from "../../src/features/member-profiles/event-attendee-preview";
+import styles from "../../src/features/member-profiles/event-attendee-preview.module.css";
 import type { EventAttendeePreviewData } from "../../src/features/member-profiles/types";
 
 const memberPreview: EventAttendeePreviewData = {
@@ -92,6 +93,7 @@ describe("event attendee preview", () => {
 
     expect(markup).toContain("15 riders");
     expect(markup).not.toContain("View all bikes");
+    expect(markup).not.toContain(styles.footer);
     expect(markup).not.toMatch(/organizer|privacy|disabled/i);
   });
 

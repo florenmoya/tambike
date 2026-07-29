@@ -6,7 +6,6 @@
   gap: 0.85rem;
   margin-top: 1rem;
   padding-top: 1rem;
-  overflow: hidden;
   border-top: 1px solid #303237;
 }
 
@@ -82,6 +81,30 @@
 @media (hover: hover) {
   .bikeTile:hover img {
     transform: scale(1.035);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.event-detail-actions .primary-action),
+  :global(.event-detail-actions .ghost-action) {
+    transition: none;
+  }
+
+  :global(.event-detail-actions .primary-action:hover),
+  :global(.event-detail-actions .primary-action:focus-visible),
+  :global(.event-detail-actions .primary-action:active),
+  :global(.event-detail-actions .ghost-action:hover),
+  :global(.event-detail-actions .ghost-action:focus-visible),
+  :global(.event-detail-actions .ghost-action:active) {
+    transform: none;
+  }
+
+  .bikeTile img {
+    transition: none;
+  }
+
+  .bikeTile:hover img {
+    transform: none;
   }
 }
 

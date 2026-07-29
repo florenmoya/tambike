@@ -179,6 +179,7 @@ describe("event detail decision-first UI contract", () => {
       'grid-template-areas: "heading bikes action"',
     );
     expect(preview).toContain("border-top:");
+    expect(preview).not.toContain("overflow: hidden");
     expect(preview).not.toContain("border-radius:");
     expect(preview).not.toContain("background:");
     expect(mobilePreview).toContain('"heading"');
@@ -264,5 +265,47 @@ describe("event detail decision-first UI contract", () => {
 
     expect(focusRule).toContain("outline: 2px solid");
     expect(focusRule).toContain("outline-offset: 2px");
+  });
+
+  test("removes event-detail and attendee-bike motion when reduced motion is requested", () => {
+    const attendeeReducedMotion = sourceIndex(
+      attendeePreviewCss,
+      "@media (prefers-reduced-motion: reduce)",
+    );
+    const actionMotion = cssRule(
+      [
+        ":global(.event-detail-actions .primary-action),",
+        ":global(.event-detail-actions .ghost-action)",
+      ].join("\n  "),
+      attendeeReducedMotion,
+      attendeePreviewCss,
+    );
+    const actionHoverMotion = cssRule(
+      [
+        ":global(.event-detail-actions .primary-action:hover),",
+        ":global(.event-detail-actions .primary-action:focus-visible),",
+        ":global(.event-detail-actions .primary-action:active),",
+        ":global(.event-detail-actions .ghost-action:hover),",
+        ":global(.event-detail-actions .ghost-action:focus-visible),",
+        ":global(.event-detail-actions .ghost-action:active)",
+      ].join("\n  "),
+      attendeeReducedMotion,
+      attendeePreviewCss,
+    );
+    const bikeImageMotion = cssRule(
+      ".bikeTile img",
+      attendeeReducedMotion,
+      attendeePreviewCss,
+    );
+    const bikeHoverMotion = cssRule(
+      ".bikeTile:hover img",
+      attendeeReducedMotion,
+      attendeePreviewCss,
+    );
+
+    expect(actionMotion).toContain("transition: none");
+    expect(actionHoverMotion).toContain("transform: none");
+    expect(bikeImageMotion).toContain("transition: none");
+    expect(bikeHoverMotion).toContain("transform: none");
   });
 });
