@@ -6,6 +6,10 @@
   border-radius: 0.5rem;
 }
 
+:global(.buy-view):has(.studio) {
+  overflow: visible;
+}
+
 .studio {
   --studio-asphalt: #17191c;
   --studio-paper: #f4f1ea;
@@ -120,6 +124,10 @@
   max-width: 100%;
   border-color: color-mix(in srgb, var(--studio-steel) 55%, transparent);
   background: var(--studio-paper);
+}
+
+.studio .mediaStatus {
+  color: var(--studio-paper);
 }
 
 .studioPreviewColumn {

@@ -106,8 +106,15 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toContain("styles.studioPreviewColumn");
     expect(settings).toContain("Profile readiness");
     expect(settings).toContain("readyItems.length");
+    expect(settings).toContain("styles.mediaStatus");
     expect(styles).toContain(".studio");
     expect(styles).toContain(".motorcyclePhotoCardCover");
+    expect(styles).toMatch(
+      /:global\(\.buy-view\):has\(\.studio\)\s*\{[\s\S]*?overflow:\s*visible;/,
+    );
+    expect(styles).toMatch(
+      /\.studio\s+\.mediaStatus\s*\{[\s\S]*?color:\s*var\(--studio-paper\);/,
+    );
     expect(styles).toMatch(/@media\s*\(max-width:\s*900px\)/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });

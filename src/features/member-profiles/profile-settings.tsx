@@ -517,7 +517,12 @@ function LoadedProfileSettings({
         onReorder={reorderPhoto}
         onDelete={removeMedia}
       />
-      <p className="profile-settings__media-status" aria-live="polite">{mediaStatus}</p>
+      <p
+        className={`profile-settings__media-status ${styles.mediaStatus}`}
+        aria-live="polite"
+      >
+        {mediaStatus}
+      </p>
       </div>
 
       <div className={styles.studioPreviewColumn}>
