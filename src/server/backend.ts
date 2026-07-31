@@ -1051,7 +1051,9 @@ export class TambikeBackend {
   }
 
   getSnapshot(sessionToken?: string) {
-    const currentUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
+    const currentUser =
+      sessionUser?.accountStatus === "ACTIVE" ? sessionUser : null;
     const currentPasses = currentUser
       ? Array.from(this.passes.values())
           .filter((pass) => pass.userId === currentUser.id)
@@ -1223,6 +1225,7 @@ export class TambikeBackend {
       area: input.area.trim(),
       bikeModel: input.bikeModel?.trim() || undefined,
       clubName: input.clubName?.trim() || undefined,
+      updatedAt: this.nextUserUpdatedAt(user),
     };
 
     this.users.set(updated.id, updated);
@@ -1286,6 +1289,7 @@ export class TambikeBackend {
       profileBio: parsed.bio,
       profileVisibility: parsed.visibility,
       defaultRosterIdentity: parsed.defaultRosterIdentity,
+      updatedAt: this.nextUserUpdatedAt(user),
     };
     this.users.set(updated.id, updated);
     this.audit("PROFILE_UPDATED", user.id, user.id);

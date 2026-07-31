@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { createTambikeTestBackend } from "../../src/server/testing";
-import { createTestActors } from "./support/tambike-fixtures";
+import {
+  createPublishedTestEvent,
+  createTestActors,
+  registerTestPass,
+} from "./support/tambike-fixtures";
 
 describe("account access domain", () => {
   test("lists safe account details in a stable order for admins only", async () => {
@@ -31,6 +35,52 @@ describe("account access domain", () => {
     });
     expect(JSON.stringify(accounts)).not.toContain("passwordHash");
     expect(JSON.stringify(accounts)).not.toContain("suspendedByUserId");
+  });
+
+  test("treats a retained suspended-user session as anonymous in snapshots", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "account-snapshot-guard");
+    const event = await createPublishedTestEvent(backend, actors, {
+      title: "Suspended Snapshot Guard",
+    });
+    await registerTestPass(backend, actors.rider, event.id);
+    const before = (
+      await backend.listAdminUserAccounts(actors.admin.sessionToken)
+    ).find((user) => user.id === actors.rider.user.id)!;
+
+    await backend.suspendUser(
+      actors.admin.sessionToken,
+      actors.rider.user.id,
+      {
+        reason: "Retain a session only to exercise the snapshot guard.",
+        expectedUpdatedAt: before.updatedAt,
+      },
+    );
+
+    const retainedAt = new Date();
+    const internal = backend as unknown as {
+      sessions: Map<
+        string,
+        {
+          token: string;
+          userId: string;
+          createdAt: Date;
+          expiresAt: Date;
+        }
+      >;
+    };
+    internal.sessions.set(actors.rider.sessionToken, {
+      token: actors.rider.sessionToken,
+      userId: actors.rider.user.id,
+      createdAt: retainedAt,
+      expiresAt: new Date(retainedAt.getTime() + 60_000),
+    });
+
+    expect(backend.getSnapshot(actors.rider.sessionToken)).toMatchObject({
+      currentUser: null,
+      passes: [],
+      passCreated: false,
+    });
   });
 
   test("suspends an account, revokes every session, and preserves verification", async () => {
@@ -196,5 +246,61 @@ describe("account access domain", () => {
         expectedUpdatedAt: suspended.updatedAt,
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  test("basic profile edits advance updatedAt and invalidate the prior account token", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "basic-profile-token");
+    const before = (
+      await backend.listAdminUserAccounts(actors.admin.sessionToken)
+    ).find((user) => user.id === actors.rider.user.id)!;
+
+    await backend.updateProfile(actors.rider.sessionToken, {
+      displayName: "Updated Basic Profile",
+      area: "Pasig City",
+      bikeModel: "Yamaha NMAX",
+    });
+    const after = (
+      await backend.listAdminUserAccounts(actors.admin.sessionToken)
+    ).find((user) => user.id === actors.rider.user.id)!;
+
+    expect(Date.parse(after.updatedAt)).toBeGreaterThan(
+      Date.parse(before.updatedAt),
+    );
+    await expect(
+      backend.suspendUser(actors.admin.sessionToken, actors.rider.user.id, {
+        reason: "The pre-profile-edit token must be rejected.",
+        expectedUpdatedAt: before.updatedAt,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  test("member profile edits advance updatedAt and invalidate the prior account token", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "member-profile-token");
+    const before = (
+      await backend.listAdminUserAccounts(actors.admin.sessionToken)
+    ).find((user) => user.id === actors.rider.user.id)!;
+
+    await backend.updateMemberProfile(actors.rider.sessionToken, {
+      displayName: "Updated Member Profile",
+      area: "Mandaluyong City",
+      bio: "A profile edit that participates in account concurrency.",
+      visibility: "PUBLIC",
+      defaultRosterIdentity: "VISIBLE",
+    });
+    const after = (
+      await backend.listAdminUserAccounts(actors.admin.sessionToken)
+    ).find((user) => user.id === actors.rider.user.id)!;
+
+    expect(Date.parse(after.updatedAt)).toBeGreaterThan(
+      Date.parse(before.updatedAt),
+    );
+    await expect(
+      backend.suspendUser(actors.admin.sessionToken, actors.rider.user.id, {
+        reason: "The pre-member-edit token must be rejected.",
+        expectedUpdatedAt: before.updatedAt,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });
