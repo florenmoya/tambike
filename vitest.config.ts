@@ -8,6 +8,9 @@ export default defineConfig({
     },
   },
   test: {
+    env: {
+      TAMBIKE_BACKEND: "memory",
+    },
     exclude: [
       ...configDefaults.exclude,
       ".codex/worktrees/**",

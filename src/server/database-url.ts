@@ -1,4 +1,5 @@
 type DatabaseEnv = {
+  NODE_ENV?: string | undefined;
   DATABASE_URL?: string | undefined;
   DIRECT_URL?: string | undefined;
   SUPABASE_DATABASE_URL?: string | undefined;
@@ -10,6 +11,31 @@ type DatabaseEnv = {
 function readEnv(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+export function resolveRuntimeBackend(env: DatabaseEnv = process.env):
+  | { kind: "memory" }
+  | { kind: "prisma"; databaseUrl: string } {
+  const forcedMemory = readEnv(env.TAMBIKE_BACKEND)?.toLowerCase() === "memory";
+  const production = readEnv(env.NODE_ENV)?.toLowerCase() === "production";
+
+  if (forcedMemory) {
+    if (production) {
+      throw new Error("TAMBIKE_BACKEND=memory is not allowed in production");
+    }
+    return { kind: "memory" };
+  }
+
+  const databaseUrl =
+    readEnv(env.DATABASE_URL) ?? readEnv(env.SUPABASE_DATABASE_URL);
+  if (databaseUrl) {
+    return { kind: "prisma", databaseUrl };
+  }
+  throw new Error(
+    production
+      ? "Tambike production requires DATABASE_URL or SUPABASE_DATABASE_URL"
+      : "Configure a database or explicitly set TAMBIKE_BACKEND=memory for local/test use",
+  );
 }
 
 export function getRuntimeDatabaseUrl(env: DatabaseEnv = process.env) {

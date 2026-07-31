@@ -3,6 +3,7 @@ import {
   getMigrationDatabaseUrl,
   getRuntimeDatabaseUrl,
   requireMigrationDatabaseUrl,
+  resolveRuntimeBackend,
 } from "../../src/server/database-url";
 
 describe("Supabase database URL resolution", () => {
@@ -39,5 +40,45 @@ describe("Supabase database URL resolution", () => {
 
   test("requires a Supabase database URL before seed or migration work", () => {
     expect(() => requireMigrationDatabaseUrl({})).toThrow(/DIRECT_URL|DATABASE_URL/);
+  });
+
+  test("fails closed when production has no database URL", () => {
+    expect(() => resolveRuntimeBackend({ NODE_ENV: "production" })).toThrow(
+      "Tambike production requires DATABASE_URL or SUPABASE_DATABASE_URL",
+    );
+  });
+
+  test("rejects forced memory mode in production", () => {
+    expect(() =>
+      resolveRuntimeBackend({
+        NODE_ENV: "production",
+        TAMBIKE_BACKEND: "memory",
+        DATABASE_URL: "postgresql://runtime.example/tambike",
+      }),
+    ).toThrow("TAMBIKE_BACKEND=memory is not allowed in production");
+  });
+
+  test("allows explicit memory mode outside production", () => {
+    expect(
+      resolveRuntimeBackend({ NODE_ENV: "test", TAMBIKE_BACKEND: "memory" }),
+    ).toEqual({ kind: "memory" });
+  });
+
+  test("rejects implicit memory fallback in development", () => {
+    expect(() => resolveRuntimeBackend({ NODE_ENV: "development" })).toThrow(
+      "Configure a database or explicitly set TAMBIKE_BACKEND=memory for local/test use",
+    );
+  });
+
+  test("selects Prisma whenever a runtime URL exists", () => {
+    expect(
+      resolveRuntimeBackend({
+        NODE_ENV: "development",
+        DATABASE_URL: "postgresql://runtime.example/tambike",
+      }),
+    ).toEqual({
+      kind: "prisma",
+      databaseUrl: "postgresql://runtime.example/tambike",
+    });
   });
 });

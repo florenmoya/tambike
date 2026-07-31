@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { PrismaTambikeBackend } from "./prisma-backend";
-import { getRuntimeDatabaseUrl } from "./database-url";
+import { resolveRuntimeBackend } from "./database-url";
 import type {
   AdminGiveawayAudit,
   CreateGiveawayCampaignCodeInput,
@@ -8471,10 +8471,10 @@ const runtimeBackendState = (() => {
 })();
 
 async function createRuntimeBackend(): Promise<RuntimeBackend> {
-  const databaseUrl = getRuntimeDatabaseUrl();
-  if (databaseUrl) {
+  const runtime = resolveRuntimeBackend();
+  if (runtime.kind === "prisma") {
     const { PrismaTambikeBackend } = await import("./prisma-backend");
-    return PrismaTambikeBackend.create(databaseUrl);
+    return PrismaTambikeBackend.create(runtime.databaseUrl);
   }
 
   return TambikeBackend.create();

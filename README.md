@@ -40,7 +40,10 @@ npm run db:generate
 npx prisma migrate reset --force
 ```
 
-If no Supabase database URL is configured, the local app falls back to the in-memory backend so UI and e2e work can still run.
+Local and automated tests may opt into the in-memory backend with
+`TAMBIKE_BACKEND=memory`. No environment falls back to memory implicitly.
+Production rejects memory mode and exits with a configuration error unless
+`DATABASE_URL` or `SUPABASE_DATABASE_URL` is set.
 
 ## Learn More
 
