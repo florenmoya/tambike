@@ -61,6 +61,7 @@ export async function createPrismaEventFixture(
           passwordHash: "integration-only",
           role: "organizer",
           verificationStatus: "APPROVED",
+          accountStatus: "ACTIVE",
           area: location.area,
         },
         {
@@ -70,6 +71,7 @@ export async function createPrismaEventFixture(
           passwordHash: "integration-only",
           role: "admin",
           verificationStatus: "APPROVED",
+          accountStatus: "ACTIVE",
           area: location.area,
         },
         ...riders.map((rider) => ({
@@ -79,6 +81,7 @@ export async function createPrismaEventFixture(
           passwordHash: "integration-only",
           role: "rider" as const,
           verificationStatus: "UNVERIFIED" as const,
+          accountStatus: "ACTIVE" as const,
           area: location.area,
         })),
       ],

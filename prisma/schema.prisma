@@ -28,6 +28,18 @@ enum VerificationStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum OrganizerVerificationStatus {
+  UNVERIFIED
+  PENDING
+  APPROVED
+  REJECTED
   SUSPENDED
 }
 
@@ -285,6 +297,10 @@ model User {
   passwordHash         String
   role                 Role               @default(rider)
   verificationStatus   VerificationStatus @default(UNVERIFIED)
+  accountStatus        AccountStatus      @default(ACTIVE)
+  suspendedAt          DateTime?
+  suspendedByUserId    String?
+  suspensionReason     String?            @db.VarChar(500)
   area                 String
   bikeModel            String?
   clubName             String?
@@ -302,6 +318,8 @@ model User {
   updatedAt            DateTime           @updatedAt
 
   sessions                    Session[]
+  suspendedBy                 User?                       @relation("UserSuspendedBy", fields: [suspendedByUserId], references: [id], onDelete: SetNull)
+  suspensionsPerformed        User[]                      @relation("UserSuspendedBy")
   organizerProfile            OrganizerProfile?
   motorcycle                  Motorcycle?
   rsvps                       RSVP[]
@@ -335,6 +353,8 @@ model User {
   giveawayOperatorRevocations GiveawayOperator[]          @relation("GiveawayOperatorRevoker")
   giveawayAuditEvents         GiveawayAuditEvent[]        @relation("GiveawayAuditActor")
   uploadedGiveawayPrizeImages GiveawayPrizeImage[]        @relation("GiveawayPrizeImageUploader")
+
+  @@index([role, accountStatus])
 }
 
 model Session {
@@ -358,7 +378,7 @@ model OrganizerProfile {
   clubPageName       String?
   reason             String
   pastEventLinks     String[]
-  verificationStatus VerificationStatus @default(PENDING)
+  verificationStatus OrganizerVerificationStatus @default(PENDING)
   adminNotes         String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt

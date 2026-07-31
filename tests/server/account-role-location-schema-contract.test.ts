@@ -11,6 +11,10 @@ const migrationPath = resolve(
 );
 const migrationSql = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
+const typesSource = readFileSync(
+  resolve(process.cwd(), "src/features/tambike-demo/types.ts"),
+  "utf8",
+);
 
 const generatedEnums = generatedPrismaClient as unknown as Record<
   string,
@@ -68,6 +72,24 @@ describe("account role and event location Prisma schema contract", () => {
   test("generates only the supported account roles and event statuses", () => {
     expect(Object.values(generatedEnums.Role ?? {})).toEqual(["rider", "organizer", "admin"]);
     expect(Object.values(generatedEnums.EventStatus ?? {})).not.toContain("PENDING_VENUE_APPROVAL");
+  });
+
+  test("separates account access from user and organizer verification", () => {
+    expect(typesSource).toContain('export type AccountStatus = "ACTIVE" | "SUSPENDED"');
+    expect(typesSource).toContain("export type OrganizerVerificationStatus");
+    expect(typesSource).toMatch(
+      /export type VerificationStatus =[\s\S]*?"REJECTED";/,
+    );
+    expect(prismaSchema.match(/enum VerificationStatus \{([\s\S]*?)\}/)?.[1]).not.toContain(
+      "SUSPENDED",
+    );
+    expect(prismaSchema.match(/enum OrganizerVerificationStatus \{([\s\S]*?)\}/)?.[1]).toContain(
+      "SUSPENDED",
+    );
+    expect(prismaSchema).toContain("enum AccountStatus");
+    expect(prismaSchema).toContain("accountStatus");
+    expect(prismaSchema).toContain("suspendedByUserId");
+    expect(prismaSchema).toContain('relation("UserSuspendedBy"');
   });
 
   test("removes venue ownership and approval-type relations from the generated model", () => {

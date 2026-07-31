@@ -42,5 +42,7 @@ describe("Prisma seed policy", () => {
 
     const seedSource = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
     expect(seedSource).toContain("const databaseUrl = requireDisposableSeedDatabaseUrl();");
+    expect(seedSource).toMatch(/accountStatus:\s*"ACTIVE"/);
+    expect(seedSource).not.toMatch(/verificationStatus:\s*"SUSPENDED"/);
   });
 });

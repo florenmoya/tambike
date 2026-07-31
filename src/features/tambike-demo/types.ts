@@ -18,8 +18,11 @@ export type VerificationStatus =
   | "UNVERIFIED"
   | "PENDING"
   | "APPROVED"
-  | "REJECTED"
-  | "SUSPENDED";
+  | "REJECTED";
+
+export type OrganizerVerificationStatus = VerificationStatus | "SUSPENDED";
+
+export type AccountStatus = "ACTIVE" | "SUSPENDED";
 
 export type EventStatus =
   | "DRAFT"
@@ -105,7 +108,7 @@ export interface OrganizerProfile {
   displayName: string;
   type: string;
   fbLink: string;
-  verificationStatus: VerificationStatus;
+  verificationStatus: OrganizerVerificationStatus;
   pastEvents: number;
 }
 
@@ -115,6 +118,7 @@ export interface UserProfile {
   email: string;
   role: AccountRole;
   verificationStatus: VerificationStatus;
+  accountStatus: AccountStatus;
   area: string;
   bikeModel?: string;
   clubName?: string;
