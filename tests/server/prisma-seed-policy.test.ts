@@ -42,7 +42,18 @@ describe("Prisma seed policy", () => {
 
     const seedSource = readFileSync(resolve(process.cwd(), "prisma/seed.ts"), "utf8");
     expect(seedSource).toContain("const databaseUrl = requireDisposableSeedDatabaseUrl();");
-    expect(seedSource).toMatch(/accountStatus:\s*"ACTIVE"/);
+    const canonicalUserCreateStarts = [
+      "await transaction.user.create({\n      data: {\n        id: organizer.id,",
+      "await transaction.user.create({\n      data: {\n        id: admin.id,",
+    ];
+    for (const createStart of canonicalUserCreateStarts) {
+      const start = seedSource.indexOf(createStart);
+      const end = seedSource.indexOf("    });", start);
+
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      expect(seedSource.slice(start, end)).toContain('accountStatus: "ACTIVE",');
+    }
     expect(seedSource).not.toMatch(/verificationStatus:\s*"SUSPENDED"/);
   });
 });

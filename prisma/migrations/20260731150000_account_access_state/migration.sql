@@ -2,6 +2,29 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
+-- OPERATOR ROLLBACK / FORWARD-RECOVERY RUNBOOK (do not execute as part of this migration)
+-- Prerequisites before deployment: stop application writes for the cutover window and verify a
+-- restorable, pre-migration backup or point-in-time-recovery (PITR) target. Preserve a separate
+-- post-migration backup before attempting any recovery action.
+--
+-- Lossless rollback: restore a clone from the verified PITR point immediately before this migration,
+-- validate application reads and the absence of this migration in that clone's `_prisma_migrations`,
+-- then redirect traffic only after the clone is approved. Restoring the pre-migration point discards
+-- every write made after that point; reconcile or replay those writes separately before cutover.
+--
+-- Do not attempt an in-place enum reversal. This migration drops `VerificationStatus_legacy` and maps
+-- legacy user `SUSPENDED` verification to `accountStatus = SUSPENDED` plus user verification
+-- `APPROVED`; later account-status changes and the derived `suspendedAt` value cannot be reconstructed
+-- as the original legacy row state. Organizer-profile `SUSPENDED` values are preserved in
+-- `OrganizerVerificationStatus` and do not require restoration.
+--
+-- Forward recovery: if any statement fails before COMMIT, PostgreSQL rolls back the whole transaction;
+-- correct the cause and rerun this migration from the unchanged pre-migration schema. If COMMIT succeeds
+-- but the application rollout fails, keep this schema, deploy the account-status-aware application, and
+-- verify this migration is recorded as finished before reopening writes. After a PITR rollback, restore
+-- the matching pre-migration application version first; when ready to move forward again, reapply this
+-- migration once through the normal Prisma deployment path rather than manually recreating the legacy enum.
+
 CREATE TYPE "AccountStatus" AS ENUM ('ACTIVE', 'SUSPENDED');
 
 ALTER TABLE "User"
