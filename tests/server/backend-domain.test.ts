@@ -18,8 +18,12 @@ import {
 const validDraftInput: CreateEventInput = {
   title: "Tambike Night at Katipunan",
   type: "Bike Night",
-  date: "Sat · July 18",
-  time: "7:00 PM - 10:00 PM",
+  startDate: "2099-07-18",
+  startTime: "19:00",
+  endDate: "2099-07-18",
+  endTime: "22:00",
+  timeZone: "Asia/Manila",
+  recurrence: "NONE",
   expectedRiders: 45,
   perkPreview: "Free sticker for checked-in riders",
   locationName: "Katipunan Community Grounds",
@@ -238,6 +242,12 @@ describe("Tambike backend domain rules", () => {
       locationMapLink: "https://maps.example.test/katipunan-community-grounds",
       area: "Katipunan, Quezon City",
       expectedRiders: 45,
+      startsAt: "2099-07-18T11:00:00.000Z",
+      endsAt: "2099-07-18T14:00:00.000Z",
+      timeZone: "Asia/Manila",
+      recurrence: "NONE",
+      date: "Sat · Jul 18, 2099",
+      time: "7:00 PM – 10:00 PM",
     });
   });
 
@@ -255,6 +265,56 @@ describe("Tambike backend domain rules", () => {
         ...locationOverride,
       }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  test.each([
+    ["an invalid timezone", { timeZone: "Mars/Olympus" }],
+    ["an end before its start", { endTime: "18:59" }],
+    [
+      "weekly recurrence while recurrence is disabled",
+      { recurrence: "WEEKLY" as const },
+    ],
+  ])("rejects %s", async (_label, scheduleOverride) => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, `invalid-schedule-${_label}`);
+
+    await expect(
+      backend.createEventDraft(actors.organizer.sessionToken, {
+        ...validDraftInput,
+        ...scheduleOverride,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  test("orders one-time event query results by nearest occurrence", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "domain-event-order");
+
+    const farther = await backend.createEventDraft(actors.organizer.sessionToken, {
+      ...validDraftInput,
+      title: "Order Test Farther",
+      startDate: "2099-08-08",
+      endDate: "2099-08-08",
+    });
+    const nearest = await backend.createEventDraft(actors.organizer.sessionToken, {
+      ...validDraftInput,
+      title: "Order Test Nearest",
+      startDate: "2099-08-01",
+      endDate: "2099-08-01",
+    });
+    const earliest = await backend.createEventDraft(actors.organizer.sessionToken, {
+      ...validDraftInput,
+      title: "Order Test Earliest",
+      startDate: "2099-07-25",
+      endDate: "2099-07-25",
+    });
+
+    expect(earliest.date).toBe("Sat · Jul 25, 2099");
+    expect(backend.listEvents({ q: "Order Test" }).map((event) => event.id)).toEqual([
+      earliest.id,
+      nearest.id,
+      farther.id,
+    ]);
   });
 
   test("publishes directly from admin review without a venue transition", async () => {

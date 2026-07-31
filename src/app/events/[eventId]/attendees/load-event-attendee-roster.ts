@@ -6,6 +6,21 @@ import { BackendError } from "@/server/backend";
 
 type LoadedRoster = { page: EventAttendeeRosterPage; signedIn: boolean };
 
+function backendErrorCode(error: unknown) {
+  if (error instanceof BackendError) {
+    return error.code;
+  }
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    return error.code;
+  }
+  return undefined;
+}
+
 export async function loadEventAttendeeRoster(
   eventId: string,
   listRoster: (eventId: string) => Promise<EventAttendeeRosterPage> = listEventAttendeesAction,
@@ -15,10 +30,11 @@ export async function loadEventAttendeeRoster(
   try {
     return { page: await listRoster(eventId), signedIn: true };
   } catch (error) {
-    if (error instanceof BackendError && error.code === "NOT_FOUND") {
+    const code = backendErrorCode(error);
+    if (code === "NOT_FOUND") {
       return showNotFound();
     }
-    if (error instanceof BackendError && error.code === "UNAUTHENTICATED") {
+    if (code === "UNAUTHENTICATED") {
       const summary = await getSummary(eventId);
       return {
         signedIn: false,

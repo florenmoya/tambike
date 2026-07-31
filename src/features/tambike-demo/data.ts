@@ -1,11 +1,13 @@
 import type {
   Approval,
   Event,
+  EventSchedule,
   OrganizerProfile,
   Pass,
   ReportMetric,
   UserProfile,
 } from "./types";
+import { formatEventSchedule } from "./event-schedule";
 
 export const TAMBIKE_ORGANIZER_USER_ID = "user-marco-organizer";
 export const TAMBIKE_ORGANIZER_PROFILE_ID = "user-marco-organizer-profile";
@@ -44,7 +46,7 @@ export const seedUsers: UserProfile[] = [
   },
 ];
 
-export const demoEvents: Event[] = [
+const rawDemoEvents: Event[] = [
   {
     id: "tambike-cafe-classico",
     title: "Tambike at Cafe Classico",
@@ -55,13 +57,13 @@ export const demoEvents: Event[] = [
     locationAddress: "Casa Classico, Manga St., Tugbok, Davao City",
     locationMapLink: "https://waze.com/ul?q=Casa%20Classico%20Davao%20City",
     poster: "/demo/poster-tambike-cafe-classico.jpg",
-    date: "Every Saturday",
+    date: "Sat · Aug 1, 2026",
     time: "6:00 PM - 8:00 PM",
     area: "Davao City",
     shortDescription:
-      "A recurring Saturday tambike for classic bikes, coffee, stories, and relaxed rider hangouts.",
+      "An evening tambike for classic bikes, coffee, stories, and relaxed rider hangouts.",
     whatHappens:
-      "Riders arrive direct at Casa Classico, park, check in, grab coffee, talk bikes, and hang out without a ride-out or formal program.",
+      "Park with the group, grab a drink, and meet riders over bikes and road stories. Come by on your own or with friends; there is no ride-out or fixed program.",
     going: 48,
     interested: 132,
     expectedRiders: 55,
@@ -95,7 +97,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "MotoIR Motul National Championship Round 5 race weekend at Tarlac Circuit Hill.",
     whatHappens:
-      "Riders, teams, and spectators check in at the circuit, follow paddock access rules, and track the schedule for race heats across the weekend.",
+      "Watch the weekend's race heats from the spectator areas and follow paddock access signs around the circuit. Teams and riders follow the posted schedule, which may change during the day.",
     going: 84,
     interested: 226,
     expectedRiders: 170,
@@ -129,7 +131,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Final MotoIR Youth Cup weekend for the 2026 calendar with youth race rounds 15 and 16.",
     whatHappens:
-      "Youth race teams check in, verify class assignments, stage in paddock lanes, and run the final race weekend under circuit marshal control.",
+      "Watch the final Youth Cup races from the spectator areas while teams prepare in the paddock. Access and race timing follow the circuit marshals and posted schedule.",
     going: 63,
     interested: 184,
     expectedRiders: 120,
@@ -163,7 +165,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Petron Sprint Scooter Grand Prix Championship Round 3 at Tarlac Circuit Hill.",
     whatHappens:
-      "Scooter racers and spectators check in at the circuit, follow the posted race calendar, and receive updates if the schedule shifts.",
+      "Watch the scooter race heats from the spectator areas and follow the posted race schedule. Circuit staff will share updates if timings change.",
     going: 77,
     interested: 205,
     expectedRiders: 135,
@@ -197,7 +199,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "600KM Antipolo City motorcycle endurance challenge through the CALABARZON route.",
     whatHappens:
-      "Riders check in before dawn, attend briefing, confirm route batches, ride the endurance loop, and return for finisher validation.",
+      "Meet before dawn for briefing and batch release, then ride the planned CALABARZON loop with checkpoint stops. This is a long group ride, not a race.",
     going: 52,
     interested: 168,
     expectedRiders: 90,
@@ -238,7 +240,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Two-day Laguna motorcycle culture event with custom showcases, brand exhibits, club meets, trade fair, and live programming.",
     whatHappens:
-      "Visitors scan in at the convention center, browse displays and booths, join club networking, and save event updates for the two-day program.",
+      "Walk through motorcycle displays and club booths at your own pace, with a two-day program happening around the venue. Check the onsite schedule for talks or activities you want to join.",
     going: 118,
     interested: 342,
     expectedRiders: 650,
@@ -272,7 +274,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "NGO Philippines streetbike drag racing grand final at Clark International Speedway.",
     whatHappens:
-      "Teams and spectators check in at Clark, follow lane and staging controls, and track final-leg updates across the two-day race weekend.",
+      "Watch the final street-drag rounds from the marked spectator areas while teams move through staging. Follow marshal directions and the day's posted run order.",
     going: 91,
     interested: 260,
     expectedRiders: 180,
@@ -306,7 +308,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "IR Philippine Endurance Championships Round 3 with advance team applications and limited permanent entries.",
     whatHappens:
-      "Teams submit applications before event day, check in at Tarlac Circuit Hill, verify paddock assignments, and follow endurance championship controls.",
+      "Registered teams check in, confirm paddock assignments, and follow the endurance schedule at Tarlac Circuit Hill. Advance registration is required; there is no onsite entry.",
     going: 45,
     interested: 139,
     expectedRiders: 80,
@@ -340,7 +342,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Second leg of the Mindanao Wide Motocross Series during the 65th Araw ng Wao celebration.",
     whatHappens:
-      "Motocross teams and spectators check in at the race ground, follow staging controls, watch heats, and keep track access limited to marshaled riders.",
+      "Watch the motocross heats from the assigned spectator areas while riders move through staging. Track access is limited to marshaled competitors.",
     going: 39,
     interested: 112,
     expectedRiders: 80,
@@ -375,7 +377,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Helmet-user charity ride from Shell Pugon with donations for Josefheim Foundation in Pililla.",
     whatHappens:
-      "Riders meet at Shell Pugon, check in, record cash or kind donations, roll out by batch, and regroup at the beneficiary stop in Pililla.",
+      "Meet at Shell Pugon, hand over any cash or in-kind donation through the organizers, then roll out by batch to Pililla. This is a group charity ride, not a race.",
     going: 64,
     interested: 149,
     expectedRiders: 90,
@@ -421,7 +423,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Closed-course Ducati track day at Clark with intro lessons, test-ride bikes, and race-team technical support.",
     whatHappens:
-      "Riders register for track access, pass gear inspection, attend intro lessons, request test-ride slots, and receive paddock support from the technical team.",
+      "Registered riders attend the safety briefing and gear inspection before joining their assigned track sessions. Test-ride slots and paddock support are handled onsite.",
     going: 42,
     interested: 126,
     expectedRiders: 100,
@@ -466,7 +468,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Republik Riders Club charity-focused long ride to the north with overnight route timing.",
     whatHappens:
-      "Participants check in before dawn, confirm convoy batches, ride the north route, and record charity participation for the club report.",
+      "Meet before dawn, join your assigned convoy, and follow the north route with the group. This is a long charity ride at legal road speeds, not a race.",
     going: 38,
     interested: 104,
     expectedRiders: 60,
@@ -507,7 +509,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Multi-day Mandirigma Endutour Peninsula / Ground Zero route starting from Koronadal City Hall Ground.",
     whatHappens:
-      "Riders register by category, attend route briefing, scan in before release, complete checkpoints, and return with validated route logs.",
+      "Choose the correct route category, attend briefing, and complete the marked checkpoints before returning for validation. It is an endurance route, not a race.",
     going: 22,
     interested: 84,
     expectedRiders: 50,
@@ -549,7 +551,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "MotoIR Motul National Championship Round 4 race weekend at Tarlac Circuit Hill.",
     whatHappens:
-      "Spectators and teams check in at the circuit, follow pit and paddock access rules, watch scheduled heats, and receive event updates if race dates shift.",
+      "Watch the scheduled race heats from the spectator areas and follow pit and paddock access signs. Event staff will share updates if race timing changes.",
     going: 71,
     interested: 188,
     expectedRiders: 150,
@@ -583,7 +585,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Visayas leg of Makina Moto Expo 2026 with motorcycle launches, brand booths, and rider meetups.",
     whatHappens:
-      "Visitors scan in at the expo, browse motorcycle launches and gear booths, save brand-interest leads, and claim booth priority perks.",
+      "Walk through motorcycle launches, gear displays, and brand booths at your own pace. Test-ride eligibility and queues are handled by each booth onsite.",
     going: 96,
     interested: 301,
     expectedRiders: 500,
@@ -617,7 +619,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Open tambike night for all motorcycle concepts at 5R Cue'Spot Cafe with clean builds and community hangout time.",
     whatHappens:
-      "Riders arrive at the cafe, park by group, buy snacks or drinks onsite, compare builds, and keep the night casual with no ride-out program.",
+      "Park with the group, grab food or a drink if you like, and spend the evening talking bikes. There is no ride-out or fixed program.",
     going: 58,
     interested: 141,
     expectedRiders: 75,
@@ -651,7 +653,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Second official Boys of Underbone Laguna tambike built around member welcomes, content prep, and a chill hangout.",
     whatHappens:
-      "Underbone riders check in at Agojo, welcome new members, prepare group content, park together, and keep the meetup casual.",
+      "Park with the group, meet other underbone riders, and spend the meetup talking bikes and getting to know the community. New riders can come on their own or with friends.",
     going: 44,
     interested: 113,
     expectedRiders: 60,
@@ -685,7 +687,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Classic bike tambike for Swabz Taytay's grand re-opening with raffle prizes and bike consultation.",
     whatHappens:
-      "Classic bike riders arrive at the shop, check in for raffle eligibility, meet other classic riders, and join the casual re-opening tambike.",
+      "Bring your classic bike, park with the group, and meet other riders during the shop's reopening tambike. Raffle check-in is handled onsite.",
     going: 51,
     interested: 129,
     expectedRiders: 70,
@@ -724,7 +726,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Official 2026 classic motorcycle tambike at Bro's Brew Cafe for cafe racers, choppers, and restored classics.",
     whatHappens:
-      "Classic motorcycle riders park at Bro's Brew, grab coffee, meet the Yloco Bandits, and hang out with fellow riders from the north.",
+      "Park at Bro's Brew, grab a coffee, and meet classic-bike riders from the north. Come by on your own or with friends; the meetup stays at the venue.",
     going: 36,
     interested: 98,
     expectedRiders: 55,
@@ -758,7 +760,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Brand-led Kape Mo-To tambike in Tagaytay for parking, coffee, relaxed rider talk, and BMW Motorrad community presence.",
     whatHappens:
-      "Riders arrive direct at Kape Mo-To, park at the motorist station, connect with other riders, and keep the activity as a stationary tambike.",
+      "Park at the motorist station, grab a drink, and meet riders passing through Tagaytay. This is a stationary tambike with no ride-out.",
     going: 62,
     interested: 150,
     expectedRiders: 80,
@@ -792,7 +794,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Morning FullPrint Manila tambike with Segway Escooters, Triumph Motorcycles, and free breakfast for early riders.",
     whatHappens:
-      "Riders and e-scooter owners arrive at the cafe, check in for the breakfast headcount, browse partner displays, and hang out onsite.",
+      "Park near the cafe, grab breakfast, and spend the morning with motorcycle and e-scooter riders. Partner displays are available to browse onsite.",
     going: 57,
     interested: 118,
     expectedRiders: 75,
@@ -827,7 +829,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "Cross-club tambike for a cause at Dayo Specialty Coffee with Boys of Garage, 2 Wheels Elite, Boys of Congre, and BB Boyz.",
     whatHappens:
-      "Riders meet at the coffee spot, park with their groups, support the cause, and keep the night stationary with no stunts, racing, or loud revving.",
+      "Park with your group, meet riders from the other clubs, and support the cause while hanging out over coffee. The meetup stays at the venue with no stunts or ride-out.",
     going: 46,
     interested: 121,
     expectedRiders: 70,
@@ -861,7 +863,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "CCPH Upper East first tambike at The Helmet Garage with safe moto rules and raffle registration.",
     whatHappens:
-      "Riders pin the shop location, register onsite for raffles, park with the chapter, and follow safe tambike rules around the venue.",
+      "Park with the chapter, meet other riders, and spend the evening around the bikes. Raffle registration is handled onsite.",
     going: 53,
     interested: 137,
     expectedRiders: 80,
@@ -895,7 +897,7 @@ export const demoEvents: Event[] = [
     shortDescription:
       "CCPH Cebu third official tambike at Mactan Town Center with chapter rollup rules and venue-respect reminders.",
     whatHappens:
-      "Cebu riders arrive at Mactan Town Center, group by chapter, check in, and keep the meetup focused on parked bikes and community.",
+      "Park with the Cebu chapters and spend the meetup talking bikes and meeting the local community. The event stays focused on parked bikes rather than a ride-out.",
     going: 49,
     interested: 116,
     expectedRiders: 75,
@@ -914,6 +916,98 @@ export const demoEvents: Event[] = [
     sourceNote: "Event name, date, Mactan Town Center venue, rules, and uploaded poster from Bike Night Asia listing.",
   },
 ];
+
+const demoEventSchedules: Record<string, EventSchedule> = {
+  "tambike-cafe-classico": {
+    startsAt: "2026-08-01T10:00:00.000Z",
+    endsAt: "2026-08-01T12:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "motoir-national-round-5": {
+    startsAt: "2026-09-19T01:00:00.000Z",
+    endsAt: "2026-09-20T15:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "motul-motoir-youth-cup-15-16": {
+    startsAt: "2026-10-24T01:00:00.000Z",
+    endsAt: "2026-10-25T15:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "petron-sgp-round-3": {
+    startsAt: "2026-08-16T01:00:00.000Z",
+    endsAt: "2026-08-16T15:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "calabarzon-endurance-ride": {
+    startsAt: "2026-09-04T21:00:00.000Z",
+    endsAt: "2026-09-06T09:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "laguna-motofest-2026": {
+    startsAt: "2026-10-17T01:00:00.000Z",
+    endsAt: "2026-10-18T15:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "ngo-street-drag-final-2026": {
+    startsAt: "2026-11-28T00:00:00.000Z",
+    endsAt: "2026-11-29T14:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "ir-ph-endurance-rd3": {
+    startsAt: "2026-12-12T02:00:00.000Z",
+    endsAt: "2026-12-13T14:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "mindanao-wide-motocross-2026-2nd-leg": {
+    startsAt: "2026-02-18T00:00:00.000Z",
+    endsAt: "2026-02-18T15:59:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "arai-hjc-charity-ride": {
+    startsAt: "2026-07-04T23:00:00.000Z",
+    endsAt: "2026-07-05T09:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+  "ducati-track-day-clark": {
+    startsAt: "2026-07-02T23:30:00.000Z",
+    endsAt: "2026-07-03T09:00:00.000Z",
+    timeZone: "Asia/Manila",
+    recurrence: "NONE",
+  },
+};
+
+export const demoEvents: Event[] = rawDemoEvents.map((event) => {
+  const schedule = demoEventSchedules[event.id];
+  if (!schedule) {
+    return event;
+  }
+  const labels = formatEventSchedule(schedule);
+  return {
+    ...event,
+    ...schedule,
+    date: labels.date,
+    time: labels.time,
+  };
+});
+
+export function getDemoEventSchedule(eventId: string): EventSchedule | undefined {
+  const schedule = demoEventSchedules[eventId];
+  return schedule ? { ...schedule } : undefined;
+}
+
+export function findDemoEvent(eventId: string): Event | undefined {
+  return demoEvents.find((event) => event.id === eventId);
+}
 
 export const adminApproval: Approval = {
   id: "rev-arai-hjc-charity-ride",

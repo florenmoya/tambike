@@ -16,7 +16,7 @@ export function toProfilePreviewView(
 
   return {
     slug: editor.slug ?? "profile-preview",
-    displayName: profileDraft.displayName.trim() || "Your rider name",
+    displayName: profileDraft.displayName.trim() || "Your name",
     area: profileDraft.area.trim() || "Your area",
     role: editor.role,
     bio: profileDraft.bio?.trim() || undefined,

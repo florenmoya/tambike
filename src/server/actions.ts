@@ -359,7 +359,7 @@ function selfCheckInTitleFor(code: SelfCheckInCode) {
     case "UNAUTHENTICATED":
       return "Log in to check in";
     case "FORBIDDEN":
-      return "Rider account required";
+      return "Account required";
     default:
       return "Check-in could not be completed";
   }
@@ -380,9 +380,9 @@ function selfCheckInBodyFor(code: SelfCheckInCode) {
     case "NOT_FOUND":
       return "Use the event QR for an event where your Tambike Pass is active.";
     case "UNAUTHENTICATED":
-      return "Sign in with the rider account that owns the active Tambike Pass, then confirm again.";
+      return "Sign in with the account that owns the active Tambike Pass, then confirm again.";
     case "FORBIDDEN":
-      return "Self check-in is limited to the rider account that owns an active Tambike Pass.";
+      return "Self check-in is limited to the account that owns an active Tambike Pass.";
     default:
       return "Please ask event staff to check you in with the staff scanner.";
   }

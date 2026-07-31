@@ -47,7 +47,7 @@ export function ProfilePreview() {
   }
 
   return (
-    <section className={styles.previewPage} aria-label="Your rider profile preview">
+    <section className={styles.previewPage} aria-label="Your profile preview">
       <div className={styles.previewNotice} role="status">
         <span>Preview — only you can see this</span>
         <Button asChild variant="outline">

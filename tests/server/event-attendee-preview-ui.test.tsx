@@ -66,7 +66,7 @@ describe("event attendee preview", () => {
 
     expect(markup).toContain('href="/riders/mika-santos"');
     expect(markup).toContain('href="/riders/paolo-reyes"');
-    expect(markup).toContain("15 riders");
+    expect(markup).toContain("15 attendees");
     expect(markup).toContain("15 interested · ~55 expected");
     expect(markup).toContain("View More");
     expect(markup).not.toContain("View all bikes");
@@ -81,7 +81,7 @@ describe("event attendee preview", () => {
     expect(markup).toContain('src="/media/avatar-mika"');
     expect(markup).toContain('src="/media/avatar-paolo"');
     expect(markup).toContain(styles.profileOverlay);
-    expect(markup).toContain("View Mika Santos’s bike and rider profile");
+    expect(markup).toContain("View Mika Santos’s bike and profile");
     expect(markup).not.toMatch(
       /anonymous riders|visible riders|email|userId|verification|make|model/i,
     );
@@ -97,7 +97,7 @@ describe("event attendee preview", () => {
       attendees: [],
     });
 
-    expect(markup).toContain("15 riders");
+    expect(markup).toContain("15 attendees");
     expect(markup).not.toContain("View More");
     expect(markup).not.toContain(styles.footer);
     expect(markup).not.toMatch(/organizer|privacy|disabled/i);
@@ -110,18 +110,18 @@ describe("event attendee preview", () => {
       unavailable: true,
     });
 
-    expect(markup).toContain("12 riders");
+    expect(markup).toContain("12 attendees");
     expect(markup).toContain("View More");
     expect(markup).toContain('href="/events/ride-1/attendees"');
   });
 
-  test("guides riders when no visible profiles are available", () => {
+  test("guides attendees when no visible profiles are available", () => {
     const markup = render({
       ...memberPreview,
       attendees: [],
     });
 
-    expect(markup).toContain("Rider profiles will appear here as they join");
+    expect(markup).toContain("Profiles will appear here as attendees join");
     expect(markup).toContain("View More");
   });
 
@@ -217,9 +217,9 @@ describe("event attendee preview", () => {
   });
 
   test.each([
-    [0, "0 riders"],
-    [1, "1 rider"],
-    [2, "2 riders"],
+    [0, "0 attendees"],
+    [1, "1 attendee"],
+    [2, "2 attendees"],
   ])("uses correct turnout grammar for %i attendees", (going, copy) => {
     expect(render(undefined, going)).toContain(copy);
   });
@@ -250,7 +250,7 @@ describe("event attendee preview", () => {
           }),
         );
       });
-      expect(container.textContent).toContain("15 riders");
+      expect(container.textContent).toContain("15 attendees");
 
       await act(async () => {
         root.render(
@@ -263,8 +263,8 @@ describe("event attendee preview", () => {
           }),
         );
       });
-      expect(container.textContent).toContain("13 riders");
-      expect(container.textContent).not.toContain("15 riders");
+      expect(container.textContent).toContain("13 attendees");
+      expect(container.textContent).not.toContain("15 attendees");
     } finally {
       await act(async () => root.unmount());
       container.remove();

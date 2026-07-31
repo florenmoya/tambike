@@ -277,7 +277,8 @@ describe("in-memory organizer-controlled event rosters", () => {
 
     const secondEvent = await createPublishedTestEvent(backend, actors, {
       title: "Second Per-Event Choice",
-      date: "Fri · December 31, 2099",
+      startDate: "2099-12-31",
+      endDate: "2099-12-31",
     });
     await expect(
       backend.getEventRegistrationRosterIdentity(actors.rider.sessionToken, secondEvent.id),

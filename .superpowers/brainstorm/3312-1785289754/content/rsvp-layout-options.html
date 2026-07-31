@@ -1,0 +1,334 @@
+<style>
+  .layout-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    align-items: stretch;
+  }
+  .layout-card {
+    border: 1px solid #34363b;
+    border-radius: 18px;
+    overflow: hidden;
+    background: #121316;
+    cursor: pointer;
+    transition: 160ms ease;
+  }
+  .layout-card:hover,
+  .layout-card.selected {
+    border-color: #f4b63d;
+    transform: translateY(-2px);
+    box-shadow: 0 16px 34px rgba(0,0,0,.22);
+  }
+  .layout-card.selected {
+    outline: 2px solid rgba(244,182,61,.32);
+    outline-offset: 3px;
+  }
+  .layout-preview {
+    min-height: 410px;
+    padding: 18px;
+    background:
+      linear-gradient(135deg, rgba(244,182,61,.12), transparent 38%),
+      linear-gradient(215deg, rgba(116,40,70,.2), transparent 42%),
+      #08090a;
+    color: #fff;
+  }
+  .layout-copy {
+    padding: 16px 17px 18px;
+  }
+  .layout-copy h3 { margin: 0 0 7px; }
+  .layout-copy p { margin: 0; color: #aeb1b7; font-size: 14px; line-height: 1.45; }
+  .recommended {
+    display: inline-flex;
+    margin: 0 0 12px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: rgba(244,182,61,.13);
+    color: #ffc75d;
+    font-size: 10px;
+    font-weight: 850;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .eyebrow {
+    color: #ffc75d;
+    font-size: 9px;
+    font-weight: 850;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .event-title {
+    margin: 8px 0 7px;
+    font-size: 25px;
+    line-height: 1.02;
+    font-weight: 900;
+    letter-spacing: -.035em;
+  }
+  .event-sub {
+    color: #9fa2a8;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .poster {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 1px solid rgba(244,182,61,.25);
+  }
+  .info-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    margin-top: 13px;
+    overflow: hidden;
+    border: 1px solid #303237;
+    border-radius: 10px;
+    background: #303237;
+  }
+  .info-row > div {
+    padding: 9px;
+    background: #15161a;
+  }
+  .info-row span {
+    display: block;
+    color: #f6bc4e;
+    font-size: 7px;
+    font-weight: 850;
+    text-transform: uppercase;
+  }
+  .info-row strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 9px;
+  }
+  .rsvp-panel {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid rgba(244,182,61,.34);
+    border-radius: 12px;
+    background: rgba(244,182,61,.07);
+  }
+  .rsvp-title {
+    font-size: 12px;
+    font-weight: 820;
+  }
+  .button-row {
+    display: flex;
+    gap: 7px;
+    margin-top: 9px;
+  }
+  .primary,
+  .secondary {
+    border-radius: 9px;
+    padding: 9px 12px;
+    font-size: 10px;
+    font-weight: 850;
+  }
+  .primary {
+    background: linear-gradient(#ffd779, #e6951c);
+    color: #201300;
+    flex: 1;
+  }
+  .secondary {
+    background: #22242a;
+    color: #e8e8ea;
+  }
+  .social {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 11px;
+    color: #b8bbc0;
+    font-size: 9px;
+  }
+  .bikes {
+    display: flex;
+  }
+  .bike {
+    width: 31px;
+    height: 23px;
+    margin-left: -6px;
+    border: 2px solid #15161a;
+    border-radius: 6px;
+    background: linear-gradient(140deg, #66311d, #d38b39 48%, #1b1c20 50%);
+  }
+  .bike:first-child { margin-left: 0; }
+  .option-a {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(105px, .55fr);
+    gap: 14px;
+    align-items: start;
+  }
+  .option-a .poster { margin-top: 24px; }
+  .option-a .social {
+    grid-column: 1 / -1;
+    padding-top: 11px;
+    border-top: 1px solid #292b30;
+  }
+  .option-b {
+    display: grid;
+    grid-template-columns: .9fr 1.1fr;
+    gap: 14px;
+  }
+  .option-b .poster { min-height: 265px; }
+  .option-b .rsvp-panel { margin-top: 14px; }
+  .option-b .info-stack {
+    display: grid;
+    gap: 7px;
+    margin-top: 13px;
+  }
+  .option-b .info-stack > div {
+    padding: 8px 9px;
+    border-bottom: 1px solid #2b2d32;
+    font-size: 9px;
+  }
+  .option-c .top-strip {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+  }
+  .option-c .event-title { font-size: 22px; }
+  .option-c .rsvp-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-top: 15px;
+  }
+  .option-c .button-row { margin: 0; }
+  .option-c .community-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 18px;
+  }
+  .option-c .community-grid > div {
+    aspect-ratio: 3 / 2;
+    border-radius: 7px;
+    background: linear-gradient(140deg, #512518, #d2903f 48%, #202228 50%);
+  }
+  .choice-letter {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    margin-bottom: 12px;
+    border-radius: 50%;
+    background: #24262b;
+    color: #ffc75d;
+    font-size: 12px;
+    font-weight: 900;
+  }
+  @media (max-width: 980px) {
+    .layout-grid { grid-template-columns: 1fr; }
+    .layout-preview { min-height: auto; }
+  }
+</style>
+
+<h2>Which RSVP-first layout feels clearest?</h2>
+<p class="subtitle">Each option keeps the same content. The difference is what receives attention first.</p>
+
+<div class="layout-grid">
+  <article class="layout-card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="layout-preview">
+      <span class="recommended">Recommended</span>
+      <div class="option-a">
+        <div>
+          <span class="eyebrow">Tambike · Every Saturday</span>
+          <div class="event-title">Tambike at Cafe Classico</div>
+          <div class="event-sub">Classic bikes, coffee, stories, and a relaxed rider hangout.</div>
+          <div class="info-row">
+            <div><span>When</span><strong>Sat · 6–8 PM</strong></div>
+            <div><span>Where</span><strong>Casa Classico</strong></div>
+            <div><span>Turnout</span><strong>16 going</strong></div>
+          </div>
+          <div class="rsvp-panel">
+            <div class="rsvp-title">Are you joining?</div>
+            <div class="button-row">
+              <div class="primary">I’m going</div>
+              <div class="secondary">Interested</div>
+              <div class="secondary">Share</div>
+            </div>
+          </div>
+        </div>
+        <img class="poster" src="http://localhost:3000/demo/poster-tambike-cafe-classico.jpg" alt="">
+        <div class="social">
+          <div class="bikes"><div class="bike"></div><div class="bike"></div><div class="bike"></div></div>
+          <strong>See the bikes joining</strong>
+          <span>16 riders · View all</span>
+        </div>
+      </div>
+    </div>
+    <div class="layout-copy">
+      <span class="choice-letter">A</span>
+      <h3>Decision card</h3>
+      <p>One compact hero combines essentials, turnout, and RSVP. The poster becomes supporting proof instead of a competing centerpiece.</p>
+    </div>
+  </article>
+
+  <article class="layout-card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="layout-preview">
+      <div class="option-b">
+        <img class="poster" src="http://localhost:3000/demo/poster-tambike-cafe-classico.jpg" alt="">
+        <div>
+          <span class="eyebrow">Tambike</span>
+          <div class="event-title">Tambike at Cafe Classico</div>
+          <div class="event-sub">A recurring Saturday meetup for classic bikes and coffee.</div>
+          <div class="info-stack">
+            <div><strong>Every Saturday</strong> · 6–8 PM</div>
+            <div><strong>Casa Classico</strong> · Davao City</div>
+            <div><strong>16 riders</strong> are going</div>
+          </div>
+          <div class="rsvp-panel">
+            <div class="rsvp-title">Join this meetup</div>
+            <div class="button-row">
+              <div class="primary">I’m going</div>
+              <div class="secondary">Interested</div>
+            </div>
+          </div>
+          <div class="social">
+            <div class="bikes"><div class="bike"></div><div class="bike"></div><div class="bike"></div></div>
+            <span>Preview bikes</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="layout-copy">
+      <span class="choice-letter">B</span>
+      <h3>Poster-led split</h3>
+      <p>Keeps the event poster prominent while tightening the decision area. Strong atmosphere, but the poster still wins the first glance.</p>
+    </div>
+  </article>
+
+  <article class="layout-card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="layout-preview option-c">
+      <div class="top-strip">
+        <img class="poster" src="http://localhost:3000/demo/poster-tambike-cafe-classico.jpg" alt="">
+        <div>
+          <span class="eyebrow">Tambike · Davao City</span>
+          <div class="event-title">Tambike at Cafe Classico</div>
+          <div class="event-sub">Every Saturday · 6–8 PM · Casa Classico</div>
+        </div>
+      </div>
+      <div class="rsvp-panel">
+        <div>
+          <div class="rsvp-title">16 riders are joining</div>
+          <div class="event-sub">Classic bikes, coffee, and a relaxed hangout.</div>
+        </div>
+        <div class="button-row">
+          <div class="primary">I’m going</div>
+          <div class="secondary">Interested</div>
+        </div>
+      </div>
+      <div class="community-grid"><div></div><div></div><div></div><div></div></div>
+      <div class="social"><strong>Who’s going</strong><span>View all bikes</span></div>
+    </div>
+    <div class="layout-copy">
+      <span class="choice-letter">C</span>
+      <h3>Compact event ticket</h3>
+      <p>The fastest scan and smallest hero. It feels practical and mobile-first, but loses some of the event’s visual character.</p>
+    </div>
+  </article>
+</div>

@@ -181,6 +181,23 @@ describe("organizer giveaway lifecycle route", () => {
     expect(markup).toContain("Policy details are loading");
   });
 
+  test("renders stable initial prize disclosure controls across server renders", () => {
+    const renderWorkspace = () =>
+      renderToStaticMarkup(
+        React.createElement(OrganizerGiveawayWorkspace, {
+          eventId: "event-1",
+        }),
+      );
+    const disclosureNames = (markup: string) =>
+      Array.from(markup.matchAll(/name="(pool-[^"]+-disclosure)"/g), ([, name]) => name);
+
+    const firstNames = disclosureNames(renderWorkspace());
+    const secondNames = disclosureNames(renderWorkspace());
+
+    expect(firstNames).toHaveLength(2);
+    expect(secondNames).toEqual(firstNames);
+  });
+
   test("hydrates only the scoped organizer configuration into an editable event-time-zone draft", () => {
     const workspace: OrganizerGiveawayWorkspaceData = {
       id: "giveaway-1",
@@ -1209,6 +1226,116 @@ describe("organizer giveaway lifecycle route", () => {
     expect(source).toContain("draft={selectedDraft ?? editorDraft}");
   });
 
+  test("submits edited datetime-local schedule values for an existing campaign", async () => {
+    const dom = new JSDOM("<div id=\"root\"></div>", {
+      url: "http://localhost/organizer/events/event-1/giveaways",
+    });
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("navigator", dom.window.navigator);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    const workspace = organizerWorkspaceWithPools([
+      {
+        id: "server-pool-1",
+        title: "Helmet pool",
+        awardMode: "random_draw",
+        fulfilmentMode: "onsite",
+        inventory: { kind: "finite", quantity: 1 },
+        items: [{ title: "Helmet voucher" }],
+        publicPresentation: {
+          disclosure: "revealed",
+          title: "Helmet voucher",
+        },
+      },
+    ]);
+    const update = vi.fn(async () => ({
+      ok: true as const,
+      data: undefined,
+    }));
+    const readWorkspace = vi.fn(async () => ({
+      ok: true as const,
+      data: workspace,
+    }));
+
+    try {
+      await React.act(async () => {
+        root.render(
+          React.createElement(OrganizerGiveawayWorkspace, {
+            eventId: "event-1",
+            initialCampaigns: [
+              {
+                id: "giveaway-1",
+                eventId: "event-1",
+                title: workspace.title,
+                state: "draft",
+                complianceStatus: "approved",
+                mechanicsVersion: 1,
+              },
+            ],
+            configurationActions: {
+              create: vi.fn(),
+              update,
+              readWorkspace,
+              listCampaigns: vi.fn(async () => ({
+                ok: true as const,
+                data: [],
+              })),
+            },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const dateInputs = Array.from(
+        dom.window.document.querySelectorAll('input[type="datetime-local"]'),
+      ) as HTMLInputElement[];
+      expect(dateInputs).toHaveLength(4);
+      const localValues = [
+        "2026-08-01T09:30",
+        "2026-08-01T17:00",
+        "2026-08-01T17:15",
+        "2026-08-01T20:00",
+      ];
+
+      for (const [index, input] of dateInputs.entries()) {
+        await React.act(async () => {
+          const InputEvent = input.ownerDocument.defaultView!.Event;
+          input.value = localValues[index]!;
+          input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        });
+      }
+
+      const saveButton = Array.from(
+        dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.trim() === "Save policy");
+      expect(saveButton).toBeDefined();
+
+      await React.act(async () => {
+        (saveButton as HTMLButtonElement).click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "giveaway-1",
+          entryOpensAt: new Date(localValues[0]!).toISOString(),
+          entryClosesAt: new Date(localValues[1]!).toISOString(),
+          drawAt: new Date(localValues[2]!).toISOString(),
+          claimDeadlineAt: new Date(localValues[3]!).toISOString(),
+        }),
+      );
+    } finally {
+      await React.act(async () => {
+        root.unmount();
+      });
+      vi.unstubAllGlobals();
+      dom.window.close();
+    }
+  });
+
   test("freezes campaign editor controls while a save is pending", async () => {
     const campaignEditorSource = await readCampaignEditorSource();
 
@@ -1223,8 +1350,12 @@ describe("organizer giveaway lifecycle route", () => {
     const event = await backend.createEventDraft(organizer.sessionToken, {
       title: "Giveaway navigation event",
       type: "Bike Night",
-      date: "August 18, 2026",
-      time: "7:00 PM - 10:00 PM",
+      startDate: "2026-08-18",
+      startTime: "19:00",
+      endDate: "2026-08-18",
+      endTime: "22:00",
+      timeZone: "Asia/Manila",
+      recurrence: "NONE",
       locationName: "Giveaway Navigation Grounds",
       locationAddress: "18 Navigation Avenue, Antipolo",
       locationMapLink: "https://maps.example.test/giveaway-navigation-grounds",

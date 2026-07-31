@@ -1,0 +1,361 @@
+<style>
+  .refine-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(280px, .45fr);
+    gap: 24px;
+    align-items: start;
+  }
+  .canvas {
+    overflow: hidden;
+    border: 1px solid #35373c;
+    border-radius: 18px;
+    background:
+      linear-gradient(135deg, rgba(244,182,61,.1), transparent 30%),
+      linear-gradient(220deg, rgba(112,36,66,.18), transparent 40%),
+      #070809;
+    color: #fff;
+  }
+  .canvas-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 15px;
+    border-bottom: 1px solid #292b30;
+    color: #8f939b;
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .desktop-body { padding: 28px; }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 190px;
+    gap: 26px;
+    align-items: start;
+  }
+  .tag {
+    color: #f8bf53;
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+  .hero-grid h3 {
+    max-width: 14ch;
+    margin: 8px 0 8px;
+    color: #fff;
+    font-size: 36px;
+    line-height: 1;
+    letter-spacing: -.045em;
+  }
+  .summary {
+    max-width: 52ch;
+    margin: 0;
+    color: #aeb1b7;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .poster {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border: 1px solid rgba(248,191,83,.3);
+    border-radius: 14px;
+    box-shadow: 0 16px 35px rgba(0,0,0,.3);
+  }
+  .essentials {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px 14px;
+    margin-top: 16px;
+    color: #d7d8db;
+    font-size: 10px;
+    font-weight: 720;
+  }
+  .essentials span::before {
+    content: "•";
+    margin-right: 7px;
+    color: #f8bf53;
+  }
+  .decision-card {
+    margin-top: 18px;
+    padding: 15px;
+    border: 1px solid rgba(248,191,83,.38);
+    border-radius: 14px;
+    background:
+      linear-gradient(120deg, rgba(248,191,83,.09), transparent 58%),
+      #151417;
+  }
+  .decision-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .decision-top strong { font-size: 13px; }
+  .decision-top span { color: #9fa2a8; font-size: 9px; }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 11px;
+  }
+  .cta {
+    min-width: 120px;
+    padding: 10px 15px;
+    border-radius: 10px;
+    background: linear-gradient(#ffd77b, #e49318);
+    color: #241500;
+    font-size: 11px;
+    font-weight: 900;
+    text-align: center;
+  }
+  .quiet {
+    padding: 10px 13px;
+    border-radius: 10px;
+    background: #24262b;
+    color: #ebebed;
+    font-size: 10px;
+    font-weight: 800;
+  }
+  .community {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    margin-top: 13px;
+    padding: 12px 0 0;
+    border-top: 1px solid #292b30;
+  }
+  .bike-stack { display: flex; }
+  .bike {
+    width: 45px;
+    aspect-ratio: 3 / 2;
+    margin-left: -8px;
+    border: 2px solid #151417;
+    border-radius: 8px;
+    background:
+      radial-gradient(circle at 72% 68%, #17191d 0 13%, transparent 14%),
+      radial-gradient(circle at 30% 68%, #17191d 0 13%, transparent 14%),
+      linear-gradient(145deg, #66301c, #d89545 48%, #25272c 50%);
+  }
+  .bike:first-child { margin-left: 0; }
+  .community-copy strong {
+    display: block;
+    font-size: 10px;
+  }
+  .community-copy span {
+    color: #9fa2a8;
+    font-size: 9px;
+  }
+  .community-link {
+    color: #f8bf53;
+    font-size: 9px;
+    font-weight: 850;
+  }
+  .below-fold {
+    display: grid;
+    grid-template-columns: 1.35fr .65fr;
+    gap: 12px;
+    margin-top: 22px;
+    opacity: .7;
+  }
+  .section-placeholder {
+    min-height: 74px;
+    padding: 13px;
+    border: 1px solid #292b30;
+    border-radius: 12px;
+    background: #111215;
+  }
+  .section-placeholder strong {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+  }
+  .mobile-body { padding: 18px 16px 22px; }
+  .mobile-intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 68px;
+    gap: 12px;
+    align-items: start;
+  }
+  .mobile-intro h3 {
+    margin: 6px 0 6px;
+    color: #fff;
+    font-size: 23px;
+    line-height: 1;
+    letter-spacing: -.035em;
+  }
+  .mobile-intro .poster { border-radius: 10px; }
+  .mobile-body .essentials {
+    display: grid;
+    gap: 6px;
+    margin-top: 13px;
+  }
+  .mobile-body .decision-card { margin-top: 13px; }
+  .mobile-body .actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .mobile-body .cta { min-width: 0; }
+  .mobile-body .quiet:last-child {
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+  .mobile-body .community {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .mobile-body .community-link {
+    grid-column: 2;
+  }
+  .notes {
+    display: grid;
+    gap: 12px;
+  }
+  .note {
+    padding: 15px;
+    border: 1px solid #34363b;
+    border-radius: 14px;
+    background: #141519;
+  }
+  .note b {
+    display: block;
+    margin-bottom: 5px;
+    color: #f8bf53;
+    font-size: 11px;
+  }
+  .note p {
+    margin: 0;
+    color: #aeb1b7;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .approve {
+    margin-top: 18px;
+    padding: 16px;
+    border: 1px solid rgba(248,191,83,.4);
+    border-radius: 14px;
+    background: rgba(248,191,83,.08);
+    cursor: pointer;
+  }
+  .approve:hover,
+  .approve.selected {
+    outline: 2px solid rgba(248,191,83,.35);
+    outline-offset: 3px;
+  }
+  .approve strong { color: #fff; }
+  .approve p {
+    margin: 5px 0 0;
+    color: #b7bac0;
+    font-size: 13px;
+  }
+  @media (max-width: 950px) {
+    .refine-wrap { grid-template-columns: 1fr; }
+    .hero-grid { grid-template-columns: minmax(0, 1fr) 150px; }
+  }
+</style>
+
+<h2>Direction A — refined structure</h2>
+<p class="subtitle">The first screen answers four questions in order: what, when/where, “am I joining?”, and who else is going.</p>
+
+<div class="refine-wrap">
+  <div>
+    <div class="canvas">
+      <div class="canvas-head"><span>Desktop</span><span>RSVP above the fold</span></div>
+      <div class="desktop-body">
+        <div class="hero-grid">
+          <div>
+            <span class="tag">Tambike · Every Saturday</span>
+            <h3>Tambike at Cafe Classico</h3>
+            <p class="summary">Classic bikes, coffee, stories, and a relaxed Saturday rider hangout.</p>
+            <div class="essentials">
+              <span>6:00–8:00 PM</span>
+              <span>Casa Classico</span>
+              <span>Davao City</span>
+            </div>
+            <div class="decision-card">
+              <div class="decision-top">
+                <strong>Are you joining?</strong>
+                <span>16 riders · ~55 expected</span>
+              </div>
+              <div class="actions">
+                <div class="cta">I’m going</div>
+                <div class="quiet">Interested</div>
+                <div class="quiet">Share</div>
+              </div>
+              <div class="community">
+                <div class="bike-stack"><div class="bike"></div><div class="bike"></div><div class="bike"></div></div>
+                <div class="community-copy">
+                  <strong>See the bikes joining</strong>
+                  <span>Opted-in riders from this event</span>
+                </div>
+                <div class="community-link">View all</div>
+              </div>
+            </div>
+          </div>
+          <img class="poster" src="http://localhost:3000/demo/poster-tambike-cafe-classico.jpg" alt="">
+        </div>
+        <div class="below-fold">
+          <div class="section-placeholder"><span class="tag">What to expect</span><strong>A relaxed rider meetup</strong></div>
+          <div class="section-placeholder"><span class="tag">Perk</span><strong>10% off coffee</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="canvas">
+      <div class="canvas-head"><span>Mobile</span><span>Poster never blocks RSVP</span></div>
+      <div class="mobile-body">
+        <div class="mobile-intro">
+          <div>
+            <span class="tag">Tambike · Saturday</span>
+            <h3>Tambike at Cafe Classico</h3>
+            <p class="summary">Classic bikes, coffee, and a relaxed hangout.</p>
+          </div>
+          <img class="poster" src="http://localhost:3000/demo/poster-tambike-cafe-classico.jpg" alt="">
+        </div>
+        <div class="essentials">
+          <span>6:00–8:00 PM</span>
+          <span>Casa Classico · Davao City</span>
+        </div>
+        <div class="decision-card">
+          <div class="decision-top">
+            <strong>Are you joining?</strong>
+            <span>16 riders</span>
+          </div>
+          <div class="actions">
+            <div class="cta">I’m going</div>
+            <div class="quiet">Interested</div>
+            <div class="quiet">Share event</div>
+          </div>
+          <div class="community">
+            <div class="bike-stack"><div class="bike"></div><div class="bike"></div><div class="bike"></div></div>
+            <div class="community-copy">
+              <strong>See the bikes joining</strong>
+              <span>16 riders · ~55 expected</span>
+            </div>
+            <div class="community-link">View all bikes</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <b>Poster becomes identification</b>
+        <p>Still visible, but no longer large enough to compete with the decision.</p>
+      </div>
+      <div class="note">
+        <b>Turnout joins the decision</b>
+        <p>The count and bikes support “I’m going” instead of living in a separate card.</p>
+      </div>
+      <div class="note">
+        <b>Details move below</b>
+        <p>Expectations, perk, venue, rules, and organizer remain available after the RSVP decision.</p>
+      </div>
+    </div>
+
+    <div class="approve" data-choice="approve-structure" onclick="toggleSelect(this)">
+      <strong>Approve this page structure</strong>
+      <p>Click here if the desktop and mobile hierarchy feel right.</p>
+    </div>
+  </div>
+</div>

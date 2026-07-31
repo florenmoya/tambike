@@ -47,18 +47,56 @@ async function signUpRider(page: Page, email: string, displayName = "Secure Ride
   await page.getByLabel(/^Password$/i).fill("passw0rd!");
   await page.getByLabel(/Confirm password/i).fill("passw0rd!");
   await page.getByLabel(/Area \/ city/i).fill("Quezon City");
-  await page.getByRole("button", { name: /Create rider account/i }).click();
+  await page.getByRole("button", { name: /Create account/i }).click();
 }
 
 test("event discovery highlights the simple tambike sample", async ({ page }) => {
   await page.goto("/events");
 
   await expect(page.locator(".feature-card.is-featured h2")).toHaveText("Tambike at Cafe Classico");
-  await expect(page.locator(".feature-card.is-featured p")).toHaveText("Every Saturday · Davao City");
+  await expect(page.locator(".feature-card.is-featured p")).toHaveText(
+    "Sat · Aug 1, 2026 · Davao City",
+  );
   await expect(page.locator(".feature-card.is-featured img")).toHaveAttribute(
     "src",
     /poster-tambike-cafe-classico/,
   );
+});
+
+test("featured event carousel displays a caption only for the highlighted poster", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const displayedCaptions = await page.locator(".feature-card.is-visible").evaluateAll((cards) =>
+    cards.flatMap((card) => {
+      const caption = card.querySelector<HTMLElement>(".feature-caption");
+      const title = card.querySelector("h2")?.textContent?.trim();
+      if (!caption || !title) return [];
+
+      const style = getComputedStyle(caption);
+      return style.visibility !== "hidden" && Number(style.opacity) > 0.99 ? [title] : [];
+    }),
+  );
+
+  expect(displayedCaptions).toEqual(["Tambike at Cafe Classico"]);
+});
+
+test("featured event carousel fans outer posters behind adjacent posters", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const projectedWidth = (title: string) =>
+    page
+      .locator(".feature-card")
+      .filter({ hasText: title })
+      .evaluate((card) => card.getBoundingClientRect().width);
+
+  const activeWidth = await projectedWidth("Tambike at Cafe Classico");
+  const adjacentWidth = await projectedWidth("Boys of Underbone Laguna Tambike");
+  const outerWidth = await projectedWidth("CCPH Upper East Tambike");
+
+  expect(activeWidth).toBeGreaterThan(adjacentWidth);
+  expect(adjacentWidth).toBeGreaterThan(outerWidth * 2);
 });
 
 test("arai charity event uses the sourced organizer poster", async ({ page }) => {
@@ -160,6 +198,72 @@ test("featured event carousel drags left to highlight the next small-bike cover"
   await expect(featuredTitle).toHaveText("Boys of Underbone Laguna Tambike", { timeout: 1_500 });
 });
 
+test("featured event remains clickable after the carousel is dragged", async ({ page }) => {
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const showcase = page.locator(".hero-showcase");
+  const featuredCard = page.locator(".feature-card.is-featured");
+  const showcaseBox = await showcase.boundingBox();
+  expect(showcaseBox).not.toBeNull();
+  if (!showcaseBox) return;
+
+  const startX = showcaseBox.x + showcaseBox.width / 2;
+  const startY = showcaseBox.y + showcaseBox.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX - 180, startY, { steps: 6 });
+  await page.mouse.up();
+
+  await expect(featuredCard).toHaveAttribute("href", "/events/boys-underbone-laguna-tambike");
+  await featuredCard.click();
+
+  await expect(page).toHaveURL(/\/events\/boys-underbone-laguna-tambike$/);
+});
+
+test("visible side posters open their event from the exposed poster area", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const sidePoster = page
+    .locator(".feature-card")
+    .filter({ hasText: "Boys of Underbone Laguna Tambike" });
+  const sidePosterBox = await sidePoster.boundingBox();
+  expect(sidePosterBox).not.toBeNull();
+  if (!sidePosterBox) return;
+
+  await page.mouse.click(
+    sidePosterBox.x + sidePosterBox.width - 12,
+    sidePosterBox.y + sidePosterBox.height / 2,
+  );
+
+  await expect(page).toHaveURL(/\/events\/boys-underbone-laguna-tambike$/);
+});
+
+test("featured poster shows feedback while its event page opens", async ({ page }) => {
+  let releaseNavigation = () => {};
+  const navigationGate = new Promise<void>((resolve) => {
+    releaseNavigation = resolve;
+  });
+
+  await page.route("**/events/tambike-cafe-classico*", async (route) => {
+    await navigationGate;
+    await route.continue();
+  });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const featuredCard = page.locator(".feature-card.is-featured");
+  await featuredCard.click();
+
+  try {
+    await expect(featuredCard.locator(".feature-cover")).toHaveAttribute("aria-busy", "true");
+    await expect(featuredCard.getByRole("status")).toHaveText("Opening event…");
+  } finally {
+    releaseNavigation();
+  }
+
+  await expect(page).toHaveURL(/\/events\/tambike-cafe-classico$/);
+});
+
 test("featured event carousel reveals balanced outer cards on large screens", async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 900 });
   await page.goto("/events", { waitUntil: "domcontentloaded" });
@@ -183,6 +287,35 @@ test("featured event carousel reveals balanced outer cards on large screens", as
     expect(box.opacity).toBe("0.28");
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(2048);
+  }
+});
+
+test("featured event carousel keeps five visible cards below the large-screen breakpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator(".feature-card.is-visible")).toHaveCount(5);
+  await expect(page.locator(".feature-card.is-wide-peek.is-visible")).toHaveCount(0);
+});
+
+test("featured event carousel vertically centers smaller cards on the highlighted card", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 900 });
+  await page.goto("/events", { waitUntil: "domcontentloaded" });
+
+  const centerYs = await page.locator(".feature-card.is-visible").evaluateAll((cards) =>
+    cards.map((card) => {
+      const box = card.getBoundingClientRect();
+      return box.y + box.height / 2;
+    }),
+  );
+  const featuredCenterY = await page.locator(".feature-card.is-featured").evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    return box.y + box.height / 2;
+  });
+
+  expect(centerYs).toHaveLength(7);
+  for (const centerY of centerYs) {
+    expect(Math.abs(centerY - featuredCenterY)).toBeLessThanOrEqual(2);
   }
 });
 
@@ -496,7 +629,7 @@ test("events page includes redesigned Tambike footer shortcuts", async ({ page }
   await expect(footer.getByText(/Next checkpoint|Pass flow, event review|Featured ride/i)).toHaveCount(0);
   await expect(footer.getByText(/Mock/i)).toHaveCount(0);
   await expect(footer.getByRole("navigation", { name: "Footer event links" }).getByRole("link", { name: "Explore events" })).toHaveAttribute("href", "/events");
-  await expect(footer.getByRole("navigation", { name: "Footer rider links" }).getByRole("link", { name: "My passes" })).toHaveAttribute("href", "/passes");
+  await expect(footer.getByRole("navigation", { name: "Footer account links" }).getByRole("link", { name: "My passes" })).toHaveAttribute("href", "/passes");
   await expect(footer.getByRole("navigation", { name: "Footer organizer links" }).getByRole("link", { name: "Create event" })).toHaveAttribute("href", "/organizer/events/create");
   await expect(footer.locator(".footer-gauge")).toHaveCSS("border-bottom-style", "solid");
 });
@@ -769,17 +902,17 @@ test("signup requires password and matching confirmation", async ({ page }, test
   await page.getByLabel(/^Password$/i).fill("passw0rd!");
   await page.getByLabel(/Confirm password/i).fill("different-pass");
   await page.getByLabel(/Area \/ city/i).fill("Quezon City");
-  await expect(page.getByRole("heading", { name: /Create rider account/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Create account/i })).toBeVisible();
   await expect(page.locator("[aria-label='Account type']").getByText(/Rider/i)).toBeVisible();
   await expect(page.getByLabel(/Bike model|Club name/i)).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Create rider account/i }).click();
+  await page.getByRole("button", { name: /Create account/i }).click();
 
   await expect(page.getByText(/Passwords must match/i)).toBeVisible();
   await expect(page).toHaveURL(/\/signup/);
 
   await page.getByLabel(/Confirm password/i).fill("passw0rd!");
-  await page.getByRole("button", { name: /Create rider account/i }).click();
+  await page.getByRole("button", { name: /Create account/i }).click();
 
   await expect(page).toHaveURL(/\/profile/);
   await expect(page.getByRole("heading", { name: /Secure Rider/i })).toBeVisible();
@@ -901,7 +1034,7 @@ test("new rider signup creates a rider profile", async ({ page }, testInfo) => {
   await page.getByLabel(/Confirm password/i).fill("passw0rd!");
   await page.getByLabel(/Area \/ city/i).fill("Quezon City");
   await expect(page.getByLabel(/Bike model|Club name/i)).toHaveCount(0);
-  await page.getByRole("button", { name: /Create rider account/i }).click();
+  await page.getByRole("button", { name: /Create account/i }).click();
 
   await expect(page).toHaveURL(/\/profile/);
   await expect(page.getByRole("heading", { name: /Jay New Rider/i })).toBeVisible();
@@ -921,8 +1054,10 @@ test("approved organizer can create an event draft", async ({ page }) => {
   await page.getByLabel(/Location name/i).fill("Katipunan Bike Night Lot");
   await page.getByLabel(/Location address/i).fill("Katipunan Avenue, Quezon City");
   await page.getByLabel(/Map link/i).fill("https://maps.example.com/katipunan-bike-night");
-  await page.getByLabel(/Date label/i).fill("Sat · July 18");
-  await page.getByLabel(/Time label/i).fill("7:00 PM - 10:00 PM");
+  await page.getByLabel(/Start date/i).fill("2099-07-18");
+  await page.getByLabel(/Start time/i).fill("19:00");
+  await page.getByLabel(/End date/i).fill("2099-07-18");
+  await page.getByLabel(/End time/i).fill("22:00");
   await page.getByLabel(/Area/i).fill("Katipunan, Quezon City");
   await page.getByLabel(/Expected riders/i).fill("45");
   await page.getByLabel(/Perk preview/i).fill("Free sticker for checked-in riders");

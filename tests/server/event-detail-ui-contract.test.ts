@@ -67,7 +67,7 @@ describe("event detail decision-first UI contract", () => {
     const screen = componentSource("EventDetail");
     const eventType = sourceIndex(screen, 'className="event-detail-type"');
     const heading = sourceIndex(screen, "<h1>");
-    const description = sourceIndex(screen, "{event.shortDescription}");
+    const description = sourceIndex(screen, "{publicSummary}");
     const essentials = sourceIndex(
       screen,
       'className="event-detail-essentials"',
@@ -118,24 +118,27 @@ describe("event detail decision-first UI contract", () => {
     const actions = sourceIndex(screen, 'className="event-detail-actions"');
     const attendeePreview = sourceIndex(screen, "<EventAttendeePreview");
     const poster = sourceIndex(screen, 'className="event-detail-poster-wrap"');
-    const whatToExpect = sourceIndex(screen, 'eyebrow="What to expect"');
+    const eventBrief = sourceIndex(screen, "<EventBrief");
     const perk = sourceIndex(screen, 'className="event-detail-perk"');
     const venue = sourceIndex(screen, 'eyebrow="Venue"');
     const rideMeetup = sourceIndex(screen, 'eyebrow="Ride / meetup"');
-    const rules = sourceIndex(screen, 'eyebrow="Rules"');
     const organizer = sourceIndex(screen, 'eyebrow="Organizer"');
     const giveaways = sourceIndex(screen, "<PublicGiveawayPanel");
 
     expect(screen).not.toContain('className="event-detail-tags"');
     expect(actions).toBeLessThan(attendeePreview);
     expect(attendeePreview).toBeLessThan(poster);
-    expect(poster).toBeLessThan(whatToExpect);
-    expect(whatToExpect).toBeLessThan(perk);
+    expect(poster).toBeLessThan(eventBrief);
+    expect(eventBrief).toBeLessThan(perk);
     expect(perk).toBeLessThan(venue);
     expect(venue).toBeLessThan(rideMeetup);
-    expect(rideMeetup).toBeLessThan(rules);
-    expect(rules).toBeLessThan(organizer);
+    expect(rideMeetup).toBeLessThan(organizer);
     expect(organizer).toBeLessThan(giveaways);
+    expect(screen).toContain("eventType={event.type}");
+    expect(screen).toContain("description={event.whatHappens}");
+    expect(screen).toContain("rules={event.rules}");
+    expect(screen).not.toContain('eyebrow="What to expect"');
+    expect(screen).not.toContain('eyebrow="Rules"');
     expect(screen).toContain("{event.perkPreview}");
     expect(screen).not.toContain('eyebrow="Perk and attendance"');
     expect(screen).not.toContain('className="event-detail-pass-stats"');
@@ -273,6 +276,33 @@ describe("event detail decision-first UI contract", () => {
     );
 
     expect(targetRule).toContain("min-height: 44px");
+  });
+
+  test("keeps the light RSVP modal readable inside dark event surfaces", () => {
+    const modal = cssRule(".rsvp-modal");
+    const title = cssRule(".rsvp-modal .buy-section-title h2");
+    const option = cssRule(".rsvp-modal .attendance-options label");
+    const darkSurfaceOption = cssRule(
+      ".buy-view .rsvp-modal .attendance-options label",
+    );
+
+    expect(modal).toContain("color: var(--ink)");
+    expect(modal).toContain("color-scheme: light");
+    expect(title).toContain("color: var(--ink)");
+    expect(option).toContain("background: #fff");
+    expect(option).toContain("color: var(--ink)");
+    expect(darkSurfaceOption).toContain("background: #fff");
+    expect(darkSurfaceOption).toContain("color: var(--ink)");
+  });
+
+  test("orders account-required actions by primary intent", () => {
+    const modal = componentSource("AuthGateModal");
+    const login = sourceIndex(modal, 'href="/login"');
+    const signup = sourceIndex(modal, 'href="/signup"');
+    const cancel = sourceIndex(modal, "onClick={onClose}");
+
+    expect(login).toBeLessThan(signup);
+    expect(signup).toBeLessThan(cancel);
   });
 
   test("provides event-detail-scoped keyboard focus outlines", () => {

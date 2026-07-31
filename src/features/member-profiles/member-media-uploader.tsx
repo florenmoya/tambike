@@ -283,8 +283,8 @@ export function MemberMediaUploader({
 
   return (
     <div className="member-media-uploader">
-      <Label htmlFor={inputId}>Choose profile photo</Label>
-      <p>Optional · Square images work best · JPEG, PNG, or WebP · Up to 8 MB.</p>
+      <Label htmlFor={inputId}>Choose and upload profile photo</Label>
+      <p>JPEG, PNG, or WebP · Up to 8 MB · Cropped to a square · Upload starts after selection.</p>
       <div className="member-media-uploader__controls">
         <MemberMediaFileChooser
           inputRef={inputRef}

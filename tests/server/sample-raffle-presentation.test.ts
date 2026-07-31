@@ -39,7 +39,7 @@ function completedInspection(
       mechanics: "Old completed mechanics",
       terms: "Old completed terms",
       prizePoolId: "completed-prize-pool",
-      publicTitle: "Cafe Classico Helmet",
+      publicTitle: "HJC C10 FOP Full-Face Helmet",
       publicImageMediaId,
     },
   };
@@ -128,14 +128,14 @@ describe("sample raffle public presentation refresh", () => {
       SAMPLE_RAFFLE_PHOTO_SOURCES.ongoing.downloadUrl,
     ]);
     expect(deps.stored).toEqual([
-      "media/giveaway-prizes/completed-prize-pool/sample-raffle-helmet-photo-v1.webp",
+      "media/giveaway-prizes/completed-prize-pool/sample-raffle-hjc-c10-fop-photo-v1.webp",
       "media/giveaway-prizes/ongoing-prize-pool/sample-raffle-gear-photo-v1.webp",
     ]);
     expect(deps.persisted).toEqual([
       expect.objectContaining({
         images: {
           completed: expect.objectContaining({
-            mediaId: "sample-raffle-helmet-photo-v1",
+            mediaId: "sample-raffle-hjc-c10-fop-photo-v1",
             width: 1200,
             height: 900,
           }),
@@ -213,7 +213,7 @@ describe("sample raffle public presentation refresh", () => {
     ).rejects.toThrow("database failed");
 
     expect(deps.deleted).toEqual([
-      "media/giveaway-prizes/completed-prize-pool/sample-raffle-helmet-photo-v1.webp",
+      "media/giveaway-prizes/completed-prize-pool/sample-raffle-hjc-c10-fop-photo-v1.webp",
       "media/giveaway-prizes/ongoing-prize-pool/sample-raffle-gear-photo-v1.webp",
     ]);
   });

@@ -29,11 +29,11 @@ import {
 } from "@/server/giveaways/audit";
 
 export const SAMPLE_RAFFLE_EVENT_ID = "tambike-cafe-classico";
-export const COMPLETED_SAMPLE_RAFFLE_TITLE = "Cafe Classico Helmet Raffle";
+export const COMPLETED_SAMPLE_RAFFLE_TITLE = "HJC C10 FOP Helmet Raffle";
 export const ONGOING_SAMPLE_RAFFLE_TITLE = "Weekend Rider Gear Raffle";
 export const SAMPLE_RAFFLE_WINNER_EMAIL = "raffle.winner.sample@tambike.ph";
-export const SAMPLE_RAFFLE_WINNER_NAME = "Raffle Winner";
-export const SAMPLE_RAFFLE_WINNER_ALIAS = "Cafe Classico Rider";
+export const SAMPLE_RAFFLE_WINNER_NAME = "Gabriel Cruz";
+export const SAMPLE_RAFFLE_WINNER_ALIAS = "Gabriel Cruz";
 
 export interface SampleRaffleManifest {
   eventId: string;
@@ -249,7 +249,9 @@ export function completedSampleRaffleInput(
     maxEntriesPerRider: 1,
     mechanics: "One eligible rider was selected from valid entries.",
     terms:
-      "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+      "The winner receives one HJC C10 FOP Full-Face Helmet. The organizer will contact the winner with claiming instructions.",
+    sponsorDisclosure:
+      "HJC is not affiliated with or endorsing this event.",
     timeZone: "Asia/Manila",
     winnerLimits: { perRider: 1, total: 1 },
     organizerAttestation: true,
@@ -266,11 +268,11 @@ export function completedSampleRaffleInput(
         fulfilmentMode: "onsite",
         publicPresentation: {
           disclosure: "revealed",
-          title: "Cafe Classico Helmet",
-          description: "A full-face helmet for safer everyday rides.",
+          title: "HJC C10 FOP Full-Face Helmet",
+          description: "A branded full-face helmet for everyday road riding.",
         },
         inventory: { kind: "finite", quantity: 1 },
-        items: [{ title: "Cafe Classico Helmet" }],
+        items: [{ title: "HJC C10 FOP Full-Face Helmet" }],
       },
     ],
   };

@@ -54,7 +54,7 @@ export function RiderGarageView({
 
         <div className="garage-identity-copy">
           <div className="garage-identity-kicker">
-            <span>{profile.role === "organizer" ? "Organizer garage" : "Rider garage"}</span>
+            <span>Profile</span>
             {profile.organizer ? (
               <Badge variant="secondary">
                 <ShieldCheck aria-hidden="true" /> Organizer
@@ -69,14 +69,14 @@ export function RiderGarageView({
               <span>{profile.organizer.hostedEventCount} hosted events</span>
             ) : null}
           </div>
-          {profile.bio ? <p>{profile.bio}</p> : <p>Garage notes are still being written.</p>}
+          {profile.bio ? <p>{profile.bio}</p> : <p>No profile note added yet.</p>}
         </div>
       </header>
 
       {motorcycle ? (
         <section className="garage-showcase" aria-labelledby="motorcycle-title">
           <div className="garage-showcase-heading">
-            <span>One bike, kept close</span>
+            <span>Motorcycle</span>
             <h2 id="motorcycle-title">{motorcycleTitle(motorcycle)}</h2>
           </div>
 
@@ -96,7 +96,7 @@ export function RiderGarageView({
             </div>
           ) : (
             <div className="garage-motorcycle-empty">
-              <span>Showcase awaiting its first photograph</span>
+              <span>No motorcycle photo yet.</span>
               <strong>{motorcycle.make} {motorcycle.model}</strong>
             </div>
           )}
@@ -134,9 +134,8 @@ export function RiderGarageView({
         </section>
       ) : (
         <section className="garage-showcase-empty" aria-labelledby="empty-garage-title">
-          <span>Motorcycle showcase</span>
+          <span>Motorcycle</span>
           <h2 id="empty-garage-title">No motorcycle added yet</h2>
-          <p>This garage card is published, but its keeper has not added a motorcycle.</p>
         </section>
       )}
     </article>

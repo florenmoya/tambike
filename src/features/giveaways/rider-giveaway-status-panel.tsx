@@ -80,7 +80,7 @@ export async function submitRiderGiveawayEntry(
 
 export function riderGiveawayEntryFailureMessage(code: "UNAUTHENTICATED" | "ERROR") {
   if (code === "UNAUTHENTICATED") {
-    return "Log in with your rider account before entering this giveaway.";
+    return "Log in to your account before entering this giveaway.";
   }
 
   return "We could not record your entry. The giveaway may no longer be open, you may not qualify yet, or the campaign code may be wrong or unavailable.";

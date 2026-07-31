@@ -77,6 +77,20 @@ describe("event attendee route and roster presentation", () => {
       page: { summary, attendees: [], pageSize: 24 },
     });
 
+    await expect(load(
+      "ride-1",
+      async () => {
+        throw Object.assign(new Error("UNAUTHENTICATED"), {
+          code: "UNAUTHENTICATED",
+        });
+      },
+      async () => summary,
+      () => { throw new Error("unexpected not-found"); },
+    )).resolves.toEqual({
+      signedIn: false,
+      page: { summary, attendees: [], pageSize: 24 },
+    });
+
     const marker = new Error("route-not-found");
     await expect(load(
       "missing",
@@ -122,6 +136,39 @@ describe("event attendee route and roster presentation", () => {
     expect(markup).not.toMatch(/email|userId|account id|verificationStatus/i);
   });
 
+  test("eagerly loads the first roster row motorcycle photos only", () => {
+    const attendees = Array.from({ length: 5 }, (_, index) => ({
+      slug: `rider-${index + 1}`,
+      displayName: `Rider ${index + 1}`,
+      area: "Metro Manila",
+      motorcycle: {
+        make: "Honda",
+        model: `CB${index + 1}`,
+        photos: [
+          {
+            url: `/media/bike-${index + 1}`,
+            position: 0,
+            width: 1600,
+            height: 900,
+          },
+        ],
+      },
+    }));
+    const markup = renderToStaticMarkup(
+      createElement(EventAttendeeRoster, {
+        initialPage: { ...enabledPage, attendees },
+        signedIn: true,
+      }),
+    );
+    const imageTag = (src: string) =>
+      markup.match(new RegExp(`<img[^>]*src="${src}"[^>]*>`))?.[0] ?? "";
+
+    for (const index of [1, 2, 3, 4]) {
+      expect(imageTag(`/media/bike-${index}`)).toContain('loading="eager"');
+    }
+    expect(imageTag("/media/bike-5")).toContain('loading="lazy"');
+  });
+
   test("shows disabled and enabled guest states without member cards", () => {
     const disabledMarkup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, {
@@ -134,7 +181,7 @@ describe("event attendee route and roster presentation", () => {
         signedIn: false,
       }),
     );
-    expect(disabledMarkup).toContain("The rider list isn’t available for this event.");
+    expect(disabledMarkup).toContain("The attendee list isn’t available for this event.");
     expect(disabledMarkup).not.toMatch(/counts only|organizer|privacy/i);
     expect(disabledMarkup).not.toContain("Mika Santos");
 
@@ -146,7 +193,7 @@ describe("event attendee route and roster presentation", () => {
     expect(guestMarkup).not.toContain("Mika Santos");
   });
 
-  test("shows a neutral state when going riders have no visible profiles", () => {
+  test("shows a neutral state when attendees have no visible profiles", () => {
     const markup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, {
         initialPage: {
@@ -159,19 +206,19 @@ describe("event attendee route and roster presentation", () => {
       }),
     );
 
-    expect(markup).toContain("No rider profiles to show yet");
+    expect(markup).toContain("No profiles to show yet");
     expect(markup.indexOf("Who’s going")).toBeLessThan(
-      markup.indexOf("No rider profiles to show yet"),
+      markup.indexOf("No profiles to show yet"),
     );
     expect(markup).not.toMatch(/anonymous riders|visible riders|privacy/i);
     expect(markup).not.toContain("Mika Santos");
   });
 
-  test("keeps rider loading behavior while simplifying the empty state", () => {
+  test("keeps attendee loading behavior while simplifying the empty state", () => {
     const markup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, { initialPage: enabledPage, signedIn: true }),
     );
-    expect(markup).toContain("Load more riders");
+    expect(markup).toContain("Load more attendees");
 
     const emptyMarkup = renderToStaticMarkup(
       createElement(EventAttendeeRoster, {
@@ -184,7 +231,7 @@ describe("event attendee route and roster presentation", () => {
         signedIn: true,
       }),
     );
-    expect(emptyMarkup).toContain("No riders yet");
+    expect(emptyMarkup).toContain("No attendees yet");
     expect(emptyMarkup).toContain('href="/events/ride-1/register"');
     expect(emptyMarkup).toContain("Join this event");
 
@@ -240,7 +287,7 @@ describe("organizer roster ownership controls", () => {
     );
 
     expect(markup).toMatch(/You control whether signed-in members can see/i);
-    expect(markup).toContain("Show rider roster");
+    expect(markup).toContain("Show attendee roster");
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain('aria-live="polite"');

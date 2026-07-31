@@ -175,14 +175,14 @@ export function RiderSelfCheckInScreen({ token }: RiderSelfCheckInScreenProps) {
               needsLogin ? (
                 <LoginRequiredCard
                   href={loginHref}
-                  body="Log in with the rider account that holds this event pass, then return here to confirm your arrival."
+                  body="Log in with the account that holds this event pass, then return here to confirm your arrival."
                 />
               ) : hasNonRiderAccount ? (
                 <StatusCard
                   tone="muted"
                   icon={<ShieldCheckIcon className="size-5" />}
-                  title="Rider account required"
-                  body="Self check-in is limited to the rider account that owns the active Tambike Pass."
+                  title="Account required"
+                  body="Self check-in is limited to the account that owns the active Tambike Pass."
                 />
               ) : (
                 <ConfirmCheckInCard

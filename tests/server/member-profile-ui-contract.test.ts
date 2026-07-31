@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -16,6 +17,19 @@ import {
 import { RiderGarageView } from "../../src/features/member-profiles/rider-garage-view";
 import { motorcyclePhotoCapacityLabel } from "../../src/features/member-profiles/motorcycle-photo-workspace";
 import type { MemberProfileEditorView, MemberProfileView } from "../../src/features/member-profiles/types";
+
+const requireFromMemberProfileUiTest = createRequire(import.meta.url);
+const JSDOM = (
+  requireFromMemberProfileUiTest("jsdom") as {
+    JSDOM: new (html: string) => {
+      window: {
+        document: Document;
+        FormData: typeof FormData;
+        close: () => void;
+      };
+    };
+  }
+).JSDOM;
 
 function source(path: string) {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -97,14 +111,30 @@ async function loadProfileViewAction() {
   }).ProfileViewAction;
 }
 
-async function loadProfileDetailsSaveFooter() {
+async function loadProfileSaveFooter() {
   const settings = await import("../../src/features/member-profiles/profile-settings");
   return (settings as unknown as {
-    ProfileDetailsSaveFooter?: (props: {
+    ProfileSaveFooter?: (props: {
       pending: boolean;
       status: string;
     }) => ReactNode;
-  }).ProfileDetailsSaveFooter;
+  }).ProfileSaveFooter;
+}
+
+async function loadProfileInputFromSubmitEvent() {
+  const settings = await import("../../src/features/member-profiles/profile-settings");
+  return (settings as unknown as {
+    profileInputFromSubmitEvent?: (event: {
+      currentTarget: HTMLFormElement;
+      preventDefault: () => void;
+    }) => {
+      displayName: string;
+      area: string;
+      bio: string;
+      visibility: string;
+      defaultRosterIdentity: string;
+    };
+  }).profileInputFromSubmitEvent;
 }
 
 const completeProfileInput: ProfileEditorPresentationInput = {
@@ -119,6 +149,45 @@ const completeProfileInput: ProfileEditorPresentationInput = {
 };
 
 describe("member profile App Router and UI contracts", () => {
+  test("prevents the browser form reset before reading controlled profile privacy fields", async () => {
+    const profileInputFromSubmitEvent = await loadProfileInputFromSubmitEvent();
+    expect(profileInputFromSubmitEvent).toBeTypeOf("function");
+
+    const dom = new JSDOM(`
+      <form>
+        <input name="displayName" value="Browser QA Rider" />
+        <input name="area" value="Quezon City" />
+        <textarea name="bio">Weekend rider.</textarea>
+        <input type="hidden" name="visibility" value="PUBLIC" />
+        <input type="hidden" name="defaultRosterIdentity" value="VISIBLE" />
+      </form>
+    `);
+    const form = dom.window.document.querySelector("form")!;
+    let prevented = false;
+    const originalFormData = globalThis.FormData;
+    globalThis.FormData = dom.window.FormData as typeof FormData;
+
+    try {
+      expect(profileInputFromSubmitEvent!({
+        currentTarget: form,
+        preventDefault: () => {
+          prevented = true;
+        },
+      })).toEqual({
+        displayName: "Browser QA Rider",
+        area: "Quezon City",
+        bio: "Weekend rider.",
+        visibility: "PUBLIC",
+        defaultRosterIdentity: "VISIBLE",
+      });
+    } finally {
+      globalThis.FormData = originalFormData;
+      dom.window.close();
+    }
+
+    expect(prevented).toBe(true);
+  });
+
   test("explains empty, partial, and full motorcycle gallery capacity", () => {
     expect(motorcyclePhotoCapacityLabel(0))
       .toBe("0 of 5 photos · Add up to 5");
@@ -135,7 +204,7 @@ describe("member profile App Router and UI contracts", () => {
 
     expect(workspace).toContain("Motorcycle photos *");
     expect(workspace).toContain(
-      "The first photo is your cover. JPEG, PNG, or WebP · Up to 8 MB each.",
+      "First photo becomes the cover. Choose up to 5 JPEG, PNG, or WebP images · 8 MB maximum each · Upload starts after selection.",
     );
     expect(workspace).toContain("motorcyclePhotoCapacityLabel(photos.length)");
     expect(workspace).toMatch(
@@ -143,7 +212,7 @@ describe("member profile App Router and UI contracts", () => {
     );
   });
 
-  test("names the first missing publish requirement and shows only incomplete signals", () => {
+  test("names the first missing profile detail without claiming it blocks publication", () => {
     const presentation = getProfileEditorPresentation({
       ...completeProfileInput,
       displayName: "",
@@ -153,7 +222,7 @@ describe("member profile App Router and UI contracts", () => {
 
     expect(presentation.state).toBe("incomplete");
     expect(presentation.label).toBe("Complete your profile");
-    expect(presentation.description).toBe("Display name is required to publish.");
+    expect(presentation.description).toBe("Display name is still needed.");
     expect(presentation.requirements.map(({ label, required, ready }) => ({
       label,
       required,
@@ -163,24 +232,21 @@ describe("member profile App Router and UI contracts", () => {
       { label: "Area / city", required: true, ready: false },
       { label: "Make", required: true, ready: true },
       { label: "Model", required: true, ready: true },
-      { label: "Motorcycle photos", required: true, ready: false },
+      { label: "Motorcycle photo", required: true, ready: false },
     ]);
-    expect(presentation.signals).toEqual([
-      { label: "Identity", ready: false },
-      { label: "Motorcycle", ready: true },
-      { label: "Photo", ready: false },
-    ]);
+    expect(presentation.signals).toEqual([]);
     expect(presentation.viewAction).toEqual({
       label: "Preview profile",
       href: "/profile/preview",
     });
   });
 
-  test("returns compact ready and live states with one contextual viewing action", () => {
+  test("returns compact ready-to-save and live states with one contextual viewing action", () => {
     const ready = getProfileEditorPresentation(completeProfileInput);
     expect(ready).toMatchObject({
       state: "ready",
-      label: "Ready to publish",
+      label: "Ready to save",
+      description: "Save your profile details to finish setup.",
       signals: [],
       viewAction: { label: "Preview profile", href: "/profile/preview" },
     });
@@ -192,11 +258,27 @@ describe("member profile App Router and UI contracts", () => {
     expect(live).toMatchObject({
       state: "live",
       label: "Live",
+      description: "Others can view your profile.",
       signals: [],
       viewAction: {
         label: "View public profile",
         href: "/riders/mika-santos",
       },
+    });
+  });
+
+  test("uses singular, actionable copy when only a motorcycle photo is missing", () => {
+    const presentation = getProfileEditorPresentation({
+      ...completeProfileInput,
+      photoCount: 0,
+    });
+
+    expect(presentation.description).toBe(
+      "Motorcycle photo is still needed.",
+    );
+    expect(presentation.firstMissing).toMatchObject({
+      label: "Motorcycle photo",
+      href: "#motorcycle-photos",
     });
   });
 
@@ -301,7 +383,7 @@ describe("member profile App Router and UI contracts", () => {
     expect(preview).toContain("Back to edit");
     expect(preview).toContain("<RiderGarageView");
     expect(preview).toContain("toSavedProfilePreviewView");
-    expect(preview).toContain('aria-label="Your rider profile preview"');
+    expect(preview).toContain('aria-label="Your profile preview"');
     expect(preview).not.toMatch(/<h1\b/);
     expect(garageMarkup.match(/<h1\b/g)).toHaveLength(1);
     expect(preview).not.toContain("Complete your profile");
@@ -316,7 +398,7 @@ describe("member profile App Router and UI contracts", () => {
 
     expect(screen).toContain('title="Log in to preview profile"');
     expect(screen).toContain(
-      'body="Your preview is only available from your rider account."',
+      'body="Your preview is only available from your account."',
     );
     expect(narrowStart).toBeGreaterThanOrEqual(0);
     expect(narrowStyles).toMatch(
@@ -326,7 +408,7 @@ describe("member profile App Router and UI contracts", () => {
       /\.previewNotice\s*>\s*:global\(\[data-slot="button"\]\)\s*\{[\s\S]*?width:\s*100%;/,
     );
     expect(narrowStyles).toMatch(
-      /\.motorcyclePhotoGrid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/,
+      /\.motorcyclePhotoGrid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
   });
 
@@ -351,10 +433,21 @@ describe("member profile App Router and UI contracts", () => {
   test("keeps profile editing and profile viewing as separate routes", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 
-    expect(settings).toContain("Your rider profile");
+    expect(settings).toContain("Your profile");
     expect(settings).toContain(
-      "Add the details riders see when they open your profile.",
+      "Add the details people see when they open your profile.",
     );
+    expect(settings).toContain("Profile details");
+    expect(settings).not.toContain(
+      "This is the name, area, and note shown on your profile.",
+    );
+    expect(settings).toContain("About you (optional)");
+    expect(settings).toContain(
+      "Avoid phone numbers, email addresses, and exact locations. 500 characters maximum.",
+    );
+    expect(settings).toContain("Members only — signed-in members");
+    expect(settings).toContain("Visible — show my profile");
+    expect(settings).not.toMatch(/rider profile|garage card|garage note/i);
     expect(settings).toContain("getProfileEditorPresentation");
     expect(settings).toContain("<ProfileViewAction");
     expect(settings).toContain("viewAction={presentation.viewAction}");
@@ -364,13 +457,69 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).not.toContain("toProfilePreviewView");
     expect(settings).not.toContain("Edit profile");
     expect(settings).not.toContain("View your rider page");
+    expect(settings).not.toContain('aria-label="Profile requirements"');
+  });
+
+  test("uses neutral profile and account copy across public member surfaces", () => {
+    const screen = source("src/features/tambike-demo/tambike-screen.tsx");
+    const profileScreen = source(
+      "src/features/member-profiles/member-profile-screen.tsx",
+    );
+    const profilePreview = source(
+      "src/features/member-profiles/profile-preview.tsx",
+    );
+    const profileAdapter = source(
+      "src/features/member-profiles/profile-preview-adapter.ts",
+    );
+    const profileView = source(
+      "src/features/member-profiles/rider-garage-view.tsx",
+    );
+    const checkIn = source(
+      "src/features/check-in/rider-self-check-in-screen.tsx",
+    );
+    const giveawayStatus = source(
+      "src/features/giveaways/rider-giveaway-status-panel.tsx",
+    );
+    const giveawayClaim = source(
+      "src/features/giveaways/giveaway-claim-screen.tsx",
+    );
+    const serverActions = source("src/server/actions.ts");
+
+    expect(screen).toContain('title: "Account"');
+    expect(screen).toContain('ariaLabel: "Footer account links"');
+    expect(screen).toContain("Create account");
+    expect(screen).toContain("Join Tambike");
+    expect(screen).not.toMatch(
+      /Create rider account|Rider signup|New rider\?|rider profile|rider account/,
+    );
+    expect(profileScreen).toContain(
+      'aria-label={`${profile.displayName} profile`}',
+    );
+    expect(profileScreen).toContain("Tambike / Profiles");
+    expect(profilePreview).toContain('aria-label="Your profile preview"');
+    expect(profileAdapter).toContain('"Your name"');
+    expect(profileView).toContain("<span>Profile</span>");
+    expect(profileView).toContain("<span>Motorcycle</span>");
+    expect(profileView).toContain("<span>No motorcycle photo yet.</span>");
+    expect(profileView).not.toMatch(/Rider garage|Organizer garage|garage card/i);
+    expect(profileView).not.toMatch(
+      /One bike, kept close|Showcase awaiting its first photograph|This profile is published/i,
+    );
+    for (const memberFacingSource of [
+      checkIn,
+      giveawayStatus,
+      giveawayClaim,
+      serverActions,
+    ]) {
+      expect(memberFacingSource).not.toMatch(/rider account/i);
+    }
   });
 
   test.each([
     { profileDirty: true, motorcycleDirty: false },
     { profileDirty: false, motorcycleDirty: true },
   ])(
-    "blocks the saved profile action when a draft is dirty: $profileDirty/$motorcycleDirty",
+    "keeps the saved profile action available when a draft is dirty: $profileDirty/$motorcycleDirty",
     async ({ profileDirty, motorcycleDirty }) => {
       const ProfileViewAction = await loadProfileViewAction();
       expect(ProfileViewAction).toBeTypeOf("function");
@@ -381,12 +530,11 @@ describe("member profile App Router and UI contracts", () => {
         motorcycleDirty,
       }));
 
-      expect(markup).toMatch(/<button\b[^>]*disabled=""/);
+      expect(markup).toContain('href="/profile/preview"');
       expect(markup).toContain('data-variant="outline"');
-      expect(markup).toContain("Preview profile");
-      expect(markup).toContain("Save changes before viewing your profile.");
-      expect(markup).not.toContain("<a ");
-      expect(markup).not.toContain('href="/profile/preview"');
+      expect(markup).toContain("Preview saved profile");
+      expect(markup).toContain("Unsaved changes are not included.");
+      expect(markup).not.toContain("<button");
     },
   );
 
@@ -424,7 +572,7 @@ describe("member profile App Router and UI contracts", () => {
       expect(settings).toContain(label);
     }
     for (const label of [
-      "Garage note (optional)",
+      "About you (optional)",
       "Profile photo (optional)",
       "Year (optional)",
       "Displacement (cc) (optional)",
@@ -433,7 +581,7 @@ describe("member profile App Router and UI contracts", () => {
     ]) {
       expect(settings).toContain(label);
     }
-    expect(settings).toContain("* Required to publish");
+    expect(settings).toContain("* Needed for a complete profile");
     expect(settings).toContain("<MotorcyclePhotoWorkspace");
     expect(settings).toContain('required value={profileDraft.displayName}');
     expect(settings).toContain('required value={profileDraft.area}');
@@ -495,40 +643,48 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toMatch(
       /@media\s*\(max-width:\s*640px\)[\s\S]*?\.profileDetailsSaveFooter\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);[\s\S]*?\.profileDetailsSaveButton\s*\{[\s\S]*?width:\s*100%;/,
     );
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*640px\)[\s\S]*?\.motorcyclePhotoGrid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    );
+    expect(styles).toMatch(
+      /\.studioStatus\s*>\s*:global\(\[data-slot="button"\]\[data-variant="outline"\]\)\s*\{[\s\S]*?background:\s*var\(--studio-paper\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
+    );
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
 
-  test("attaches a clear save action to profile details", async () => {
-    const ProfileDetailsSaveFooter = await loadProfileDetailsSaveFooter();
-    expect(ProfileDetailsSaveFooter).toBeTypeOf("function");
+  test("offers one save action for profile and motorcycle details", async () => {
+    const ProfileSaveFooter = await loadProfileSaveFooter();
+    expect(ProfileSaveFooter).toBeTypeOf("function");
 
-    const markup = renderToStaticMarkup(ProfileDetailsSaveFooter!({
+    const markup = renderToStaticMarkup(ProfileSaveFooter!({
       pending: false,
-      status: "Profile changes saved.",
+      status: "Profile saved.",
     }));
 
-    expect(markup).toContain('aria-label="Save profile details"');
-    expect(markup).toContain("Profile details");
+    expect(markup).toContain('aria-label="Save profile"');
     expect(markup).toContain(
-      "Saves identity, visibility, and attendance privacy.",
+      "Saves your profile and motorcycle details. Photos upload automatically when selected.",
     );
-    expect(markup).toContain("Save profile details");
+    expect(markup.match(/<button\b/g)).toHaveLength(1);
+    expect(markup).toContain("Save profile");
+    expect(markup).not.toContain("Save profile details");
+    expect(markup).not.toContain("Save motorcycle details");
     expect(markup).toContain('aria-live="polite"');
-    expect(markup).toContain("Profile changes saved.");
+    expect(markup).toContain("Profile saved.");
   });
 
-  test("shows a disabled saving state for profile details", async () => {
-    const ProfileDetailsSaveFooter = await loadProfileDetailsSaveFooter();
-    expect(ProfileDetailsSaveFooter).toBeTypeOf("function");
+  test("shows one disabled saving state for the combined save", async () => {
+    const ProfileSaveFooter = await loadProfileSaveFooter();
+    expect(ProfileSaveFooter).toBeTypeOf("function");
 
-    const markup = renderToStaticMarkup(ProfileDetailsSaveFooter!({
+    const markup = renderToStaticMarkup(ProfileSaveFooter!({
       pending: true,
       status: "",
     }));
 
     expect(markup).toMatch(/<button\b[^>]*disabled=""/);
     expect(markup).toContain("Saving…");
-    expect(markup).not.toContain(">Save profile details</button>");
+    expect(markup).not.toContain(">Save profile</button>");
   });
 
   test("allows local photo selection before motorcycle persistence", () => {
@@ -576,7 +732,7 @@ describe("member profile App Router and UI contracts", () => {
     )).toMatchObject({ make: "Honda", model: "CB650R" });
   });
 
-  test("labels profile visibility, attendance privacy, and explicit save or publish actions", () => {
+  test("labels profile visibility and attendance privacy with one combined save action", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 
     expect(settings).toContain('htmlFor="profile-visibility"');
@@ -584,8 +740,16 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).toContain('htmlFor="default-roster-identity"');
     expect(settings).toContain('id="default-roster-identity"');
     expect(settings).toMatch(/<Card id="attendance-privacy"[\s\S]*?<CardTitle>Attendance privacy<\/CardTitle>/);
-    expect(settings).toMatch(/Publish profile|Save profile changes/);
-    expect(settings).toMatch(/Identity/);
+    expect(settings).not.toContain("Publish profile");
+    expect(settings).not.toContain("submitProfileForm");
+    expect(settings).toContain("Save profile");
+    expect(settings).not.toContain("Save profile details");
+    expect(settings).not.toContain("Save motorcycle details");
+    expect(settings).toMatch(
+      /<form[\s\S]*?onSubmit=\{\(event\) => \{[\s\S]*?profileInputFromSubmitEvent\(event\)[\s\S]*?<\/form>/,
+    );
+    expect(settings.match(/type="submit"/g)).toHaveLength(1);
+    expect(settings).toMatch(/Profile details/);
     expect(settings).toMatch(/Attendance privacy/);
     expect(source("src/features/member-profiles/motorcycle-photo-workspace.tsx"))
       .toMatch(/Motorcycle photos/i);
@@ -593,13 +757,13 @@ describe("member profile App Router and UI contracts", () => {
       '<MemberMediaUploader purpose="motorcycle-photo"',
     );
     expect(settings).toContain(
-      "This setting applies to all current and future event rosters.",
+      "Used by default for every event roster.",
     );
     expect(settings).toContain(
       "Private or unpublished profiles always appear anonymously.",
     );
     expect(settings).toContain("Anonymous — count me without my card");
-    expect(settings).toContain("Visible — show my eligible rider card");
+    expect(settings).toContain("Visible — show my profile");
     expect(settings).not.toContain("future event registrations only");
     expect(settings).not.toContain(
       ["Existing RSVPs keep ", "their own choice"].join(""),
@@ -631,15 +795,17 @@ describe("member profile App Router and UI contracts", () => {
     const profileSettingsSource = source("src/features/member-profiles/profile-settings.tsx");
     expect(profileSettingsSource).toContain('name="visibility"');
     expect(profileSettingsSource).toContain('name="defaultRosterIdentity"');
-    expect(profileSettingsSource).toMatch(/handleProfileSave = async \(formData: FormData\)/);
+    expect(profileSettingsSource).toMatch(
+      /handleSaveProfile = async \(input: UpdateMemberProfileInput\)/,
+    );
   });
 
   test("starts profile photo upload from file selection without a second button", () => {
     const uploader = source("src/features/member-profiles/member-media-uploader.tsx");
 
-    expect(uploader).toContain("Choose profile photo");
+    expect(uploader).toContain("Choose and upload profile photo");
     expect(uploader).toContain(
-      "Optional · Square images work best · JPEG, PNG, or WebP · Up to 8 MB.",
+      "JPEG, PNG, or WebP · Up to 8 MB · Cropped to a square · Upload starts after selection.",
     );
     expect(uploader).toContain("void uploadSelected(selected)");
     expect(uploader).toContain('aria-live="polite"');
@@ -650,7 +816,7 @@ describe("member profile App Router and UI contracts", () => {
   test("keeps motorcycle photo controls keyboard-operable and explicitly labeled", () => {
     const workspace = source("src/features/member-profiles/motorcycle-photo-workspace.tsx");
 
-    expect(workspace).toMatch(/<Button[\s\S]*?Move [^"{]*(?:left|right)/i);
+    expect(workspace).toMatch(/<Button[\s\S]*?(?:Previous|Next) position/i);
     expect(workspace).toMatch(/<Button[\s\S]*?Delete motorcycle photo/i);
     expect(workspace).not.toMatch(/<div[^>]+onClick=/);
   });
@@ -662,18 +828,18 @@ describe("member profile App Router and UI contracts", () => {
     const settings = source("src/features/member-profiles/profile-settings.tsx");
 
     expect(workspace).toContain("Set as cover");
-    expect(workspace).toContain("Move left");
-    expect(workspace).toContain("Move right");
+    expect(workspace).toContain("Previous position");
+    expect(workspace).toContain("Next position");
     expect(workspace).toContain("Cover photo");
     expect(workspace).toMatch(/Photo\s*\{index \+ 1\}\s*of\s*\{photos.length\}/);
     expect(workspace).toContain("onReorder(index, 0)");
     expect(workspace).toMatch(/Set motorcycle photo \$\{index \+ 1\} as cover/);
-    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} left/);
-    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} right/);
+    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} to the previous position/);
+    expect(workspace).toMatch(/Move motorcycle photo \$\{index \+ 1\} to the next position/);
     expect(workspace).toContain('loading={index === 0 ? "eager" : undefined}');
     expect(workspace).not.toContain("Move earlier");
     expect(workspace).not.toContain("Move later");
-    expect(settings).toContain('direction < 0 ? "left" : "right"');
+    expect(settings).toContain('direction < 0 ? "previous" : "next"');
     expect(settings).not.toContain('"earlier" : "later"');
   });
 
@@ -798,8 +964,8 @@ describe("member profile App Router and UI contracts", () => {
     expect(workspace).toMatch(/Cover/);
     expect(workspace).toMatch(/Retry/);
     expect(workspace).toMatch(/Remove/);
-    expect(workspace).toMatch(/Move motorcycle photo .* left/);
-    expect(workspace).toMatch(/Move motorcycle photo .* right/);
+    expect(workspace).toMatch(/Move motorcycle photo .* to the previous position/);
+    expect(workspace).toMatch(/Move motorcycle photo .* to the next position/);
   });
 
   test("keeps a finalized refresh error locked to refresh-only recovery", () => {
@@ -808,7 +974,7 @@ describe("member profile App Router and UI contracts", () => {
     );
 
     expect(workspace).toMatch(
-      /item\.status === "uploaded" && item\.error[\s\S]*?>Refresh gallery<\/Button>/,
+      /item\.status === "uploaded" && item\.error[\s\S]*?>Show uploaded photo<\/Button>/,
     );
     expect(workspace).toMatch(
       /\{item\.status !== "uploaded" \? \([\s\S]*?disabled=\{item\.status === "uploading"\}[\s\S]*?>Remove<\/Button>[\s\S]*?\) : null\}/,

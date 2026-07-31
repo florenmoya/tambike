@@ -631,8 +631,12 @@ function CreateEventSection({
                 locationName: String(formData.get("locationName") ?? ""),
                 locationAddress: String(formData.get("locationAddress") ?? ""),
                 locationMapLink: String(formData.get("locationMapLink") ?? ""),
-                date: String(formData.get("date") ?? ""),
-                time: String(formData.get("time") ?? ""),
+                startDate: String(formData.get("startDate") ?? ""),
+                startTime: String(formData.get("startTime") ?? ""),
+                endDate: String(formData.get("endDate") ?? ""),
+                endTime: String(formData.get("endTime") ?? ""),
+                timeZone: String(formData.get("timeZone") ?? "Asia/Manila"),
+                recurrence: "NONE",
                 area: String(formData.get("area") ?? ""),
                 expectedRiders: Number(formData.get("expectedRiders") ?? 1),
                 perkPreview: String(formData.get("perkPreview") ?? ""),
@@ -647,12 +651,13 @@ function CreateEventSection({
               setCreatedEvent(draft);
             }}
           >
-            <Field label="Event title">
-              <Input name="title" required placeholder="Katipunan Bike Night" />
+            <Field label="Event title" htmlFor="title">
+              <Input id="title" name="title" required placeholder="Katipunan Bike Night" />
             </Field>
-            <Field label="Event type">
+            <Field label="Event type" htmlFor="type">
               <select
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                id="type"
                 name="type"
                 required
                 defaultValue="Tambike"
@@ -664,29 +669,45 @@ function CreateEventSection({
                 ))}
               </select>
             </Field>
-            <Field label="Location name">
-              <Input name="locationName" required maxLength={EVENT_LOCATION_LIMITS.name} placeholder="Shell Pugon" />
+            <Field label="Location name" htmlFor="locationName">
+              <Input id="locationName" name="locationName" required maxLength={EVENT_LOCATION_LIMITS.name} placeholder="Shell Pugon" />
             </Field>
-            <Field label="Location address">
-              <Input name="locationAddress" required maxLength={EVENT_LOCATION_LIMITS.address} placeholder="Antipolo, Rizal" />
+            <Field label="Location address" htmlFor="locationAddress">
+              <Input id="locationAddress" name="locationAddress" required maxLength={EVENT_LOCATION_LIMITS.address} placeholder="Antipolo, Rizal" />
             </Field>
-            <Field label="Map link">
-              <Input name="locationMapLink" type="url" maxLength={EVENT_LOCATION_LIMITS.mapLink} placeholder="https://maps.example.test/place" />
+            <Field label="Map link" htmlFor="locationMapLink">
+              <Input id="locationMapLink" name="locationMapLink" type="url" maxLength={EVENT_LOCATION_LIMITS.mapLink} placeholder="https://maps.example.test/place" />
             </Field>
-            <Field label="Area">
-              <Input name="area" required maxLength={EVENT_LOCATION_LIMITS.area} placeholder="Katipunan, Quezon City" />
+            <Field label="Area" htmlFor="area">
+              <Input id="area" name="area" required maxLength={EVENT_LOCATION_LIMITS.area} placeholder="Katipunan, Quezon City" />
             </Field>
-            <Field label="Date label">
-              <Input name="date" required placeholder="Sat - July 18" />
+            <Field label="Start date" htmlFor="startDate">
+              <Input id="startDate" name="startDate" type="date" required />
             </Field>
-            <Field label="Time label">
-              <Input name="time" required placeholder="7:00 PM - 10:00 PM" />
+            <Field label="Start time" htmlFor="startTime">
+              <Input id="startTime" name="startTime" type="time" required />
             </Field>
-            <Field label="Expected riders">
-              <Input name="expectedRiders" required type="number" min="1" defaultValue="40" />
+            <Field label="End date" htmlFor="endDate">
+              <Input id="endDate" name="endDate" type="date" required />
             </Field>
-            <Field label="Perk preview">
-              <Input name="perkPreview" required placeholder="Free sticker for checked-in riders" />
+            <Field label="End time" htmlFor="endTime">
+              <Input id="endTime" name="endTime" type="time" required />
+            </Field>
+            <Field label="Timezone" htmlFor="timeZone">
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                id="timeZone"
+                name="timeZone"
+                defaultValue="Asia/Manila"
+              >
+                <option value="Asia/Manila">Philippines (Asia/Manila)</option>
+              </select>
+            </Field>
+            <Field label="Expected riders" htmlFor="expectedRiders">
+              <Input id="expectedRiders" name="expectedRiders" required type="number" min="1" defaultValue="40" />
+            </Field>
+            <Field label="Perk preview" htmlFor="perkPreview">
+              <Input id="perkPreview" name="perkPreview" required placeholder="Free sticker for checked-in riders" />
             </Field>
             {!canCreate ? (
               <div className="md:col-span-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
@@ -936,10 +957,18 @@ function TablePanel({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="grid gap-2">
-      <Label>{label}</Label>
+      <Label htmlFor={htmlFor}>{label}</Label>
       {children}
     </div>
   );

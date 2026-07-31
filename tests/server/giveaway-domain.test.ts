@@ -425,8 +425,10 @@ async function createPublishedOrganizerEvent(backend: GiveawayBackend) {
   const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Giveaway eligibility test ride",
     type: "Bike Night",
-    date: "August 15, 2026",
-    time: "7:00 PM - 10:00 PM",
+    startDate: "2026-08-15",
+    startTime: "19:00",
+    endDate: "2026-08-15",
+    endTime: "22:00",
     locationName: "Giveaway Test Grounds",
     locationAddress: "15 Giveaway Avenue, Antipolo",
     locationMapLink: "https://maps.example.test/giveaway-test-grounds",

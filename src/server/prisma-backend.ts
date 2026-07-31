@@ -60,6 +60,16 @@ import {
 } from "@/features/giveaways/validation";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
+  findDemoEvent,
+  getDemoEventSchedule,
+} from "@/features/tambike-demo/data";
+import {
+  EventScheduleValidationError,
+  formatEventSchedule,
+  parseEventScheduleInput,
+  sortEventsBySchedule,
+} from "@/features/tambike-demo/event-schedule";
+import {
   filterEventsByQuery,
   getEventCtaState,
   type EventQueryInput,
@@ -72,6 +82,7 @@ import type {
   CheckInState,
   CreateEventInput,
   Event,
+  EventSchedule,
   EventType,
   OrganizerQrMode,
   Pass,
@@ -195,6 +206,11 @@ type PrismaEventRecord = {
   poster: string;
   dateLabel: string;
   timeLabel: string;
+  startsAt?: Date | null;
+  endsAt?: Date | null;
+  timeZone?: string | null;
+  recurrence?: "NONE" | "WEEKLY" | null;
+  recurrenceEndsAt?: Date | null;
   area: string;
   description: string;
   whatHappens: string;
@@ -233,9 +249,37 @@ type CheckInSettingsValue = CheckInConfiguration & {
   fixedQrAcknowledged: boolean;
 };
 
+const eventRecordSelect = {
+  id: true,
+  title: true,
+  type: true,
+  status: true,
+  organizerId: true,
+  locationName: true,
+  locationAddress: true,
+  locationMapLink: true,
+  poster: true,
+  dateLabel: true,
+  timeLabel: true,
+  area: true,
+  description: true,
+  whatHappens: true,
+  expectedRiders: true,
+  perkPreview: true,
+  tags: true,
+  riskFlags: true,
+  rideOutMeetup: true,
+  rideOutCallTime: true,
+  rideOutDeparture: true,
+  rideOutDestination: true,
+  rideOutNotes: true,
+  safetyRules: true,
+} as const;
+
 const giveawayConfigurationInclude = {
   event: {
-    include: {
+    select: {
+      ...eventRecordSelect,
       organizer: { select: { userId: true } },
       perks: true,
       _count: { select: { passes: true, rsvps: true } },
@@ -369,6 +413,12 @@ const attendanceTypeToDb: Record<AttendanceType, string> = {
 const GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS = {
   maxWait: 5_000,
   timeout: 30_000,
+} as const;
+
+const eventRecordWithCountsSelect = {
+  ...eventRecordSelect,
+  perks: true,
+  _count: { select: { passes: true, rsvps: true } },
 } as const;
 
 function slugify(value: string) {
@@ -4735,15 +4785,21 @@ export class PrismaTambikeBackend {
     }
 
     const title = input.title.trim();
-    const date = input.date.trim();
-    const time = input.time.trim();
     const perkPreview = input.perkPreview.trim();
     const expectedRiders = Number(input.expectedRiders);
     const location = normalizeEventLocation(input);
+    let schedule: EventSchedule;
+    try {
+      schedule = parseEventScheduleInput(input);
+    } catch (error) {
+      if (error instanceof EventScheduleValidationError) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      throw error;
+    }
+    const labels = formatEventSchedule(schedule);
     if (
       !title ||
-      !date ||
-      !time ||
       !perkPreview ||
       !Number.isInteger(expectedRiders) ||
       expectedRiders <= 0 ||
@@ -4753,7 +4809,10 @@ export class PrismaTambikeBackend {
     }
 
     const baseSlug = slugify(title);
-    const existing = await this.prisma.event.findUnique({ where: { slug: baseSlug } });
+    const existing = await this.prisma.event.findUnique({
+      where: { slug: baseSlug },
+      select: { id: true },
+    });
     const slug = existing ? `${baseSlug}-${Date.now()}` : baseSlug;
     const type = input.type;
     const event = await this.prisma.event.create({
@@ -4768,8 +4827,8 @@ export class PrismaTambikeBackend {
         locationAddress: location.locationAddress,
         locationMapLink: location.locationMapLink ?? null,
         poster: "/demo/poster-tambike-cafe-classico.jpg",
-        dateLabel: date,
-        timeLabel: time,
+        dateLabel: labels.date,
+        timeLabel: labels.time,
         area: location.area,
         expectedRiders,
         description: `${title} is awaiting admin review.`,
@@ -4794,7 +4853,7 @@ export class PrismaTambikeBackend {
           },
         },
       },
-      include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
+      select: eventRecordWithCountsSelect,
     });
 
     await this.audit("EVENT_DRAFT_CREATED", user.id, "Event", event.id);
@@ -5410,7 +5469,7 @@ export class PrismaTambikeBackend {
 
       return tx.event.findUniqueOrThrow({
         where: { id: eventId },
-        include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
+        select: eventRecordWithCountsSelect,
       });
     });
     await this.audit("ADMIN_PUBLISHED", user.id, "Event", event.id);
@@ -5495,7 +5554,7 @@ export class PrismaTambikeBackend {
   async listEvents(query?: EventQueryInput) {
     const [events, groupedCheckIns] = await Promise.all([
       this.prisma.event.findMany({
-        include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
+        select: eventRecordWithCountsSelect,
         orderBy: { createdAt: "asc" },
       }),
       this.prisma.checkIn.groupBy({
@@ -5516,16 +5575,21 @@ export class PrismaTambikeBackend {
       }
       attendanceByEvent.set(checkInGroup.eventId, current);
     }
-    return filterEventsByQuery(
-      events.map((event) => {
-        const attendance = attendanceByEvent.get(event.id) ?? { confirmed: 0, pending: 0 };
-        return {
-          ...this.toEvent(event),
-          confirmedCheckIns: attendance.confirmed,
-          pendingCheckIns: attendance.pending,
-        };
-      }),
-      query,
+    return sortEventsBySchedule(
+      filterEventsByQuery(
+        events.map((event) => {
+          const attendance = attendanceByEvent.get(event.id) ?? {
+            confirmed: 0,
+            pending: 0,
+          };
+          return {
+            ...this.toEvent(event),
+            confirmedCheckIns: attendance.confirmed,
+            pendingCheckIns: attendance.pending,
+          };
+        }),
+        query,
+      ),
     );
   }
 
@@ -6399,7 +6463,8 @@ export class PrismaTambikeBackend {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`);
     const event = await tx.event.findUnique({
       where: { id: eventId },
-      include: {
+      select: {
+        ...eventRecordSelect,
         organizer: { select: { userId: true } },
         perks: true,
       },
@@ -9209,7 +9274,7 @@ export class PrismaTambikeBackend {
   private async requireEvent(eventId: string) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      include: { perks: true, _count: { select: { passes: true, rsvps: true } } },
+      select: eventRecordWithCountsSelect,
     });
     if (!event) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
@@ -9286,7 +9351,8 @@ export class PrismaTambikeBackend {
   private async requireCheckInEvent(eventId: string) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      include: {
+      select: {
+        ...eventRecordSelect,
         organizer: { select: { userId: true } },
         checkInSettings: true,
         perks: true,
@@ -9799,6 +9865,32 @@ export class PrismaTambikeBackend {
 
   private toEvent(event: PrismaEventRecord): Event {
     const type = dbEventTypeToUi[event.type] ?? "Tambike";
+    const storedSchedule =
+      event.startsAt &&
+      event.endsAt &&
+      event.timeZone &&
+      event.recurrence
+        ? {
+            startsAt: event.startsAt.toISOString(),
+            endsAt: event.endsAt.toISOString(),
+            timeZone: event.timeZone,
+            recurrence: event.recurrence,
+            recurrenceEndsAt: event.recurrenceEndsAt?.toISOString(),
+          }
+        : undefined;
+    const hasLegacyRecurrence =
+      event.recurrence === "WEEKLY" ||
+      event.dateLabel.trim().toLowerCase().startsWith("every ");
+    const knownSchedule = hasLegacyRecurrence
+      ? getDemoEventSchedule(event.id)
+      : undefined;
+    const schedule = knownSchedule ?? storedSchedule;
+    const knownEvent = hasLegacyRecurrence
+      ? findDemoEvent(event.id)
+      : undefined;
+    const labels = schedule
+      ? formatEventSchedule(schedule)
+      : { date: event.dateLabel, time: event.timeLabel };
     return {
       id: event.id,
       title: event.title,
@@ -9809,10 +9901,11 @@ export class PrismaTambikeBackend {
       locationAddress: event.locationAddress,
       locationMapLink: event.locationMapLink ?? undefined,
       poster: event.poster,
-      date: event.dateLabel,
-      time: event.timeLabel,
+      date: labels.date,
+      time: labels.time,
+      ...schedule,
       area: event.area,
-      shortDescription: event.description,
+      shortDescription: knownEvent?.shortDescription ?? event.description,
       whatHappens: event.whatHappens,
       going: event._count?.passes ?? 0,
       interested: event._count?.rsvps ?? 0,

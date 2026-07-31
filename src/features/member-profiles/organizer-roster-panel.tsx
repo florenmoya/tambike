@@ -90,7 +90,7 @@ export function OrganizerRosterPanelSurface({
           <div>
             <CardTitle>Member roster</CardTitle>
             <CardDescription>
-              You control whether signed-in members can see published rider cards for this owned event.
+              You control whether signed-in members can see published profiles for this owned event.
             </CardDescription>
           </div>
           <Button
@@ -98,7 +98,7 @@ export function OrganizerRosterPanelSurface({
             variant={page.summary.rosterEnabled ? "default" : "outline"}
             role="switch"
             aria-checked={page.summary.rosterEnabled}
-            aria-label="Show rider roster"
+            aria-label="Show attendee roster"
             disabled={pending}
             onClick={onToggle}
           >

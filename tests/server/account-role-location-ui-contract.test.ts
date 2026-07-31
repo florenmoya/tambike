@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { filterEventsByQuery, getEventCtaState } from "../../src/features/tambike-demo/event-state";
+import {
+  eventPublicSummary,
+  filterEventsByQuery,
+  getEventCtaState,
+} from "../../src/features/tambike-demo/event-state";
 import type { Event } from "../../src/features/tambike-demo/types";
 
 const organizerSource = readFileSync(
@@ -43,6 +47,35 @@ const locationEvent = {
 } as Event;
 
 describe("account and event-location UI contracts", () => {
+  test("does not keep pending-review copy after an event is published", async () => {
+    const adminConsole = await import(
+      "../../src/features/admin/admin-console"
+    ) as unknown as {
+      adminEventReviewSummary?: (
+        event: Event,
+        state: { isDisabled: boolean; isPublished: boolean },
+      ) => string;
+    };
+
+    expect(adminConsole.adminEventReviewSummary).toBeTypeOf("function");
+    expect(adminConsole.adminEventReviewSummary!(
+      {
+        ...locationEvent,
+        status: "PUBLISHED",
+        shortDescription: "Night Ride is awaiting admin review.",
+      },
+      { isDisabled: false, isPublished: true },
+    )).toBe("Night Ride is published and visible to riders.");
+  });
+
+  test("does not show pending-review copy on a published public event page", () => {
+    expect(eventPublicSummary({
+      ...locationEvent,
+      status: "PUBLISHED",
+      shortDescription: "Night Ride is awaiting admin review.",
+    })).toBe("Night Ride is published and open for rider registration.");
+  });
+
   test("uses direct organizer-to-admin review copy and searches frozen location fields", () => {
     expect(getEventCtaState(locationEvent, new Date("2026-07-15T00:00:00.000Z"))).toMatchObject({
       label: "Under review",
@@ -67,6 +100,21 @@ describe("account and event-location UI contracts", () => {
     expect(stylesSource).toContain(".event-detail-perk");
     expect(stylesSource).toContain(".event-detail-essentials");
     expect(stylesSource).not.toContain(".event-detail-venue-card");
+  });
+
+  test("keeps authentication actions available inside the mobile navigation menu", () => {
+    expect(screenSource).toContain('className="mobile-nav-session"');
+    expect(screenSource).toContain('aria-label="Mobile log out"');
+    expect(screenSource).toContain('href="/login"');
+    expect(screenSource).toContain('href="/signup"');
+    expect(stylesSource).toContain(".mobile-nav-session");
+  });
+
+  test("wires the header search control to the event query route", () => {
+    expect(screenSource).toContain('role="search"');
+    expect(screenSource).toContain('aria-label="Search events"');
+    expect(screenSource).toContain('router.push(normalizedQuery');
+    expect(stylesSource).toContain(".header-search-popover");
   });
 
   test("keeps the legacy screen renderer to public and rider-only variants", () => {

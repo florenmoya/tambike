@@ -50,6 +50,7 @@ describe("event poster asset contract", () => {
 
   test("resolves every discovery and detail poster with component-local blur placeholders", () => {
     const feature = componentSource("FeatureCard");
+    const featurePoster = componentSource("FeaturePoster");
     const card = componentSource("EventCard");
     const detail = componentSource("EventDetail");
 
@@ -60,7 +61,7 @@ describe("event poster asset contract", () => {
     expect(detail).toContain(
       "const poster = resolveEventPoster(event.poster);",
     );
-    expect(feature).toContain(
+    expect(featurePoster).toContain(
       'placeholder={typeof poster === "string" ? "empty" : "blur"}',
     );
     expect(card).toContain(

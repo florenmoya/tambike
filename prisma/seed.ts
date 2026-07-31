@@ -153,6 +153,13 @@ export async function seedPrisma(prisma: PrismaClient, databaseUrl: string) {
           locationMapLink: event.locationMapLink ?? null,
           dateLabel: event.date,
           timeLabel: event.time,
+          startsAt: event.startsAt ? new Date(event.startsAt) : null,
+          endsAt: event.endsAt ? new Date(event.endsAt) : null,
+          timeZone: event.timeZone ?? null,
+          recurrence: event.recurrence ?? null,
+          recurrenceEndsAt: event.recurrenceEndsAt
+            ? new Date(event.recurrenceEndsAt)
+            : null,
           area: event.area,
           expectedRiders: event.expectedRiders,
           description: event.shortDescription,

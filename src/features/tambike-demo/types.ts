@@ -141,11 +141,29 @@ export interface EventLocationInput {
   area: string;
 }
 
-export interface CreateEventInput extends EventLocationInput {
+export type EventRecurrence = "NONE" | "WEEKLY";
+
+export interface EventScheduleInput {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  timeZone: string;
+  recurrence: EventRecurrence;
+  recurrenceEndsOn?: string;
+}
+
+export interface EventSchedule {
+  startsAt: string;
+  endsAt: string;
+  timeZone: string;
+  recurrence: EventRecurrence;
+  recurrenceEndsAt?: string;
+}
+
+export interface CreateEventInput extends EventLocationInput, EventScheduleInput {
   title: string;
   type: EventType;
-  date: string;
-  time: string;
   expectedRiders: number;
   perkPreview: string;
 }
@@ -166,6 +184,11 @@ export interface Event extends EventLocationInput {
   poster: string;
   date: string;
   time: string;
+  startsAt?: string;
+  endsAt?: string;
+  timeZone?: string;
+  recurrence?: EventRecurrence;
+  recurrenceEndsAt?: string;
   shortDescription: string;
   whatHappens: string;
   going: number;

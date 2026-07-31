@@ -3,7 +3,7 @@
 This command provisions or refreshes exactly two sample campaigns on the published host event
 **Tambike at Cafe Classico** (`tambike-cafe-classico`):
 
-- `Cafe Classico Helmet Raffle` — completed, with one published and fulfilled winner
+- `HJC C10 FOP Helmet Raffle` — completed, with one published and fulfilled winner
 - `Weekend Rider Gear Raffle` — open, with no snapshot, draw, award, or winner
 
 When the exact lifecycle already matches, the job is idempotent. When the exact
@@ -54,19 +54,19 @@ exact production cron authorization and one-purpose confirmation header.
 
 ## Prize photo sources
 
-The provisioner downloads these free-to-use Pexels photos only when the exact
-prize pool has no managed image, normalizes them to WebP, and stores them under
-Tambike's private giveaway-prize namespace:
+The provisioner downloads these source images only when the exact prize pool has
+no managed image, normalizes them to WebP, and stores them under Tambike's
+private giveaway-prize namespace:
 
-- Cafe Classico Helmet — Andrés Chirrisco,
-  [Pexels photo 15928222](https://www.pexels.com/photo/photo-of-a-motorcycle-helmet-15928222/),
-  managed media ID `sample-raffle-helmet-photo-v1`
+- HJC C10 FOP Full-Face Helmet — HJC Helmets,
+  [official HJC C10 FOP product page](https://hjchelmets.us/products/c10-fop),
+  managed media ID `sample-raffle-hjc-c10-fop-photo-v1`
 - Weekend Rider Gear Package — Labskiii,
   [Pexels photo 15625079](https://www.pexels.com/photo/man-wearing-a-safety-helmet-15625079/),
   managed media ID `sample-raffle-gear-photo-v1`
 
 The public event page serves the resulting `GiveawayPrizeImage` records through
-Tambike. It never hotlinks Pexels.
+Tambike. It never hotlinks either source.
 
 ## Preflight, execution, postflight, and guaranteed cleanup
 
@@ -170,6 +170,12 @@ WITH target_campaigns AS (
       ORDER BY mv."version" DESC
       LIMIT 1
     ) AS terms,
+    (SELECT mv."sponsorDisclosure"
+      FROM "GiveawayMechanicsVersion" mv
+      WHERE mv."giveawayId" = g."id"
+      ORDER BY mv."version" DESC
+      LIMIT 1
+    ) AS sponsor_disclosure,
     (SELECT p."publicTitle"
       FROM "GiveawayPrizePool" p
       WHERE p."giveawayId" = g."id"
@@ -192,7 +198,7 @@ WITH target_campaigns AS (
   FROM "EventGiveaway" g
   WHERE g."eventId" = 'tambike-cafe-classico'
     AND g."title" IN (
-      'Cafe Classico Helmet Raffle',
+      'HJC C10 FOP Helmet Raffle',
       'Weekend Rider Gear Raffle'
     )
 ),
@@ -200,7 +206,7 @@ summary AS (
   SELECT
     COUNT(*) AS target_campaign_count,
     COUNT(*) FILTER (
-      WHERE "title" = 'Cafe Classico Helmet Raffle'
+      WHERE "title" = 'HJC C10 FOP Helmet Raffle'
         AND status = 'completed'
         AND compliance_status = 'approved'
         AND snapshot_count = 1
@@ -223,14 +229,15 @@ summary AS (
         AND exact_published_winner_count = 0
     ) AS exact_ongoing_count,
     COUNT(*) FILTER (
-      WHERE "title" = 'Cafe Classico Helmet Raffle'
+      WHERE "title" = 'HJC C10 FOP Helmet Raffle'
         AND status = 'completed'
         AND compliance_status = 'approved'
-        AND public_winner_alias = 'Cafe Classico Rider'
+        AND public_winner_alias = 'Gabriel Cruz'
         AND mechanics = 'One eligible rider was selected from valid entries.'
-        AND terms = 'The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.'
-        AND public_title = 'Cafe Classico Helmet'
-        AND public_description = 'A full-face helmet for safer everyday rides.'
+        AND terms = 'The winner receives one HJC C10 FOP Full-Face Helmet. The organizer will contact the winner with claiming instructions.'
+        AND sponsor_disclosure = 'HJC is not affiliated with or endorsing this event.'
+        AND public_title = 'HJC C10 FOP Full-Face Helmet'
+        AND public_description = 'A branded full-face helmet for everyday road riding.'
         AND public_image_media_id IS NOT NULL
     ) AS exact_completed_presentation_count,
     COUNT(*) FILTER (
@@ -339,7 +346,7 @@ async function inspectPublicPrizes() {
       'tambike-cafe-classico',
     );
     const completed = publicGiveaways.find(
-      ({ giveaway }) => giveaway.title === 'Cafe Classico Helmet Raffle',
+      ({ giveaway }) => giveaway.title === 'HJC C10 FOP Helmet Raffle',
     );
     const ongoing = publicGiveaways.find(
       ({ giveaway }) => giveaway.title === 'Weekend Rider Gear Raffle',
@@ -393,10 +400,10 @@ inspectPublicPrizes()
   }
   $publicPrizeInspection = (($publicPrizeInspectionJson -join "`n") | ConvertFrom-Json)
   if (
-    $publicPrizeInspection.completedPublicPrize -ne 'Cafe Classico Helmet' -or
-    $publicPrizeInspection.completedPublicDescription -ne 'A full-face helmet for safer everyday rides.' -or
+    $publicPrizeInspection.completedPublicPrize -ne 'HJC C10 FOP Full-Face Helmet' -or
+    $publicPrizeInspection.completedPublicDescription -ne 'A branded full-face helmet for everyday road riding.' -or
     [string]::IsNullOrWhiteSpace($publicPrizeInspection.completedPublicImage) -or
-    $publicPrizeInspection.completedWinnerAlias -ne 'Cafe Classico Rider' -or
+    $publicPrizeInspection.completedWinnerAlias -ne 'Gabriel Cruz' -or
     $publicPrizeInspection.ongoingPublicPrize -ne 'Weekend Rider Gear Package' -or
     $publicPrizeInspection.ongoingPublicDescription -ne 'Helmet, riding gloves, and Tambike gear for your next ride.' -or
     [string]::IsNullOrWhiteSpace($publicPrizeInspection.ongoingPublicImage) -or
@@ -444,9 +451,9 @@ The final output lines are read-only checks of the two revealed production
 raffles:
 
 ```text
-completed public prize: Cafe Classico Helmet
-completed public image: sample-raffle-helmet-photo-v1
-completed winner: Cafe Classico Rider
+completed public prize: HJC C10 FOP Full-Face Helmet
+completed public image: sample-raffle-hjc-c10-fop-photo-v1
+completed winner: Gabriel Cruz
 ongoing public prize: Weekend Rider Gear Package
 ongoing public image: sample-raffle-gear-photo-v1
 ```
@@ -472,10 +479,10 @@ Example receipt without live IDs:
   "eventId": "<event-id>",
   "completed": {
     "giveawayId": "<completed-giveaway-id>",
-    "title": "Cafe Classico Helmet Raffle",
+    "title": "HJC C10 FOP Helmet Raffle",
     "state": "completed",
     "winnerCount": 1,
-    "winnerAlias": "Cafe Classico Rider"
+    "winnerAlias": "Gabriel Cruz"
   },
   "ongoing": {
     "giveawayId": "<ongoing-giveaway-id>",

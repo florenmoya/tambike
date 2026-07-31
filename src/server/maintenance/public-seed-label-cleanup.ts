@@ -4,34 +4,89 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
 export const PUBLIC_SEED_USER_RENAMES = [
-  { email: "mika.sample@tambike.ph", publicName: "Mika Santos" },
-  { email: "demo.roster.20260723.01@tambike.ph", publicName: "Paolo Reyes" },
-  { email: "demo.roster.20260723.02@tambike.ph", publicName: "Bea Navarro" },
-  { email: "demo.roster.20260723.03@tambike.ph", publicName: "Carlo Mendoza" },
-  { email: "demo.roster.20260723.04@tambike.ph", publicName: "Nina Garcia" },
-  { email: "demo.roster.20260723.05@tambike.ph", publicName: "Jolo Ramos" },
-  { email: "demo.roster.20260723.06@tambike.ph", publicName: "Sam Torres" },
-  { email: "demo.roster.20260723.07@tambike.ph", publicName: "Mara Villanueva" },
-  { email: "demo.roster.20260723.08@tambike.ph", publicName: "Enzo Lim" },
-  { email: "demo.roster.20260723.09@tambike.ph", publicName: "Lia Santos" },
-  { email: "demo.roster.20260723.10@tambike.ph", publicName: "Nico Bautista" },
-  { email: "demo.roster.20260723.11@tambike.ph", publicName: "Aya Flores" },
+  {
+    email: "mika.sample@tambike.ph",
+    publicName: "Mika Santos",
+    publicSlug: "mika-santos",
+  },
+  {
+    email: "demo.roster.20260723.01@tambike.ph",
+    publicName: "Paolo Reyes",
+    publicSlug: "paolo-reyes",
+  },
+  {
+    email: "demo.roster.20260723.02@tambike.ph",
+    publicName: "Bea Navarro",
+    publicSlug: "bea-navarro",
+  },
+  {
+    email: "demo.roster.20260723.03@tambike.ph",
+    publicName: "Carlo Mendoza",
+    publicSlug: "carlo-mendoza",
+  },
+  {
+    email: "demo.roster.20260723.04@tambike.ph",
+    publicName: "Nina Garcia",
+    publicSlug: "nina-garcia",
+  },
+  {
+    email: "demo.roster.20260723.05@tambike.ph",
+    publicName: "Jolo Ramos",
+    publicSlug: "jolo-ramos",
+  },
+  {
+    email: "demo.roster.20260723.06@tambike.ph",
+    publicName: "Sam Torres",
+    publicSlug: "sam-torres",
+  },
+  {
+    email: "demo.roster.20260723.07@tambike.ph",
+    publicName: "Mara Villanueva",
+    publicSlug: "mara-villanueva",
+  },
+  {
+    email: "demo.roster.20260723.08@tambike.ph",
+    publicName: "Enzo Lim",
+    publicSlug: "enzo-lim",
+  },
+  {
+    email: "demo.roster.20260723.09@tambike.ph",
+    publicName: "Lia Santos",
+    publicSlug: "lia-santos",
+  },
+  {
+    email: "demo.roster.20260723.10@tambike.ph",
+    publicName: "Nico Bautista",
+    publicSlug: "nico-bautista",
+  },
+  {
+    email: "demo.roster.20260723.11@tambike.ph",
+    publicName: "Aya Flores",
+    publicSlug: "aya-flores",
+  },
   {
     email: "demo.roster.20260723.12@tambike.ph",
     publicName: "Anonymous Rider 01",
+    publicSlug: null,
   },
   {
     email: "demo.roster.20260723.13@tambike.ph",
     publicName: "Anonymous Rider 02",
+    publicSlug: null,
   },
-  { email: "raffle.winner.sample@tambike.ph", publicName: "Raffle Winner" },
+  {
+    email: "raffle.winner.sample@tambike.ph",
+    publicName: "Gabriel Cruz",
+    publicSlug: null,
+  },
 ] as const;
 
 const SEEDED_RAFFLE_WINNER_EMAIL = "raffle.winner.sample@tambike.ph";
-const CLEAN_RAFFLE_WINNER_ALIAS = "Cafe Classico Rider";
+const CLEAN_RAFFLE_WINNER_ALIAS = "Gabriel Cruz";
 const LEGACY_RAFFLE_WINNER_ALIASES = [
   "Raffle Sample Rider",
   "Raffle Winner — Sample Rider",
+  "Cafe Classico Rider",
 ] as const;
 
 export interface PublicSeedLabelCleanupSnapshot {
@@ -39,6 +94,7 @@ export interface PublicSeedLabelCleanupSnapshot {
     id: string;
     email: string;
     displayName: string;
+    profileSlug: string | null;
   }>;
   awards: Array<{
     id: string;
@@ -53,6 +109,8 @@ export interface PublicSeedLabelCleanupPlan {
     email: string;
     from: string;
     to: string;
+    slugFrom: string | null;
+    slugTo: string | null;
   }>;
   awardUpdates: Array<{
     id: string;
@@ -70,8 +128,13 @@ export interface PublicSeedLabelCleanupStore {
 export interface PublicSeedLabelCleanupTransaction {
   user: {
     updateMany(input: {
-      where: { id: string; email: string; displayName: string };
-      data: { displayName: string };
+      where: {
+        id: string;
+        email: string;
+        displayName: string;
+        profileSlug: string | null;
+      };
+      data: { displayName: string; profileSlug: string | null };
     }): Promise<{ count: number }>;
   };
   giveawayAward: {
@@ -86,10 +149,13 @@ export interface PublicSeedLabelCleanupTransaction {
   };
 }
 
-const publicNameByEmail = new Map<string, string>(
-  PUBLIC_SEED_USER_RENAMES.map(({ email, publicName }) => [
+const publicIdentityByEmail = new Map<
+  string,
+  { publicName: string; publicSlug: string | null }
+>(
+  PUBLIC_SEED_USER_RENAMES.map(({ email, publicName, publicSlug }) => [
     email.toLowerCase(),
-    publicName,
+    { publicName, publicSlug },
   ]),
 );
 
@@ -97,14 +163,24 @@ export function buildPublicSeedLabelCleanupPlan(
   snapshot: PublicSeedLabelCleanupSnapshot,
 ): PublicSeedLabelCleanupPlan {
   const userUpdates = snapshot.users.flatMap((user) => {
-    const publicName = publicNameByEmail.get(user.email.trim().toLowerCase());
-    if (!publicName || user.displayName === publicName) return [];
+    const publicIdentity = publicIdentityByEmail.get(
+      user.email.trim().toLowerCase(),
+    );
+    if (
+      !publicIdentity ||
+      (user.displayName === publicIdentity.publicName &&
+        user.profileSlug === publicIdentity.publicSlug)
+    ) {
+      return [];
+    }
     return [
       {
         id: user.id,
         email: user.email,
         from: user.displayName,
-        to: publicName,
+        to: publicIdentity.publicName,
+        slugFrom: user.profileSlug,
+        slugTo: publicIdentity.publicSlug,
       },
     ];
   });
@@ -151,8 +227,12 @@ export async function applyPublicSeedLabelCleanupPlan(
         id: update.id,
         email: update.email,
         displayName: update.from,
+        profileSlug: update.slugFrom,
       },
-      data: { displayName: update.to },
+      data: {
+        displayName: update.to,
+        profileSlug: update.slugTo,
+      },
     });
     if (result.count !== 1) {
       throw new Error(`PUBLIC_SEED_USER_CHANGED:${update.id}`);
@@ -184,7 +264,12 @@ export function createPrismaPublicSeedLabelCleanup(
       const [users, awards] = await Promise.all([
         prisma.user.findMany({
           where: { email: { in: seedEmails } },
-          select: { id: true, email: true, displayName: true },
+          select: {
+            id: true,
+            email: true,
+            displayName: true,
+            profileSlug: true,
+          },
           orderBy: { email: "asc" },
         }),
         prisma.giveawayAward.findMany({

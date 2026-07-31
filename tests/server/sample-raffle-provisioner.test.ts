@@ -164,11 +164,11 @@ function exactFinalInspection(
       presentation: {
         mechanics: "One eligible rider was selected from valid entries.",
         terms:
-          "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+          "The winner receives one HJC C10 FOP Full-Face Helmet. The organizer will contact the winner with claiming instructions.",
         prizePoolId: "sample-helmet-pool",
-        publicTitle: "Cafe Classico Helmet",
-        publicDescription: "A full-face helmet for safer everyday rides.",
-        publicImageMediaId: "sample-raffle-helmet-photo-v1",
+        publicTitle: "HJC C10 FOP Full-Face Helmet",
+        publicDescription: "A branded full-face helmet for everyday road riding.",
+        publicImageMediaId: "sample-raffle-hjc-c10-fop-photo-v1",
       },
     }],
     ongoingCampaigns: [{
@@ -436,11 +436,14 @@ function fakePrismaProvisioner(receipt: SampleRaffleProvisioningReceipt): Prisma
 
 describe("sample raffle provisioner safety", () => {
   test("uses clean public identity labels for the seeded winner", () => {
-    expect(SAMPLE_RAFFLE_WINNER_NAME).toBe("Raffle Winner");
-    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Cafe Classico Rider");
+    expect(SAMPLE_RAFFLE_WINNER_NAME).toBe("Gabriel Cruz");
+    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Gabriel Cruz");
+    expect(COMPLETED_SAMPLE_RAFFLE_TITLE).toBe(
+      "HJC C10 FOP Helmet Raffle",
+    );
     expect(productionSampleRaffleManifest).toMatchObject({
-      winnerName: "Raffle Winner",
-      winnerAlias: "Cafe Classico Rider",
+      winnerName: "Gabriel Cruz",
+      winnerAlias: "Gabriel Cruz",
     });
   });
 
@@ -470,22 +473,25 @@ describe("sample raffle provisioner safety", () => {
     const completed = completedSampleRaffleInput();
     const ongoing = ongoingSampleRaffleInput();
 
-    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Cafe Classico Rider");
+    expect(SAMPLE_RAFFLE_WINNER_ALIAS).toBe("Gabriel Cruz");
     expect(completed.mechanics).toBe(
       "One eligible rider was selected from valid entries.",
     );
     expect(completed.terms).toBe(
-      "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+      "The winner receives one HJC C10 FOP Full-Face Helmet. The organizer will contact the winner with claiming instructions.",
+    );
+    expect(completed.sponsorDisclosure).toBe(
+      "HJC is not affiliated with or endorsing this event.",
     );
     expect(completed.prizePools).toEqual([
       expect.objectContaining({
         title: "Helmet",
         publicPresentation: {
           disclosure: "revealed",
-          title: "Cafe Classico Helmet",
-          description: "A full-face helmet for safer everyday rides.",
+          title: "HJC C10 FOP Full-Face Helmet",
+          description: "A branded full-face helmet for everyday road riding.",
         },
-        items: [{ title: "Cafe Classico Helmet" }],
+        items: [{ title: "HJC C10 FOP Full-Face Helmet" }],
       }),
     ]);
     expect(ongoing.mechanics).toBe(
@@ -582,13 +588,13 @@ describe("sample raffle provisioner safety", () => {
       '"winnerAliasOptedInAt"',
       '"winnerAliasRevokedAt"',
       "raffle.winner.sample@tambike.ph",
-      "Cafe Classico Rider",
-      "A full-face helmet for safer everyday rides.",
+      "Gabriel Cruz",
+      "A branded full-face helmet for everyday road riding.",
       "Helmet, riding gloves, and Tambike gear for your next ride.",
       '"GiveawayPrizeImage"',
-      "sample-raffle-helmet-photo-v1",
+      "sample-raffle-hjc-c10-fop-photo-v1",
       "sample-raffle-gear-photo-v1",
-      "15928222",
+      "hjchelmets.us/products/c10-fop",
       "15625079",
     ]) {
       expect(runbook).toContain(invariant);
@@ -617,7 +623,7 @@ describe("sample raffle provisioner safety", () => {
       write: (line) => lines.push(line),
     });
     const output = lines.join("\n");
-    expect(output).toContain("Cafe Classico Helmet Raffle");
+    expect(output).toContain("HJC C10 FOP Helmet Raffle");
     for (const forbidden of [
       "organizer-secret",
       "admin-secret",
@@ -737,7 +743,7 @@ describe("sample raffle provisioner safety", () => {
       },
       dependencies,
     )).resolves.toMatchObject({
-      completed: { winnerAlias: "Cafe Classico Rider" },
+      completed: { winnerAlias: "Gabriel Cruz" },
       ongoing: { state: "open" },
       changed: true,
     });

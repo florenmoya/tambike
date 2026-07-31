@@ -64,16 +64,16 @@ describe("interactive attendee roster state transitions", () => {
       root.render(createElement(EventAttendeeRoster, { initialPage: firstPage, signedIn: true, loadPage }));
     });
     expect(container.textContent).toContain("Mika");
-    expect(container.textContent).toContain("Load more riders");
+    expect(container.textContent).toContain("Load more attendees");
 
     const loadButton = [...container.querySelectorAll("button")]
-      .find((button) => button.textContent?.includes("Load more riders"));
+      .find((button) => button.textContent?.includes("Load more attendees"));
     await act(async () => {
       loadButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Bea");
-    expect(container.textContent).not.toContain("Load more riders");
+    expect(container.textContent).not.toContain("Load more attendees");
 
     await act(async () => {
       root.render(createElement(EventAttendeeRoster, {
@@ -101,7 +101,7 @@ describe("interactive attendee roster state transitions", () => {
       loadPage,
     })));
     const errorButton = [...container.querySelectorAll("button")]
-      .find((button) => button.textContent?.includes("Load more riders"));
+      .find((button) => button.textContent?.includes("Load more attendees"));
     await act(async () => {
       errorButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -153,7 +153,7 @@ describe("interactive attendee roster state transitions", () => {
       signedIn: true,
       loadPage,
     })));
-    expect(container.textContent).toContain("The rider list isn’t available for this event.");
+    expect(container.textContent).toContain("The attendee list isn’t available for this event.");
     expect(container.textContent).not.toContain("Mika");
 
     const enabledAgain = rosterPage([bea], "cursor-2");
@@ -164,7 +164,7 @@ describe("interactive attendee roster state transitions", () => {
     })));
     expect(container.textContent).toContain("Bea");
     expect(container.textContent).not.toContain("Mika");
-    expect(container.textContent).toContain("Load more riders");
+    expect(container.textContent).toContain("Load more attendees");
     expect(container.textContent).not.toContain("could not be loaded");
   });
 });

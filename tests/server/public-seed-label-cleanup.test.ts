@@ -14,11 +14,13 @@ describe("public seed label cleanup plan", () => {
           id: "mika",
           email: "mika.sample@tambike.ph",
           displayName: "Mika Santos — Sample Rider",
+          profileSlug: "mika-santos-sample-rider",
         },
         {
           id: "real",
           email: "real@example.com",
           displayName: "Demo Sample",
+          profileSlug: "demo-sample",
         },
       ],
       awards: [],
@@ -31,6 +33,8 @@ describe("public seed label cleanup plan", () => {
           email: "mika.sample@tambike.ph",
           from: "Mika Santos — Sample Rider",
           to: "Mika Santos",
+          slugFrom: "mika-santos-sample-rider",
+          slugTo: "mika-santos",
         },
       ],
       awardUpdates: [],
@@ -45,6 +49,7 @@ describe("public seed label cleanup plan", () => {
             id: "mika",
             email: "mika.sample@tambike.ph",
             displayName: "Mika Santos",
+            profileSlug: "mika-santos",
           },
         ],
         awards: [],
@@ -69,6 +74,11 @@ describe("public seed label cleanup plan", () => {
         {
           id: "clean-seed-award",
           winnerEmail: "raffle.winner.sample@tambike.ph",
+          publicWinnerAlias: "Gabriel Cruz",
+        },
+        {
+          id: "old-clean-seed-award",
+          winnerEmail: "raffle.winner.sample@tambike.ph",
           publicWinnerAlias: "Cafe Classico Rider",
         },
       ],
@@ -80,9 +90,42 @@ describe("public seed label cleanup plan", () => {
         {
           id: "seed-award",
           from: "Raffle Sample Rider",
-          to: "Cafe Classico Rider",
+          to: "Gabriel Cruz",
+        },
+        {
+          id: "old-clean-seed-award",
+          from: "Cafe Classico Rider",
+          to: "Gabriel Cruz",
         },
       ],
+    });
+  });
+
+  test("cleans a known seeded profile slug even when its public name is already clean", () => {
+    expect(
+      buildPublicSeedLabelCleanupPlan({
+        users: [
+          {
+            id: "paolo",
+            email: "demo.roster.20260723.01@tambike.ph",
+            displayName: "Paolo Reyes",
+            profileSlug: "paolo-reyes-demo-rider",
+          },
+        ],
+        awards: [],
+      }),
+    ).toEqual({
+      userUpdates: [
+        {
+          id: "paolo",
+          email: "demo.roster.20260723.01@tambike.ph",
+          from: "Paolo Reyes",
+          to: "Paolo Reyes",
+          slugFrom: "paolo-reyes-demo-rider",
+          slugTo: "paolo-reyes",
+        },
+      ],
+      awardUpdates: [],
     });
   });
 
@@ -91,14 +134,17 @@ describe("public seed label cleanup plan", () => {
     expect(PUBLIC_SEED_USER_RENAMES).toContainEqual({
       email: "demo.roster.20260723.01@tambike.ph",
       publicName: "Paolo Reyes",
+      publicSlug: "paolo-reyes",
     });
     expect(PUBLIC_SEED_USER_RENAMES).toContainEqual({
       email: "demo.roster.20260723.13@tambike.ph",
       publicName: "Anonymous Rider 02",
+      publicSlug: null,
     });
     expect(PUBLIC_SEED_USER_RENAMES).toContainEqual({
       email: "raffle.winner.sample@tambike.ph",
-      publicName: "Raffle Winner",
+      publicName: "Gabriel Cruz",
+      publicSlug: null,
     });
   });
 
@@ -120,6 +166,8 @@ describe("public seed label cleanup plan", () => {
               email: "mika.sample@tambike.ph",
               from: "Mika Santos — Sample Rider",
               to: "Mika Santos",
+              slugFrom: "mika-santos-sample-rider",
+              slugTo: "mika-santos",
             },
           ],
           awardUpdates: [],

@@ -1,4 +1,5 @@
 import type { Event, EventStatus } from "./types";
+import { getRelevantEventOccurrence } from "./event-schedule";
 
 export interface EventQueryInput {
   q?: string;
@@ -15,6 +16,18 @@ export interface EventCtaState {
 }
 
 const registerableStatuses = new Set<EventStatus>(["PUBLISHED", "ONGOING"]);
+const pendingReviewSummarySuffix = " is awaiting admin review.";
+
+export function eventPublicSummary(event: Event) {
+  if (
+    event.status === "PUBLISHED" &&
+    event.shortDescription === `${event.title}${pendingReviewSummarySuffix}`
+  ) {
+    return `${event.title} is published and open for rider registration.`;
+  }
+  return event.shortDescription;
+}
+
 const monthIndex: Record<string, number> = {
   jan: 0,
   january: 0,
@@ -64,16 +77,39 @@ function explicitDateFromLabel(dateLabel: string, now: Date) {
   return new Date(year, month, day, 23, 59, 59, 999);
 }
 
-export function isEventPast(event: Pick<Event, "date" | "status">, now = new Date()) {
+type EventTimingState = Pick<
+  Event,
+  | "date"
+  | "status"
+  | "startsAt"
+  | "endsAt"
+  | "timeZone"
+  | "recurrence"
+  | "recurrenceEndsAt"
+>;
+
+export function isEventPast(event: EventTimingState, now = new Date()) {
   if (event.status === "COMPLETED") {
     return true;
+  }
+
+  if (
+    event.startsAt &&
+    event.endsAt &&
+    event.timeZone &&
+    event.recurrence
+  ) {
+    return getRelevantEventOccurrence(event, now).state === "PAST";
   }
 
   const datedAt = explicitDateFromLabel(event.date, now);
   return datedAt ? datedAt.getTime() < now.getTime() : false;
 }
 
-export function getEventCtaState(event: Pick<Event, "date" | "status">, now = new Date()): EventCtaState {
+export function getEventCtaState(
+  event: EventTimingState,
+  now = new Date(),
+): EventCtaState {
   const isPast = isEventPast(event, now);
 
   if (isPast) {

@@ -56,6 +56,11 @@ enum EventType {
   RACE           @map("Race")
 }
 
+enum EventRecurrence {
+  NONE
+  WEEKLY
+}
+
 enum AttendanceType {
   direct
   ride_out @map("ride-out")
@@ -374,6 +379,11 @@ model Event {
   locationMapLink    String?     @db.VarChar(500)
   dateLabel          String
   timeLabel          String
+  startsAt           DateTime?
+  endsAt             DateTime?
+  timeZone           String?     @db.VarChar(80)
+  recurrence         EventRecurrence?
+  recurrenceEndsAt   DateTime?
   area               String      @db.VarChar(120)
   capacity           Int?
   expectedRiders     Int
@@ -405,6 +415,8 @@ model Event {
   giveaways             EventGiveaway[]
   leads                 Lead[]
   flags                 FlagReport[]
+
+  @@index([startsAt])
 }
 
 model EventApproval {

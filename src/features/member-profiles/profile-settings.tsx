@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   Bike,
   Camera,
   LoaderCircle,
   Save,
-  Trash2,
   UserRound,
 } from "lucide-react";
 
@@ -30,10 +29,12 @@ import type {
   UpdateMemberProfileInput,
   UpsertMotorcycleInput,
 } from "./types";
+import { ConfirmMediaDelete } from "./confirm-media-delete";
 import { MemberMediaUploader } from "./member-media-uploader";
 import { MemberMediaImage } from "./member-media-image";
 import { MotorcyclePhotoWorkspace } from "./motorcycle-photo-workspace";
 import { getProfileEditorPresentation } from "./profile-editor-presentation";
+import { useUnsavedProfileGuard } from "./use-unsaved-profile-guard";
 import styles from "./profile-studio.module.css";
 
 function actionErrorMessage(error: unknown) {
@@ -66,6 +67,13 @@ export function profileInputFromFormData(formData: FormData): UpdateMemberProfil
       formData.get("defaultRosterIdentity") ?? "",
     ) as RosterIdentity,
   };
+}
+
+export function profileInputFromSubmitEvent(
+  event: Pick<FormEvent<HTMLFormElement>, "currentTarget" | "preventDefault">,
+): UpdateMemberProfileInput {
+  event.preventDefault();
+  return profileInputFromFormData(new FormData(event.currentTarget));
 }
 
 interface ProfileDraft {
@@ -199,35 +207,35 @@ export function ProfileViewAction({
   profileDirty: boolean;
   motorcycleDirty: boolean;
 }) {
-  if (profileDirty || motorcycleDirty) {
-    return (
-      <>
-        <Button
-          type="button"
-          variant="outline"
-          disabled
-          aria-describedby="profile-view-action-help"
+  const dirty = profileDirty || motorcycleDirty;
+  const label =
+    dirty && viewAction.href === "/profile/preview"
+      ? "Preview saved profile"
+      : viewAction.label;
+
+  return (
+    <>
+      <Button asChild variant="outline">
+        <Link
+          href={viewAction.href}
+          aria-describedby={dirty ? "profile-view-action-help" : undefined}
         >
-          {viewAction.label}
-        </Button>
+          {label}
+        </Link>
+      </Button>
+      {dirty ? (
         <span
           id="profile-view-action-help"
           className={styles.studioViewActionHint}
         >
-          Save changes before viewing your profile.
+          Unsaved changes are not included.
         </span>
-      </>
-    );
-  }
-
-  return (
-    <Button asChild variant="outline">
-      <Link href={viewAction.href}>{viewAction.label}</Link>
-    </Button>
+      ) : null}
+    </>
   );
 }
 
-export function ProfileDetailsSaveFooter({
+export function ProfileSaveFooter({
   pending,
   status,
 }: {
@@ -237,11 +245,13 @@ export function ProfileDetailsSaveFooter({
   return (
     <section
       className={styles.profileDetailsSaveFooter}
-      aria-label="Save profile details"
+      aria-label="Save profile"
     >
       <div className={styles.profileDetailsSaveCopy}>
-        <strong>Profile details</strong>
-        <span>Saves identity, visibility, and attendance privacy.</span>
+        <span>
+          Saves your profile and motorcycle details. Photos upload automatically
+          when selected.
+        </span>
       </div>
       <div className={styles.profileDetailsSaveActions}>
         <Button
@@ -255,7 +265,7 @@ export function ProfileDetailsSaveFooter({
           ) : (
             <Save aria-hidden="true" />
           )}
-          {pending ? "Saving…" : "Save profile details"}
+          {pending ? "Saving…" : "Save profile"}
         </Button>
         <p className={styles.profileDetailsSaveStatus} aria-live="polite">
           {status}
@@ -341,12 +351,11 @@ function LoadedProfileSettings({
     motorcycleDraft,
     motorcycleDirty,
   } = profileEditorState;
-  const [profileSaveStatus, setProfileSaveStatus] = useState("");
-  const [motorcycleStatus, setMotorcycleStatus] = useState("");
+  const [saveStatus, setSaveStatus] = useState("");
   const [mediaStatus, setMediaStatus] = useState("");
-  const [profilePending, setProfilePending] = useState(false);
-  const [motorcyclePending, setMotorcyclePending] = useState(false);
+  const [savePending, setSavePending] = useState(false);
   const [mediaPending, setMediaPending] = useState(false);
+  useUnsavedProfileGuard(profileDirty || motorcycleDirty);
   const photos = editor.motorcycle?.photos.toSorted((left, right) => left.position - right.position) ?? [];
   const presentation = getProfileEditorPresentation({
     isPublished: editor.isPublished,
@@ -380,11 +389,14 @@ function LoadedProfileSettings({
     }));
   };
 
-  const handleProfileSave = async (formData: FormData) => {
-    setProfilePending(true);
-    setProfileSaveStatus("");
+  const handleSaveProfile = async (input: UpdateMemberProfileInput) => {
+    setSavePending(true);
+    setSaveStatus("");
+    let profileSaved = false;
+
     try {
-      const saved = await updateMemberProfile(profileInputFromFormData(formData));
+      const saved = await updateMemberProfile(input);
+      profileSaved = true;
       setProfileEditorState((current) => ({
         ...current,
         editor: saved,
@@ -396,30 +408,34 @@ function LoadedProfileSettings({
           saved,
         ),
       }));
-      setProfileSaveStatus(saved.isPublished ? "Profile changes saved." : "Private profile saved.");
-    } catch (error) {
-      setProfileSaveStatus(actionErrorMessage(error));
-    } finally {
-      setProfilePending(false);
-    }
-  };
 
-  const handleMotorcycleSave = async () => {
-    setMotorcyclePending(true);
-    setMotorcycleStatus("");
-    try {
-      await upsertMotorcycle(motorcycleDraft);
-      const refreshed = await getMemberProfileEditor();
+      let refreshed = saved;
+      if (motorcycleDirty) {
+        await upsertMotorcycle(motorcycleDraft);
+        refreshed = await getMemberProfileEditor();
+      }
+
       setProfileEditorState((current) => ({
-        ...reconcileEditorRefresh(current, refreshed),
+        ...current,
+        editor: refreshed,
+        draft: profileDraftFromEditor(refreshed),
+        profileDirty: false,
         motorcycleDraft: motorcycleDraftFromEditor(refreshed),
         motorcycleDirty: false,
       }));
-      setMotorcycleStatus("Motorcycle details saved.");
+      setSaveStatus(
+        refreshed.visibility === "PRIVATE"
+          ? "Profile saved. It remains private."
+          : "Profile saved.",
+      );
     } catch (error) {
-      setMotorcycleStatus(actionErrorMessage(error));
+      setSaveStatus(
+        profileSaved
+          ? "Profile details saved, but motorcycle changes could not be saved. Try again."
+          : actionErrorMessage(error),
+      );
     } finally {
-      setMotorcyclePending(false);
+      setSavePending(false);
     }
   };
 
@@ -449,7 +465,9 @@ function LoadedProfileSettings({
         getMemberProfileEditor,
       });
       setProfileEditorState((current) => reconcileEditorRefresh(current, refreshed));
-      setMediaStatus(`Photo ${index + 1} moved ${direction < 0 ? "left" : "right"}.`);
+      setMediaStatus(
+        `Photo ${index + 1} moved to the ${direction < 0 ? "previous" : "next"} position.`,
+      );
     } catch (error) {
       setMediaStatus(actionErrorMessage(error));
     } finally {
@@ -476,11 +494,6 @@ function LoadedProfileSettings({
     }
   };
 
-  const submitProfileForm = () => {
-    const form = document.getElementById("profile-settings-form");
-    if (form instanceof HTMLFormElement) form.requestSubmit();
-  };
-
   return (
     <div
       className={`profile-settings ${styles.studio}`}
@@ -488,9 +501,9 @@ function LoadedProfileSettings({
     >
       <header className={styles.studioHeader}>
         <div className={styles.studioHeading}>
-          <span>Rider profile</span>
-          <h1 id="profile-settings-title">Your rider profile</h1>
-          <p>Add the details riders see when they open your profile.</p>
+          <span>Profile</span>
+          <h1 id="profile-settings-title">Your profile</h1>
+          <p>Add the details people see when they open your profile.</p>
         </div>
         <div className={styles.studioHeaderActions}>
           <span className={styles.studioState} data-state={presentation.state}>
@@ -504,38 +517,29 @@ function LoadedProfileSettings({
         </div>
         <div className={styles.studioStatus}>
           <p>{presentation.description}</p>
-          {presentation.state === "ready" ? (
-            <Button type="button" onClick={submitProfileForm}>
-              Publish profile
-            </Button>
-          ) : presentation.state === "incomplete" && presentation.firstMissing ? (
+          {presentation.firstMissing ? (
             <Button asChild variant="outline">
               <a href={presentation.firstMissing.href}>
                 Add {presentation.firstMissing.label.toLowerCase()}
               </a>
             </Button>
           ) : null}
-          {presentation.signals.length ? (
-            <ul aria-label="Profile requirements">
-              {presentation.signals.map((signal) => (
-                <li key={signal.label} data-ready={signal.ready}>
-                  <span aria-hidden="true">{signal.ready ? "✓" : "○"}</span>
-                  {signal.label}
-                </li>
-              ))}
-            </ul>
-          ) : null}
         </div>
       </header>
-      <p className={styles.requiredLegend}>* Required to publish</p>
+      <p className={styles.requiredLegend}>* Needed for a complete profile</p>
 
-      <div className={styles.studioEditor}>
-       <form id="profile-settings-form" action={handleProfileSave} className="profile-settings__grid">
-        <ProfileSaveFieldset pending={profilePending}>
+      <form
+        id="profile-settings-form"
+        onSubmit={(event) => {
+          void handleSaveProfile(profileInputFromSubmitEvent(event));
+        }}
+        className={styles.studioEditor}
+      >
+        <ProfileSaveFieldset pending={savePending}>
+         <div className="profile-settings__grid">
          <Card id="profile-identity" className="profile-settings__section">
           <CardHeader>
-            <CardTitle><UserRound aria-hidden="true" /> Identity</CardTitle>
-            <CardDescription>This is the name, area, and story shown on your garage card.</CardDescription>
+            <CardTitle><UserRound aria-hidden="true" /> Profile details</CardTitle>
           </CardHeader>
           <CardContent className="profile-fields">
             <div className="profile-field">
@@ -547,9 +551,9 @@ function LoadedProfileSettings({
               <Input id="profile-area" name="area" required value={profileDraft.area} maxLength={80} onChange={(event) => updateProfileDraft({ area: event.currentTarget.value })} />
             </div>
             <div className="profile-field profile-field--wide">
-              <Label htmlFor="profile-bio">Garage note (optional)</Label>
+              <Label htmlFor="profile-bio">About you (optional)</Label>
               <textarea id="profile-bio" name="bio" value={profileDraft.bio} maxLength={500} rows={5} onChange={(event) => updateProfileDraft({ bio: event.currentTarget.value })} />
-              <span>Up to 500 characters. Contact details do not belong here.</span>
+              <span>Avoid phone numbers, email addresses, and exact locations. 500 characters maximum.</span>
             </div>
             <div className="profile-field">
               <Label htmlFor="profile-visibility">Profile visibility</Label>
@@ -558,7 +562,7 @@ function LoadedProfileSettings({
                 <SelectTrigger id="profile-visibility" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="PUBLIC">Public — anyone with the link</SelectItem>
-                  <SelectItem value="MEMBERS_ONLY">Members only — signed-in riders</SelectItem>
+                  <SelectItem value="MEMBERS_ONLY">Members only — signed-in members</SelectItem>
                   <SelectItem value="PRIVATE">Private — only you</SelectItem>
                 </SelectContent>
               </Select>
@@ -570,7 +574,7 @@ function LoadedProfileSettings({
           <CardHeader>
             <CardTitle>Attendance privacy</CardTitle>
             <CardDescription>
-              This setting applies to all current and future event rosters.
+              Used by default for every event roster.
             </CardDescription>
           </CardHeader>
           <CardContent className="profile-fields">
@@ -584,7 +588,7 @@ function LoadedProfileSettings({
                 <SelectTrigger id="default-roster-identity" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ANONYMOUS">Anonymous — count me without my card</SelectItem>
-                  <SelectItem value="VISIBLE">Visible — show my eligible rider card</SelectItem>
+                  <SelectItem value="VISIBLE">Visible — show my profile</SelectItem>
                 </SelectContent>
               </Select>
               <span>
@@ -593,18 +597,11 @@ function LoadedProfileSettings({
             </div>
           </CardContent>
         </Card>
-
-        <ProfileDetailsSaveFooter
-          pending={profilePending}
-          status={profileSaveStatus}
-        />
-        </ProfileSaveFieldset>
-      </form>
+         </div>
 
        <Card id="profile-avatar" className="profile-settings__section profile-settings__media-section">
         <CardHeader>
           <CardTitle><Camera aria-hidden="true" /> Profile photo (optional)</CardTitle>
-          <CardDescription>The identity plate crops this image to a centered square.</CardDescription>
         </CardHeader>
         <CardContent className="profile-avatar-editor">
           {editor.profilePhotoUrl ? (
@@ -615,25 +612,21 @@ function LoadedProfileSettings({
           <div>
             <MemberMediaUploader purpose="avatar" photos={[]} onUploaded={refreshEditor} />
             {editor.profilePhotoUrl ? (
-              <Button
-                type="button"
-                variant="destructive"
+              <ConfirmMediaDelete
+                label="profile photo"
+                triggerLabel="Delete profile photo"
                 disabled={mediaPending}
-                onClick={() => removeMedia(editor.profilePhotoUrl!, "Avatar")}
-              >
-                <Trash2 aria-hidden="true" /> Delete avatar
-              </Button>
+                onConfirm={() => removeMedia(editor.profilePhotoUrl!, "Profile photo")}
+              />
             ) : null}
           </div>
         </CardContent>
       </Card>
 
-      <form action={handleMotorcycleSave}>
-        <ProfileSaveFieldset pending={motorcyclePending}>
-         <Card id="profile-motorcycle" className="profile-settings__section">
+       <Card id="profile-motorcycle" className="profile-settings__section">
           <CardHeader>
             <CardTitle><Bike aria-hidden="true" /> Motorcycle</CardTitle>
-            <CardDescription>Tambike shows one motorcycle as the centerpiece of your garage card.</CardDescription>
+            <CardDescription>This motorcycle appears on your profile.</CardDescription>
           </CardHeader>
           <CardContent className="profile-fields">
             <div className="profile-field"><Label htmlFor="motorcycle-make">Make *</Label><Input id="motorcycle-make" name="make" required value={motorcycleDraft.make} onChange={(event) => updateMotorcycleDraft({ make: event.currentTarget.value })} placeholder="Honda" /></div>
@@ -642,17 +635,14 @@ function LoadedProfileSettings({
             <div className="profile-field"><Label htmlFor="motorcycle-displacement">Displacement (cc) (optional)</Label><Input id="motorcycle-displacement" name="displacementCc" type="number" min={1} max={10000} value={motorcycleDraft.displacementCc ?? ""} onChange={(event) => updateMotorcycleDraft({ displacementCc: optionalNumber(event.currentTarget.value) })} /></div>
             <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-nickname">Nickname (optional)</Label><Input id="motorcycle-nickname" name="nickname" value={motorcycleDraft.nickname ?? ""} onChange={(event) => updateMotorcycleDraft({ nickname: event.currentTarget.value })} placeholder="Ember" /></div>
             <div className="profile-field profile-field--wide"><Label htmlFor="motorcycle-description">Motorcycle note (optional)</Label><textarea id="motorcycle-description" name="description" value={motorcycleDraft.description ?? ""} onChange={(event) => updateMotorcycleDraft({ description: event.currentTarget.value })} maxLength={500} rows={4} /></div>
-            <div className="profile-settings__save profile-field--wide">
-              <Button type="submit" disabled={motorcyclePending}>
-                {motorcyclePending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
-                {motorcyclePending ? "Saving…" : "Save motorcycle"}
-              </Button>
-              <p aria-live="polite">{motorcycleStatus}</p>
-            </div>
           </CardContent>
         </Card>
+
+        <ProfileSaveFooter
+          pending={savePending}
+          status={saveStatus}
+        />
         </ProfileSaveFieldset>
-      </form>
 
        <div id="motorcycle-photos">
          <MotorcyclePhotoWorkspace
@@ -671,7 +661,7 @@ function LoadedProfileSettings({
       >
         {mediaStatus}
       </p>
-      </div>
+      </form>
     </div>
   );
 }

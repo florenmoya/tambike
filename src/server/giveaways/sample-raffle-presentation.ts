@@ -8,12 +8,11 @@ import type {
 
 export const SAMPLE_RAFFLE_PHOTO_SOURCES = {
   completed: {
-    pageUrl:
-      "https://www.pexels.com/photo/photo-of-a-motorcycle-helmet-15928222/",
+    pageUrl: "https://hjchelmets.us/products/c10-fop",
     downloadUrl:
-      "https://images.pexels.com/photos/15928222/pexels-photo-15928222.jpeg?auto=compress&cs=tinysrgb&w=1600",
-    photographer: "Andrés Chirrisco",
-    mediaId: "sample-raffle-helmet-photo-v1",
+      "https://hjchelmets.us/cdn/shop/files/mc23___c10_fop_1.webp?v=1769468143&width=1600",
+    photographer: "HJC Helmets",
+    mediaId: "sample-raffle-hjc-c10-fop-photo-v1",
   },
   ongoing: {
     pageUrl:

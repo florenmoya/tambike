@@ -346,6 +346,19 @@ function EventsSection({ rows }: { rows: EventReviewRow[] }) {
   );
 }
 
+export function adminEventReviewSummary(
+  event: Event,
+  state: { isDisabled: boolean; isPublished: boolean },
+) {
+  if (state.isDisabled) {
+    return `${event.title} is disabled and hidden from public operations.`;
+  }
+  if (state.isPublished) {
+    return `${event.title} is published and visible to riders.`;
+  }
+  return event.shortDescription;
+}
+
 function EventReviewDetail({
   adminDecision,
   event,
@@ -423,7 +436,9 @@ function EventReviewDetail({
                   <EventStatusBadge status={event.status} />
                 </div>
                 <CardTitle className="mt-3 text-2xl">{event.title}</CardTitle>
-                <CardDescription className="mt-1">{event.shortDescription}</CardDescription>
+                <CardDescription className="mt-1">
+                  {adminEventReviewSummary(event, { isDisabled, isPublished })}
+                </CardDescription>
               </div>
               <EventPosterPreview poster={event.poster} title={event.title} variant="detail" />
             </div>

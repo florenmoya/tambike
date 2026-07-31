@@ -63,6 +63,12 @@ import {
 import { demoEvents, seedUsers } from "@/features/tambike-demo/data";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
+  EventScheduleValidationError,
+  formatEventSchedule,
+  parseEventScheduleInput,
+  sortEventsBySchedule,
+} from "@/features/tambike-demo/event-schedule";
+import {
   filterEventsByQuery,
   getEventCtaState,
   type EventQueryInput,
@@ -76,6 +82,7 @@ import type {
   CheckInStatus,
   CreateEventInput,
   Event,
+  EventSchedule,
   EventType,
   OrganizerQrMode,
   Pass,
@@ -1390,15 +1397,21 @@ export class TambikeBackend {
     }
 
     const title = input.title.trim();
-    const date = input.date.trim();
-    const time = input.time.trim();
     const perkPreview = input.perkPreview.trim();
     const expectedRiders = Number(input.expectedRiders);
     const location = normalizeEventLocation(input);
+    let schedule: EventSchedule;
+    try {
+      schedule = parseEventScheduleInput(input);
+    } catch (error) {
+      if (error instanceof EventScheduleValidationError) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      throw error;
+    }
+    const labels = formatEventSchedule(schedule);
     if (
       !title ||
-      !date ||
-      !time ||
       !perkPreview ||
       !Number.isInteger(expectedRiders) ||
       expectedRiders <= 0 ||
@@ -1417,8 +1430,9 @@ export class TambikeBackend {
       organizerId: user.organizerProfileId,
       ...location,
       poster: "/demo/poster-tambike-cafe-classico.jpg",
-      date,
-      time,
+      date: labels.date,
+      time: labels.time,
+      ...schedule,
       shortDescription: `${title} is awaiting admin review.`,
       whatHappens: "Organizer-created event submitted directly for admin review and publication.",
       going: 0,
@@ -4824,9 +4838,13 @@ export class TambikeBackend {
   }
 
   listEvents(query?: EventQueryInput) {
-    return filterEventsByQuery(
-      Array.from(this.events.values()).map((event) => this.withAttendanceCounts(event)),
-      query,
+    return sortEventsBySchedule(
+      filterEventsByQuery(
+        Array.from(this.events.values()).map((event) =>
+          this.withAttendanceCounts(event),
+        ),
+        query,
+      ),
     );
   }
 

@@ -21,12 +21,13 @@ import {
   UserPlus,
 } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { useRouter } from "next/navigation";
 import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentType,
   type CSSProperties,
   type FormEvent,
@@ -40,6 +41,7 @@ import {
   getOrganizer,
 } from "./data";
 import { useDemo } from "./demo-provider";
+import { EventBrief } from "./event-brief";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
 import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
@@ -47,10 +49,12 @@ import { ProfilePreview } from "@/features/member-profiles/profile-preview";
 import { ProfileSettings } from "@/features/member-profiles/profile-settings";
 import { EventAttendeePreview } from "@/features/member-profiles/event-attendee-preview";
 import {
+  eventPublicSummary,
   filterEventsByQuery,
   getEventCtaState,
   type EventQueryInput,
 } from "./event-state";
+import { sortEventsBySchedule } from "./event-schedule";
 import { resolveEventPoster } from "./event-poster-assets";
 import type {
   AttendanceType,
@@ -87,7 +91,7 @@ interface TambikeScreenProps {
 
 const roleLabels: Record<Role, string> = {
   guest: "Guest",
-  rider: "Rider",
+  rider: "Member",
   organizer: "Organizer",
   admin: "Admin",
 };
@@ -108,7 +112,30 @@ const featuredCarouselIntervalMs = 5_000;
 const featuredWheelBurstDurationMs = 2_800;
 const featuredDragActivationPx = 16;
 const featuredDragCommitPx = 90;
+const largeCarouselQuery = "(min-width: 1920px)";
 type FeaturedWheelDirection = "previous" | "next";
+
+function subscribeToLargeCarousel(onStoreChange: () => void) {
+  const mediaQuery = window.matchMedia(largeCarouselQuery);
+  mediaQuery.addEventListener("change", onStoreChange);
+  return () => mediaQuery.removeEventListener("change", onStoreChange);
+}
+
+function getLargeCarouselSnapshot() {
+  return window.matchMedia(largeCarouselQuery).matches;
+}
+
+function getLargeCarouselServerSnapshot() {
+  return false;
+}
+
+function useLargeCarousel() {
+  return useSyncExternalStore(
+    subscribeToLargeCarousel,
+    getLargeCarouselSnapshot,
+    getLargeCarouselServerSnapshot,
+  );
+}
 
 const findEvent = (events: Event[], eventId?: string) =>
   events.find((event) => event.id === eventId) ?? getEvent(eventId);
@@ -185,12 +212,12 @@ const footerLinkGroups: Array<{
     ],
   },
   {
-    title: "Riders",
-    ariaLabel: "Footer rider links",
+    title: "Account",
+    ariaLabel: "Footer account links",
     links: [
       { label: "My passes", href: "/passes" },
       { label: "Profile", href: "/profile" },
-      { label: "Create rider account", href: "/signup" },
+      { label: "Create account", href: "/signup" },
     ],
   },
   {
@@ -386,9 +413,22 @@ function SpeedometerNavGauge() {
 
 export function TambikeAppShell({ children }: { children: React.ReactNode }) {
   const { role, currentUser, logout } = useDemo();
+  const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const panelLink = panelLinkByRole[role];
   const PanelIcon = panelLink?.icon;
+  const openSearch = () => {
+    setNavOpen(false);
+    setSearchOpen(true);
+  };
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedQuery = searchQuery.trim();
+    setSearchOpen(false);
+    router.push(normalizedQuery ? `/events?q=${encodeURIComponent(normalizedQuery)}` : "/events");
+  };
 
   return (
     <div className="tambike-shell">
@@ -408,6 +448,44 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
               {link.label}
             </Link>
           ))}
+          <div className="mobile-nav-session">
+            <button aria-label="Open event search" type="button" onClick={openSearch}>
+              <Search aria-hidden="true" />
+              Search events
+            </button>
+            {currentUser ? (
+              <>
+                <Link href="/profile" onClick={() => setNavOpen(false)}>
+                  Profile
+                </Link>
+                {panelLink ? (
+                  <Link href={panelLink.href} onClick={() => setNavOpen(false)}>
+                    {panelLink.label}
+                  </Link>
+                ) : null}
+                <button
+                  aria-label="Mobile log out"
+                  type="button"
+                  onClick={() => {
+                    setNavOpen(false);
+                    void logout();
+                  }}
+                >
+                  <LogOut aria-hidden="true" />
+                  Log out
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/login" onClick={() => setNavOpen(false)}>
+                  Log in
+                </Link>
+                <Link href="/signup" onClick={() => setNavOpen(false)}>
+                  Sign up
+                </Link>
+              </>
+            )}
+          </div>
         </nav>
         <div className="header-actions">
           {currentUser ? (
@@ -447,7 +525,13 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
               </Link>
             </>
           )}
-          <button className="icon-button" type="button" aria-label="Search">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Search events"
+            aria-expanded={searchOpen}
+            onClick={() => setSearchOpen((open) => !open)}
+          >
             <Search aria-hidden="true" />
           </button>
           <Link className="icon-button" href={currentUser ? "/profile" : "/login"} aria-label="Account">
@@ -463,6 +547,22 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
             <Menu aria-hidden="true" />
           </button>
         </div>
+        {searchOpen ? (
+          <form className="header-search-popover" role="search" onSubmit={submitSearch}>
+            <label>
+              <span>Search events</span>
+              <input
+                aria-label="Search events"
+                autoFocus
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Event, venue, or city"
+                type="search"
+                value={searchQuery}
+              />
+            </label>
+            <button type="submit">Search</button>
+          </form>
+        ) : null}
       </header>
       <main className="ambient-main">{children}</main>
       <TambikeFooter />
@@ -538,8 +638,10 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
   const { events } = useDemo();
   const activeFilter = compact ? getEventFilter(query?.type) : eventFilters[0];
   const searchTerm = query?.q?.trim() ?? "";
-  const publicEvents = events.filter((event) =>
-    ["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status),
+  const publicEvents = sortEventsBySchedule(
+    events.filter((event) =>
+      ["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status),
+    ),
   );
   const visibleEvents = filterEventsByQuery(publicEvents, query).filter(activeFilter.matches);
   const featuredEvents = getFeaturedEvents(publicEvents);
@@ -547,6 +649,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
   const [dragDirection, setDragDirection] = useState<"previous" | "next" | null>(null);
   const [wheelDirection, setWheelDirection] = useState<FeaturedWheelDirection>("next");
   const [isWheelBursting, setIsWheelBursting] = useState(false);
+  const showWideCarousel = useLargeCarousel();
   const dragStartXRef = useRef<number | null>(null);
   const dragMovedRef = useRef(false);
   const suppressFeatureClickRef = useRef(false);
@@ -588,7 +691,6 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
     dragStartXRef.current = event.clientX;
     dragMovedRef.current = false;
     setDragDirection(null);
-    event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const handleFeaturePointerMove = (event: PointerEvent<HTMLDivElement>) => {
@@ -596,6 +698,10 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
 
     const deltaX = event.clientX - dragStartXRef.current;
     if (Math.abs(deltaX) < featuredDragActivationPx) return;
+
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
 
     dragMovedRef.current = true;
     setDragDirection(deltaX < 0 ? "next" : "previous");
@@ -610,6 +716,9 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
 
     if (didDrag) {
       suppressFeatureClickRef.current = true;
+      window.setTimeout(() => {
+        suppressFeatureClickRef.current = false;
+      }, 0);
     }
 
     if (didCommit) {
@@ -728,6 +837,7 @@ function DiscoveryScreen({ compact, query }: { compact: boolean; query?: EventQu
                   index={index}
                   activeIndex={normalizedFeaturedIndex}
                   total={featuredEvents.length}
+                  showWidePeek={showWideCarousel}
                 />
               ))}
             </div>
@@ -830,23 +940,39 @@ function FeatureCard({
   index,
   activeIndex,
   total,
+  showWidePeek,
 }: {
   event: Event;
   index: number;
   activeIndex: number;
   total: number;
+  showWidePeek: boolean;
 }) {
   const offset = featureOffset(index, activeIndex, total);
   const distance = Math.abs(offset);
   const isFeatured = offset === 0;
-  const isVisible = distance <= 2;
+  const isWidePeek = distance === 3;
+  const isVisible = distance <= 2 || (showWidePeek && isWidePeek);
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const titleParts = splitFeatureTitleEndPhrase(event.title);
   const poster = resolveEventPoster(event.poster);
+  const direction = Math.sign(offset);
+  const xPercent = distance === 0 ? 0 : distance === 1 ? 95 : distance === 2 ? 158 : 220;
+  const rotation = distance === 0 ? 0 : distance === 1 ? 14 : distance === 2 ? 80 : 86;
   const featureStyle = {
-    "--x": `calc(${offset} * (var(--feature-card-width) + var(--feature-gap)))`,
+    "--x": `${direction * xPercent}%`,
     "--scale": isFeatured ? "1.08" : distance === 1 ? "0.9" : distance === 2 ? "0.82" : "0.74",
-    "--opacity": isFeatured ? "1" : distance === 1 ? "0.78" : distance === 2 ? "0.42" : "0",
+    "--opacity": isFeatured
+      ? "1"
+      : distance === 1
+        ? "0.86"
+        : distance === 2
+          ? "0.62"
+          : showWidePeek && isWidePeek
+            ? "0.28"
+            : "0",
+    "--depth": isFeatured ? "0px" : distance === 1 ? "-38px" : distance === 2 ? "-104px" : "-160px",
+    "--rotate-y": `${direction * rotation * -1}deg`,
     "--z": String(10 - distance),
     "--feature-tone": visual.poster,
   } as CSSProperties;
@@ -856,6 +982,7 @@ function FeatureCard({
       className={clsx(
         "feature-card",
         isFeatured && "is-featured",
+        isWidePeek && "is-wide-peek",
         isVisible && "is-visible",
       )}
       href={`/events/${event.id}`}
@@ -865,18 +992,7 @@ function FeatureCard({
       draggable={false}
       onDragStart={(event) => event.preventDefault()}
     >
-      <div className="feature-cover">
-        <Image
-          src={poster}
-          alt={`${event.title} poster`}
-          fill
-          placeholder={typeof poster === "string" ? "empty" : "blur"}
-          draggable={false}
-          loading={isFeatured ? "eager" : "lazy"}
-          fetchPriority={isFeatured ? "high" : "auto"}
-          sizes="(max-width: 760px) 68vw, (min-width: 2400px) 460px, (min-width: 1600px) 400px, 300px"
-        />
-      </div>
+      <FeaturePoster event={event} poster={poster} isFeatured={isFeatured} />
       <div className="feature-caption">
         <h2 className={event.title.length > 24 ? "feature-title-compact" : undefined}>
           {titleParts ? (
@@ -893,6 +1009,39 @@ function FeatureCard({
         </p>
       </div>
     </Link>
+  );
+}
+
+function FeaturePoster({
+  event,
+  poster,
+  isFeatured,
+}: {
+  event: Event;
+  poster: ReturnType<typeof resolveEventPoster>;
+  isFeatured: boolean;
+}) {
+  const { pending } = useLinkStatus();
+
+  return (
+    <div className={clsx("feature-cover", pending && "is-opening")} aria-busy={pending || undefined}>
+      <Image
+        src={poster}
+        alt={`${event.title} poster`}
+        fill
+        placeholder={typeof poster === "string" ? "empty" : "blur"}
+        draggable={false}
+        loading={isFeatured ? "eager" : "lazy"}
+        fetchPriority={isFeatured ? "high" : "auto"}
+        sizes="(max-width: 760px) 68vw, (min-width: 2400px) 460px, (min-width: 1600px) 400px, 300px"
+      />
+      {pending ? (
+        <span className="feature-opening" role="status">
+          <span className="feature-opening-ring" aria-hidden="true" />
+          <span>Opening event…</span>
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -948,6 +1097,7 @@ function EventDetail({
   const [shareFeedback, setShareFeedback] = useState("");
   const [actionError, setActionError] = useState("");
   const cta = getEventCtaState(event);
+  const publicSummary = eventPublicSummary(event);
   const visual = eventVisuals[event.type] ?? eventVisuals.Tambike;
   const poster = resolveEventPoster(event.poster);
   const detailStyle = {
@@ -965,7 +1115,7 @@ function EventDetail({
   const shareEvent = async () => {
     const mode = await shareOrCopy({
       title: event.title,
-      text: event.shortDescription,
+      text: publicSummary,
       url: `${window.location.origin}/events/${event.id}`,
     });
     setShareFeedback(mode === "shared" ? "Shared" : "Link copied");
@@ -980,7 +1130,7 @@ function EventDetail({
               {event.type} · {event.date}
             </span>
             <h1>{event.title}</h1>
-            <p>{event.shortDescription}</p>
+            <p>{publicSummary}</p>
 
             <div className="event-detail-essentials" aria-label="Event essentials">
               <span>{event.time}</span>
@@ -1069,9 +1219,11 @@ function EventDetail({
         </section>
 
         <div className="event-detail-sections">
-          <InfoPanel eyebrow="What to expect" title="A relaxed rider meetup">
-            <p>{event.whatHappens}</p>
-          </InfoPanel>
+          <EventBrief
+            eventType={event.type}
+            description={event.whatHappens}
+            rules={event.rules}
+          />
 
           <aside className="event-detail-perk" aria-label="Event perk">
             <Coffee aria-hidden="true" />
@@ -1104,14 +1256,6 @@ function EventDetail({
               </div>
             </InfoPanel>
           ) : null}
-
-          <InfoPanel eyebrow="Rules" title="Safety and venue notes">
-            <div className="chip-list">
-              {event.rules.map((rule) => (
-                <span key={rule}>{rule}</span>
-              ))}
-            </div>
-          </InfoPanel>
 
           <InfoPanel eyebrow="Organizer" title={organizer.displayName}>
             <p>
@@ -1262,18 +1406,18 @@ function AuthGateModal({ notice, onClose }: { notice: string; onClose: () => voi
           <h2>{notice}</h2>
         </div>
         <p>
-          Log in with an approved account or create a rider profile to continue.
+          Log in with an approved account or create a profile to continue.
         </p>
         <div className="modal-actions">
-          <button type="button" className="buy-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <Link className="buy-secondary as-link" href="/signup">
-            Sign up
-          </Link>
           <Link className="checkout-button as-link" href="/login">
             Log in
           </Link>
+          <Link className="buy-secondary as-link" href="/signup">
+            Sign up
+          </Link>
+          <button type="button" className="buy-secondary" onClick={onClose}>
+            Cancel
+          </button>
         </div>
       </section>
     </div>
@@ -1380,13 +1524,13 @@ function PassesScreen() {
   const { currentUser, events, passes } = useDemo();
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view passes" body="Tambike Passes are created after a rider registers for an event." />;
+    return <AuthRequired title="Log in to view passes" body="Tambike Passes are created after you register for an event." />;
   }
 
   if (passes.length === 0) {
     return (
       <LightView>
-        <HeroPanel eyebrow="My Passes" title="No Tambike Passes yet" body="Register as going for an upcoming event to create your rider pass." />
+        <HeroPanel eyebrow="My Passes" title="No Tambike Passes yet" body="Register as going for an upcoming event to create your pass." />
       </LightView>
     );
   }
@@ -1408,14 +1552,14 @@ function PassDetail({ passId }: { passId?: string }) {
   const [shareFeedback, setShareFeedback] = useState("");
 
   if (!currentUser) {
-    return <AuthRequired title="Log in to view this pass" body="Tambike passes are tied to the logged-in rider profile." />;
+    return <AuthRequired title="Log in to view this pass" body="Tambike Passes are tied to your signed-in account." />;
   }
 
   const pass = passId ? passes.find((candidate) => candidate.id === passId) : passes[0];
   if (!pass) {
     return (
       <LightView>
-        <HeroPanel eyebrow="Tambike Pass" title="Pass not found" body="This pass is not available for the current rider account." />
+        <HeroPanel eyebrow="Tambike Pass" title="Pass not found" body="This pass is not available for the current account." />
       </LightView>
     );
   }
@@ -1599,8 +1743,8 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
           </button>
 
           <div className="login-card__footer">
-            <span>New rider?</span>
-            <Link href="/signup">Create rider account</Link>
+            <span>New here?</span>
+            <Link href="/signup">Create account</Link>
           </div>
         </form>
       </section>
@@ -1656,9 +1800,9 @@ function SignupScreen() {
           <div className="login-card__header">
             <span>
               <UserPlus aria-hidden="true" />
-              Rider signup
+              Join Tambike
             </span>
-            <h1 id="signup-title">Create rider account</h1>
+            <h1 id="signup-title">Create account</h1>
             <p>Start with RSVPs and passes, then keep your ride details up to date.</p>
           </div>
 
@@ -1666,14 +1810,14 @@ function SignupScreen() {
             <ShieldCheck aria-hidden="true" />
             <div>
               <span>Account type</span>
-              <strong>Rider</strong>
+              <strong>Member</strong>
             </div>
           </div>
 
           <div className="signup-grid">
             <label className="login-field">
               <span>Display name</span>
-              <input name="displayName" required placeholder="Jay New Rider" />
+              <input name="displayName" required placeholder="Your name" />
             </label>
             <label className="login-field">
               <span>Email</span>
@@ -1697,7 +1841,7 @@ function SignupScreen() {
 
           <button className="login-submit" type="submit" disabled={pending}>
             <UserPlus aria-hidden="true" />
-            {pending ? "Creating rider account..." : "Create rider account"}
+            {pending ? "Creating account..." : "Create account"}
           </button>
 
           <div className="login-card__footer">
@@ -1731,7 +1875,7 @@ function ProfilePreviewScreen() {
     return (
       <AuthRequired
         title="Log in to preview profile"
-        body="Your preview is only available from your rider account."
+        body="Your preview is only available from your account."
       />
     );
   }

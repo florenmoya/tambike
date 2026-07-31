@@ -6,6 +6,7 @@ import { ImagePlus, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { finalizeMemberMediaAction } from "@/server/actions";
+import { ConfirmMediaDelete } from "./confirm-media-delete";
 import {
   memberMediaUploadFailure,
   MemberMediaDropInput,
@@ -174,7 +175,7 @@ export function MotorcyclePhotoWorkspace({
         <div>
           <strong id="motorcycle-photo-title">Motorcycle photos *</strong>
           <span>
-            The first photo is your cover. JPEG, PNG, or WebP · Up to 8 MB each.
+            First photo becomes the cover. Choose up to 5 JPEG, PNG, or WebP images · 8 MB maximum each · Upload starts after selection.
           </span>
         </div>
         <span className={styles.motorcyclePhotoCapacity} aria-live="polite">
@@ -195,7 +196,6 @@ export function MotorcyclePhotoWorkspace({
         >
           <ImagePlus aria-hidden="true" />
           <strong>Drop motorcycle photos here</strong>
-          <span>JPEG, PNG, or WebP · 8 MB each · up to 5 photos</span>
           <Label htmlFor={inputId}>Choose photos</Label>
           {/* MemberMediaDropInput keeps the multiple file selection behavior shared with this workspace. */}
           <MemberMediaDropInput
@@ -221,7 +221,7 @@ export function MotorcyclePhotoWorkspace({
               <Button type="button" variant="outline" onClick={() => retryItem(item.id)}>Retry</Button>
             ) : null}
             {item.status === "uploaded" && item.error ? (
-              <Button type="button" variant="outline" onClick={() => refreshUploadedItem(item.id)}>Refresh gallery</Button>
+              <Button type="button" variant="outline" onClick={() => refreshUploadedItem(item.id)}>Show uploaded photo</Button>
             ) : null}
             {item.status !== "uploaded" ? (
               <Button type="button" variant="outline" disabled={item.status === "uploading"} onClick={() => removeItem(item.id)}>Remove</Button>
@@ -249,7 +249,7 @@ export function MotorcyclePhotoWorkspace({
               alt={`Motorcycle photo ${index + 1}`}
               width={photo.width || 800}
               height={photo.height || 600}
-              sizes="(max-width: 640px) 45vw, 280px"
+              sizes="(max-width: 640px) 100vw, 280px"
               loading={index === 0 ? "eager" : undefined}
             />
             <div className={styles.motorcyclePhotoCardMeta}>
@@ -271,30 +271,28 @@ export function MotorcyclePhotoWorkspace({
               <Button
                 type="button"
                 variant="outline"
-                aria-label={`Move motorcycle photo ${index + 1} left`}
+                aria-label={`Move motorcycle photo ${index + 1} to the previous position`}
                 disabled={mediaPending || index === 0}
                 onClick={() => void onMove(index, -1)}
               >
-                Move left
+                Previous position
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                aria-label={`Move motorcycle photo ${index + 1} right`}
+                aria-label={`Move motorcycle photo ${index + 1} to the next position`}
                 disabled={mediaPending || index === photos.length - 1}
                 onClick={() => void onMove(index, 1)}
               >
-                Move right
+                Next position
               </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                aria-label={`Delete motorcycle photo ${index + 1}`}
+              <ConfirmMediaDelete
+                label={`motorcycle photo ${index + 1}`}
+                triggerLabel="Delete photo"
+                triggerAriaLabel={`Delete motorcycle photo ${index + 1}`}
                 disabled={mediaPending}
-                onClick={() => void onDelete(photo.url, `Photo ${index + 1}`)}
-              >
-                Delete
-              </Button>
+                onConfirm={() => onDelete(photo.url, `Photo ${index + 1}`)}
+              />
             </div>
           </li>
         ))}

@@ -51,7 +51,7 @@ export function getProfileEditorPresentation(
     },
     {
       key: "photos",
-      label: "Motorcycle photos",
+      label: "Motorcycle photo",
       required: true,
       ready: input.photoCount > 0,
       href: "#motorcycle-photos",
@@ -67,19 +67,7 @@ export function getProfileEditorPresentation(
         : complete
           ? "ready"
           : "incomplete";
-  const signals = complete || input.isPublished
-    ? []
-    : [
-        {
-          label: "Identity",
-          ready: requirements[0].ready && requirements[1].ready,
-        },
-        {
-          label: "Motorcycle",
-          ready: requirements[2].ready && requirements[3].ready,
-        },
-        { label: "Photo", ready: requirements[4].ready },
-      ];
+  const signals: Array<{ label: string; ready: boolean }> = [];
 
   return {
     state,
@@ -89,16 +77,20 @@ export function getProfileEditorPresentation(
         : state === "private"
           ? "Private"
         : state === "ready"
-          ? "Ready to publish"
+          ? "Ready to save"
           : "Complete your profile",
     description:
       state === "live"
-        ? "Other riders can view your rider profile."
+        ? firstMissing
+          ? `Others can view your profile. ${firstMissing.label} is still needed.`
+          : "Others can view your profile."
         : state === "private"
-          ? "Only you can see this profile."
+          ? firstMissing
+            ? `Only you can see this profile. ${firstMissing.label} is still needed.`
+            : "Only you can see this profile."
         : state === "ready"
-          ? "Your required details are complete."
-          : `${firstMissing!.label} is required to publish.`,
+          ? "Save your profile details to finish setup."
+          : `${firstMissing!.label} is still needed.`,
     requirements,
     signals,
     firstMissing,

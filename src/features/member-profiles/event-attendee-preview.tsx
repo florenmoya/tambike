@@ -43,7 +43,7 @@ export function EventAttendeePreview({
     });
   }
 
-  const goingCopy = going === 1 ? "1 rider" : `${going} riders`;
+  const goingCopy = going === 1 ? "1 attendee" : `${going} attendees`;
   const rosterEnabled = preview?.summary?.rosterEnabled !== false;
   const riders = rosterEnabled ? preview?.attendees.slice(0, 4) ?? [] : [];
   const canOpenRoster = rosterEnabled;
@@ -73,7 +73,7 @@ export function EventAttendeePreview({
                 key={rider.slug}
                 className={styles.bikeTile}
                 href={`/riders/${rider.slug}`}
-                aria-label={`View ${rider.displayName}’s bike and rider profile`}
+                aria-label={`View ${rider.displayName}’s bike and profile`}
               >
                 <Image
                   className={styles.bikePhoto}
@@ -120,7 +120,7 @@ export function EventAttendeePreview({
           </div>
         </div>
       ) : rosterEnabled && !preview?.unavailable ? (
-        <p className={styles.state}>Rider profiles will appear here as they join.</p>
+        <p className={styles.state}>Profiles will appear here as attendees join.</p>
       ) : null}
 
       {canOpenRoster ? (

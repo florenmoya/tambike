@@ -5,10 +5,10 @@ import type { MemberProfileView } from "./types";
 
 export function MemberProfileScreen({ profile }: { profile: MemberProfileView }) {
   return (
-    <section className="garage-profile-page" aria-label={`${profile.displayName} rider garage`}>
+    <section className="garage-profile-page" aria-label={`${profile.displayName} profile`}>
       <div className="garage-profile-shell">
         <Link className="garage-profile-back" href="/events">
-          Tambike / Rider garages
+          Tambike / Profiles
         </Link>
         <RiderGarageView profile={profile} prioritizeMedia />
       </div>

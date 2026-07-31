@@ -16,7 +16,13 @@ function mergeAttendees(current: Attendee[], incoming: Attendee[]) {
   return [...new Map([...current, ...incoming].map((attendee) => [attendee.slug, attendee])).values()];
 }
 
-function RiderExcerpt({ attendee }: { attendee: Attendee }) {
+function RiderExcerpt({
+  attendee,
+  prioritizeMedia = false,
+}: {
+  attendee: Attendee;
+  prioritizeMedia?: boolean;
+}) {
   const motorcycle = attendee.motorcycle;
   const hero = motorcycle?.photos.toSorted((left, right) => left.position - right.position)[0];
 
@@ -51,6 +57,7 @@ function RiderExcerpt({ attendee }: { attendee: Attendee }) {
               width={640}
               height={360}
               sizes="(max-width: 640px) 100vw, 360px"
+              loading={prioritizeMedia ? "eager" : undefined}
               unoptimized
             />
           ) : (
@@ -143,9 +150,9 @@ function StatefulEventAttendeeRoster({
         });
         setAttendees((current) => mergeAttendees(current, page.attendees));
         setNextCursor(page.nextCursor);
-        setStatus(page.nextCursor ? "More riders loaded." : "All visible riders are loaded.");
+        setStatus(page.nextCursor ? "More attendees loaded." : "All visible attendees are loaded.");
       } catch {
-        setStatus("The next riders could not be loaded. Try again.");
+        setStatus("The next attendees could not be loaded. Try again.");
       }
     });
   };
@@ -161,7 +168,7 @@ function StatefulEventAttendeeRoster({
           <h1 id="event-roster-title">Who’s going</h1>
           <span
             className="event-roster__count"
-            aria-label={`${summary.goingCount} riders going`}
+            aria-label={`${summary.goingCount} attendees going`}
           >
             <strong>{summary.goingCount}</strong> going
           </span>
@@ -171,7 +178,7 @@ function StatefulEventAttendeeRoster({
       {!summary.rosterEnabled ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>The rider list isn’t available for this event.</CardTitle>
+            <CardTitle>The attendee list isn’t available for this event.</CardTitle>
           </CardHeader>
         </Card>
       ) : !signedIn ? (
@@ -186,7 +193,7 @@ function StatefulEventAttendeeRoster({
       ) : summary.goingCount === 0 ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>No riders yet</CardTitle>
+            <CardTitle>No attendees yet</CardTitle>
           </CardHeader>
           <CardContent>
             <Button asChild><Link className="event-roster__state-action" href={`/events/${summary.eventId}/register`}>Join this event</Link></Button>
@@ -195,18 +202,24 @@ function StatefulEventAttendeeRoster({
       ) : summary.visibleCount === 0 && attendees.length === 0 && !nextCursor ? (
         <Card className="event-roster__state">
           <CardHeader>
-            <CardTitle>No rider profiles to show yet</CardTitle>
+            <CardTitle>No profiles to show yet</CardTitle>
           </CardHeader>
         </Card>
       ) : (
         <>
           <div className="event-roster__grid">
-            {attendees.map((attendee) => <RiderExcerpt key={attendee.slug} attendee={attendee} />)}
+            {attendees.map((attendee, index) => (
+              <RiderExcerpt
+                key={attendee.slug}
+                attendee={attendee}
+                prioritizeMedia={index < 4}
+              />
+            ))}
           </div>
           {nextCursor ? (
             <div className="event-roster__more">
               <Button type="button" variant="outline" onClick={loadMore} disabled={isPending}>
-                <Users aria-hidden="true" /> {isPending ? "Loading riders…" : "Load more riders"}
+                <Users aria-hidden="true" /> {isPending ? "Loading attendees…" : "Load more attendees"}
               </Button>
             </div>
           ) : null}

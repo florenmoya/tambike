@@ -635,6 +635,7 @@ export function OrganizerGiveawayWorkspace({
   initialCampaigns = [],
   configurationActions = defaultOrganizerGiveawayConfigurationActions,
 }: OrganizerGiveawayWorkspaceProps) {
+  const emptyDraftIdSeed = React.useId();
   const [campaigns, setCampaigns] = React.useState<OrganizerGiveawayCampaign[]>(initialCampaigns);
   const [selectedCampaignId, setSelectedCampaignId] = React.useState<string | null>(
     initialCampaigns[0]?.id ?? null,
@@ -647,7 +648,9 @@ export function OrganizerGiveawayWorkspace({
     setPrizeMediaRefreshRequiredByCampaignId,
   ] = React.useState<Record<string, true>>({});
   const [configurationFailures, setConfigurationFailures] = React.useState<Record<string, true>>({});
-  const [editorDraft, setEditorDraft] = React.useState<GiveawayEditorDraft>(() => createEmptyDraft());
+  const [editorDraft, setEditorDraft] = React.useState<GiveawayEditorDraft>(
+    () => createEmptyDraft(emptyDraftIdSeed),
+  );
   const [report, setReport] = React.useState<{
     campaignId: string;
     value: OrganizerGiveawayReport;
@@ -1261,12 +1264,14 @@ export function OrganizerGiveawayWorkspace({
   const selectCampaign = React.useCallback(
     (campaign: OrganizerGiveawayCampaign) => {
       setSelectedCampaignId(campaign.id);
-      setEditorDraft(draftsByCampaignId[campaign.id] ?? createEmptyDraft());
+      setEditorDraft(
+        draftsByCampaignId[campaign.id] ?? createEmptyDraft(emptyDraftIdSeed),
+      );
       setIssuedCampaignCode(null);
       setCancellationReason("");
       setNotice(null);
     },
-    [draftsByCampaignId],
+    [draftsByCampaignId, emptyDraftIdSeed],
   );
 
   const createOrSaveCampaign = React.useCallback(() => {
@@ -1728,7 +1733,7 @@ export function OrganizerGiveawayWorkspace({
           selectedCampaignId={selectedCampaignId}
           onCreate={() => {
             setSelectedCampaignId(null);
-            setEditorDraft(createEmptyDraft());
+            setEditorDraft(createEmptyDraft(emptyDraftIdSeed));
             setReport(null);
             setIssuedCampaignCode(null);
             setCancellationReason("");
@@ -3519,7 +3524,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function DateTimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <Field label={label}><Input type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
+  return <Field label={label}><Input type="datetime-local" value={value} onInput={(event) => onChange(event.currentTarget.value)} /></Field>;
 }
 
 function GroupCheckboxes({ pool, groups, onChange }: { pool: GiveawayPrizePoolInput; groups: GiveawayEligibilityGroupInput[]; onChange: (groupIds: string[]) => void }) {
@@ -3614,8 +3619,8 @@ function toDateTimeLocal(value: string | undefined, timeZone: string) {
   }
 }
 
-function createEmptyDraft(): GiveawayEditorDraft {
-  const group = createEligibilityGroup(1);
+function createEmptyDraft(idSeed: string): GiveawayEditorDraft {
+  const group = createEligibilityGroup(1, idSeed);
   return {
     title: "",
     kind: "raffle",
@@ -3634,17 +3639,24 @@ function createEmptyDraft(): GiveawayEditorDraft {
     drawAt: "",
     claimDeadlineAt: "",
     eligibilityGroups: [group],
-    prizePools: [createPrizePool(1, [group])],
+    prizePools: [createPrizePool(1, [group], idSeed)],
   };
 }
 
-function createEligibilityGroup(position: number): GiveawayEligibilityGroupInput {
-  return { id: `group-${position}-${shortId()}`, label: `Eligibility group ${position}`, weight: 1, conditions: [{ source: "active_rsvp_pass" }] };
+function createEligibilityGroup(
+  position: number,
+  idSeed = shortId(),
+): GiveawayEligibilityGroupInput {
+  return { id: `group-${position}-${idSeed}`, label: `Eligibility group ${position}`, weight: 1, conditions: [{ source: "active_rsvp_pass" }] };
 }
 
-function createPrizePool(position: number, groups: GiveawayEligibilityGroupInput[]): GiveawayPrizePoolInput {
+function createPrizePool(
+  position: number,
+  groups: GiveawayEligibilityGroupInput[],
+  idSeed = shortId(),
+): GiveawayPrizePoolInput {
   return {
-    id: `pool-${position}-${shortId()}`,
+    id: `pool-${position}-${idSeed}`,
     title: `Prize pool ${position}`,
     awardMode: "random_draw",
     fulfilmentMode: "onsite",

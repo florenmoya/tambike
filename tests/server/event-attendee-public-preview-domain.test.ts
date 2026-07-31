@@ -138,7 +138,8 @@ describe("public event attendee preview", () => {
     } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview");
     const event = await createPublishedTestEvent(backend, actors, {
-      date: "Fri · December 31, 2099",
+      startDate: "2099-12-31",
+      endDate: "2099-12-31",
     });
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
       enabled: true,
@@ -207,7 +208,8 @@ describe("public event attendee preview", () => {
     const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview-limit");
     const event = await createPublishedTestEvent(backend, actors, {
-      date: "Fri · December 31, 2099",
+      startDate: "2099-12-31",
+      endDate: "2099-12-31",
     });
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
       enabled: true,
@@ -249,7 +251,8 @@ describe("public event attendee preview", () => {
     const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "per-event-preview");
     const event = await createPublishedTestEvent(backend, actors, {
-      date: "Fri · December 31, 2099",
+      startDate: "2099-12-31",
+      endDate: "2099-12-31",
     });
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
       enabled: true,
@@ -322,7 +325,8 @@ describe("public event attendee preview", () => {
     const { backend, addBikePhoto } = await createPreviewHarness();
     const actors = await createTestActors(backend, "public-preview-exclusions");
     const event = await createPublishedTestEvent(backend, actors, {
-      date: "Fri · December 31, 2099",
+      startDate: "2099-12-31",
+      endDate: "2099-12-31",
     });
     await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
       enabled: true,

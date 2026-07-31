@@ -108,8 +108,10 @@ async function createOpenScenario(backend: TestBackend) {
   const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Deterministic presentation comparison event",
     type: "Bike Night",
-    date: "August 15, 2030",
-    time: "7:00 PM - 10:00 PM",
+    startDate: "2030-08-15",
+    startTime: "19:00",
+    endDate: "2030-08-15",
+    endTime: "22:00",
     locationName: "Presentation Test Grounds",
     locationAddress: "15 Presentation Avenue, Antipolo",
     locationMapLink: "https://maps.example.test/presentation-test-grounds",

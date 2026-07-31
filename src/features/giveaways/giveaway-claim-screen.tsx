@@ -110,7 +110,7 @@ export function GiveawayClaimScreen({
         if (!result.ok) {
           setMessage(
             result.code === "UNAUTHENTICATED"
-              ? "Log in with the rider account that received this award."
+              ? "Log in with the account that received this award."
               : "A claim credential cannot be issued right now. Check the award status or ask the event organizer for help.",
           );
           return;
@@ -139,7 +139,7 @@ export function GiveawayClaimScreen({
       if (!result.ok) {
         setMessage(
           result.code === "UNAUTHENTICATED"
-            ? "Log in with the rider account that received this award."
+            ? "Log in with the account that received this award."
             : "This award could not be declined. It may no longer be available for rider changes.",
         );
         return;
@@ -178,7 +178,7 @@ export function GiveawayClaimScreen({
       if (!result.ok) {
         setMessage(
           result.code === "UNAUTHENTICATED"
-            ? "Log in with the rider account that received this award."
+            ? "Log in with the account that received this award."
             : "Delivery details could not be saved. Confirm that the claim has been verified first.",
         );
         return;

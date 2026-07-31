@@ -138,7 +138,7 @@ describe("rider giveaway entry controls", () => {
     const messageFor = failureMessage as (code: "UNAUTHENTICATED" | "ERROR") => string;
     const hrefFor = loginHref as (eventId: string) => string;
 
-    expect(messageFor("UNAUTHENTICATED")).toMatch(/log in.*rider/i);
+    expect(messageFor("UNAUTHENTICATED")).toMatch(/log in.*account/i);
     expect(messageFor("ERROR")).toMatch(/code.*wrong|eligible|open/i);
     expect(hrefFor("event / 1")).toBe("/login?next=%2Fevents%2Fevent%2520%252F%25201");
   });
