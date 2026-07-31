@@ -1,0 +1,353 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import bcrypt from "bcryptjs";
+import { describe, expect, test } from "vitest";
+
+import { PrismaTambikeBackend } from "../../src/server/prisma-backend";
+import {
+  closePrismaIntegrationClientPair,
+  createPrismaIntegrationClientPair,
+  createPrismaIntegrationClients,
+} from "./clients";
+import { createPrismaEventFixture } from "./fixtures";
+
+function hashSessionToken(token: string) {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
+function createBackendClients() {
+  return createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+    const backend = PrismaTambikeBackend.create(databaseUrl);
+    return { backend, $disconnect: () => backend.disconnect() };
+  });
+}
+
+describe("Prisma account access", () => {
+  test("persists suspension, revokes sessions, audits safely, and restores verification", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createBackendClients();
+    const suffix = `account-access-${randomUUID()}`;
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix,
+      });
+      await rawClients.primary.user.update({
+        where: { id: fixture.riders[0].userId },
+        data: { passwordHash: await bcrypt.hash("password123", 4) },
+      });
+      const secondSession = await backendClients.primary.backend.loginWithPassword(
+        `integration-rider-1-${suffix}@example.test`,
+        "password123",
+      );
+      const accounts = await backendClients.primary.backend.listAdminUserAccounts(
+        fixture.adminSession,
+      );
+      const before = accounts.find(
+        (user) => user.id === fixture.riders[0].userId,
+      )!;
+
+      expect(accounts.map((account) => account.displayName)).toEqual(
+        [...accounts]
+          .sort(
+            (left, right) =>
+              left.displayName.localeCompare(right.displayName) ||
+              left.id.localeCompare(right.id),
+          )
+          .map((account) => account.displayName),
+      );
+      expect(JSON.stringify(accounts)).not.toContain("passwordHash");
+      expect(JSON.stringify(accounts)).not.toContain("suspendedByUserId");
+
+      const suspensionReason = "Disposable integration suspension reason.";
+      const suspended = await backendClients.primary.backend.suspendUser(
+        fixture.adminSession,
+        fixture.riders[0].userId,
+        {
+          reason: suspensionReason,
+          expectedUpdatedAt: before.updatedAt,
+        },
+      );
+
+      expect(suspended).toMatchObject({
+        verificationStatus: "UNVERIFIED",
+        accountStatus: "SUSPENDED",
+        suspendedReason: suspensionReason,
+      });
+      expect(Date.parse(suspended.updatedAt)).toBeGreaterThan(
+        Date.parse(before.updatedAt),
+      );
+      await expect(
+        rawClients.secondary.session.count({
+          where: { userId: fixture.riders[0].userId },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        backendClients.secondary.backend.getCurrentUser(
+          secondSession.sessionToken,
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        backendClients.secondary.backend.loginWithPassword(
+          `integration-rider-1-${suffix}@example.test`,
+          "wrong-password",
+        ),
+      ).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+      await expect(
+        backendClients.secondary.backend.loginWithPassword(
+          `integration-rider-1-${suffix}@example.test`,
+          "password123",
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      const retainedSession = `retained-suspended-session-${suffix}`;
+      await rawClients.primary.session.create({
+        data: {
+          tokenHash: hashSessionToken(retainedSession),
+          userId: fixture.riders[0].userId,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+      await expect(
+        backendClients.primary.backend.getCurrentUser(retainedSession),
+      ).resolves.toBeNull();
+      await expect(
+        backendClients.primary.backend.getSnapshot(retainedSession),
+      ).resolves.toMatchObject({
+        currentUser: null,
+        passes: [],
+        passCreated: false,
+      });
+      await rawClients.primary.session.deleteMany({
+        where: { userId: fixture.riders[0].userId },
+      });
+
+      const suspensionAudit = await rawClients.secondary.auditLog.findFirstOrThrow(
+        {
+          where: {
+            action: "ACCOUNT_SUSPENDED",
+            targetId: fixture.riders[0].userId,
+          },
+        },
+      );
+      expect(suspensionAudit).toMatchObject({
+        actorUserId: fixture.adminId,
+        targetType: "User",
+        metadata: {
+          previousAccountStatus: "ACTIVE",
+          nextAccountStatus: "SUSPENDED",
+        },
+      });
+      expect(JSON.stringify(suspensionAudit.metadata)).not.toContain(
+        suspensionReason,
+      );
+      expect(JSON.stringify(suspensionAudit.metadata)).not.toContain(
+        fixture.riders[0].sessionToken,
+      );
+      expect(JSON.stringify(suspensionAudit.metadata)).not.toContain(
+        "password123",
+      );
+
+      const restored = await backendClients.primary.backend.restoreUser(
+        fixture.adminSession,
+        fixture.riders[0].userId,
+        {
+          reason: "Disposable integration restoration reason.",
+          expectedUpdatedAt: suspended.updatedAt,
+        },
+      );
+      expect(restored).toMatchObject({
+        verificationStatus: "UNVERIFIED",
+        accountStatus: "ACTIVE",
+        suspendedAt: undefined,
+        suspendedReason: undefined,
+      });
+      expect(Date.parse(restored.updatedAt)).toBeGreaterThan(
+        Date.parse(suspended.updatedAt),
+      );
+      await expect(
+        rawClients.secondary.auditLog.count({
+          where: {
+            action: "ACCOUNT_RESTORED",
+            targetId: fixture.riders[0].userId,
+          },
+        }),
+      ).resolves.toBe(1);
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
+  test("rejects a stale updatedAt account transition", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createBackendClients();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix: `account-stale-${randomUUID()}`,
+      });
+
+      await expect(
+        backendClients.primary.backend.suspendUser(
+          fixture.adminSession,
+          fixture.riders[0].userId,
+          {
+            reason: "A stale admin view must lose the update race.",
+            expectedUpdatedAt: "2000-01-01T00:00:00.000Z",
+          },
+        ),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(
+        rawClients.secondary.user.findUniqueOrThrow({
+          where: { id: fixture.riders[0].userId },
+          select: { accountStatus: true },
+        }),
+      ).resolves.toEqual({ accountStatus: "ACTIVE" });
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
+  test("rejects self-suspension", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createBackendClients();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix: `account-self-${randomUUID()}`,
+      });
+      const admin = (
+        await backendClients.primary.backend.listAdminUserAccounts(
+          fixture.adminSession,
+        )
+      ).find((account) => account.id === fixture.adminId)!;
+
+      await expect(
+        backendClients.primary.backend.suspendUser(
+          fixture.adminSession,
+          fixture.adminId,
+          {
+            reason: "An administrator cannot suspend their own account.",
+            expectedUpdatedAt: admin.updatedAt,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
+  test("serializes mutual suspension so one active admin remains", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createBackendClients();
+
+    try {
+      await rawClients.primary.user.updateMany({
+        where: { role: "admin", accountStatus: "ACTIVE" },
+        data: { accountStatus: "SUSPENDED" },
+      });
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix: `account-last-admin-${randomUUID()}`,
+      });
+      await rawClients.primary.user.update({
+        where: { id: fixture.riders[0].userId },
+        data: { role: "admin" },
+      });
+      const accounts = await backendClients.primary.backend.listAdminUserAccounts(
+        fixture.adminSession,
+      );
+      const firstAdmin = accounts.find(
+        (account) => account.id === fixture.adminId,
+      )!;
+      const secondAdmin = accounts.find(
+        (account) => account.id === fixture.riders[0].userId,
+      )!;
+
+      const results = await Promise.allSettled([
+        backendClients.primary.backend.suspendUser(
+          fixture.adminSession,
+          secondAdmin.id,
+          {
+            reason: "Mutual admin race from the first administrator.",
+            expectedUpdatedAt: secondAdmin.updatedAt,
+          },
+        ),
+        backendClients.secondary.backend.suspendUser(
+          fixture.riders[0].sessionToken,
+          firstAdmin.id,
+          {
+            reason: "Mutual admin race from the second administrator.",
+            expectedUpdatedAt: firstAdmin.updatedAt,
+          },
+        ),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+        1,
+      );
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+        1,
+      );
+      expect(
+        await rawClients.primary.user.count({
+          where: { role: "admin", accountStatus: "ACTIVE" },
+        }),
+      ).toBe(1);
+      await expect(
+        rawClients.secondary.auditLog.count({
+          where: {
+            action: "ACCOUNT_SUSPENDED",
+            targetId: { in: [firstAdmin.id, secondAdmin.id] },
+          },
+        }),
+      ).resolves.toBe(1);
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
+  test("rejects account access reads and writes from non-admins", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createBackendClients();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix: `account-outsider-${randomUUID()}`,
+      });
+      const riderId = fixture.riders[0].userId;
+
+      await expect(
+        backendClients.primary.backend.listAdminUserAccounts(
+          fixture.riders[0].sessionToken,
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        backendClients.primary.backend.suspendUser(
+          fixture.riders[0].sessionToken,
+          riderId,
+          {
+            reason: "A rider cannot suspend any user account.",
+            expectedUpdatedAt: new Date().toISOString(),
+          },
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        backendClients.primary.backend.restoreUser(
+          fixture.organizerSession,
+          riderId,
+          {
+            reason: "An organizer cannot restore any user account.",
+            expectedUpdatedAt: new Date().toISOString(),
+          },
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+});

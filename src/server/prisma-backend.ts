@@ -112,6 +112,10 @@ import {
   type AuditAction,
   type RegistrationInput,
 } from "./backend";
+import type {
+  AccountAccessMutationInput,
+  AdminUserAccount,
+} from "@/features/admin/account-access-types";
 import { calculateGiveawayAuditHash, canonicalizeJson } from "./giveaways/audit";
 import { getGiveawayMaterialUpdateBlocker } from "./giveaways/update-policy";
 import {
@@ -237,12 +241,31 @@ type PrismaUserRecord = {
   email: string;
   role: string;
   verificationStatus: string;
+  accountStatus: string;
   area: string;
   bikeModel: string | null;
   clubName: string | null;
   createdAt: Date;
   organizerProfile?: { id: string } | null;
 };
+
+const adminUserAccountSelect = {
+  id: true,
+  displayName: true,
+  email: true,
+  role: true,
+  verificationStatus: true,
+  accountStatus: true,
+  area: true,
+  suspendedAt: true,
+  suspensionReason: true,
+  updatedAt: true,
+  organizerProfile: { select: { id: true } },
+} satisfies Prisma.UserSelect;
+
+type PrismaAdminUserRecord = Prisma.UserGetPayload<{
+  select: typeof adminUserAccountSelect;
+}>;
 
 type CheckInSettingsValue = CheckInConfiguration & {
   eventId: string;
@@ -533,9 +556,13 @@ export class PrismaTambikeBackend {
   }
 
   async getSnapshot(sessionToken?: string) {
-    const currentUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
+    const sessionUser = sessionToken
+      ? await this.getUserForSessionToken(sessionToken)
+      : null;
+    const currentUser =
+      sessionUser?.accountStatus === "ACTIVE" ? sessionUser : null;
     const [users, events, currentPasses, persistedSettings] = await Promise.all([
-      currentUser?.role === "admin" && currentUser.verificationStatus !== "SUSPENDED"
+      currentUser?.role === "admin"
         ? this.listPublicUsers()
         : Promise.resolve([]),
       this.listEvents(),
@@ -600,6 +627,9 @@ export class PrismaTambikeBackend {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     }
+    if (user.accountStatus === "SUSPENDED") {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
 
     const sessionToken = await this.createSessionForUser(user.id);
     return {
@@ -614,7 +644,157 @@ export class PrismaTambikeBackend {
     }
 
     const user = await this.getUserForSessionToken(sessionToken);
-    return user ? this.toUserProfile(user) : null;
+    return user?.accountStatus === "ACTIVE" ? this.toUserProfile(user) : null;
+  }
+
+  async listAdminUserAccounts(
+    sessionToken: string,
+  ): Promise<AdminUserAccount[]> {
+    await this.requireRole(sessionToken, "admin");
+    const users = await this.prisma.user.findMany({
+      select: adminUserAccountSelect,
+    });
+    return users
+      .map((user) => this.toAdminUserAccount(user))
+      .sort(
+        (left, right) =>
+          left.displayName.localeCompare(right.displayName) ||
+          left.id.localeCompare(right.id),
+      );
+  }
+
+  async suspendUser(
+    sessionToken: string,
+    targetUserId: string,
+    input: AccountAccessMutationInput,
+  ): Promise<AdminUserAccount> {
+    const actor = await this.requireRole(sessionToken, "admin");
+    const reason = this.requireAdminReason(input.reason);
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockAccountAccessAdminSet(tx);
+      await this.requireActiveAdminActor(tx, actor.id);
+      const target = await tx.user.findUnique({
+        where: { id: targetUserId },
+        select: adminUserAccountSelect,
+      });
+      if (!target) throw new BackendError("NOT_FOUND");
+      if (target.id === actor.id) throw new BackendError("FORBIDDEN");
+      if (
+        target.updatedAt.getTime() !== expectedUpdatedAt.getTime() ||
+        target.accountStatus !== "ACTIVE"
+      ) {
+        throw new BackendError("CONFLICT");
+      }
+      if (target.role === "admin") {
+        const activeAdmins = await tx.user.count({
+          where: { role: "admin", accountStatus: "ACTIVE" },
+        });
+        if (activeAdmins <= 1) throw new BackendError("FORBIDDEN");
+      }
+
+      const now = new Date(
+        Math.max(Date.now(), target.updatedAt.getTime() + 1),
+      );
+      const changed = await tx.user.updateMany({
+        where: {
+          id: target.id,
+          accountStatus: "ACTIVE",
+          updatedAt: target.updatedAt,
+        },
+        data: {
+          accountStatus: "SUSPENDED",
+          suspendedAt: now,
+          suspendedByUserId: actor.id,
+          suspensionReason: reason,
+          updatedAt: now,
+        },
+      });
+      if (changed.count !== 1) throw new BackendError("CONFLICT");
+
+      await tx.session.deleteMany({ where: { userId: target.id } });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.id,
+          action: "ACCOUNT_SUSPENDED",
+          targetType: "User",
+          targetId: target.id,
+          metadata: {
+            previousAccountStatus: "ACTIVE",
+            nextAccountStatus: "SUSPENDED",
+          },
+        },
+      });
+      const updated = await tx.user.findUniqueOrThrow({
+        where: { id: target.id },
+        select: adminUserAccountSelect,
+      });
+      return this.toAdminUserAccount(updated);
+    });
+  }
+
+  async restoreUser(
+    sessionToken: string,
+    targetUserId: string,
+    input: AccountAccessMutationInput,
+  ): Promise<AdminUserAccount> {
+    const actor = await this.requireRole(sessionToken, "admin");
+    this.requireAdminReason(input.reason);
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockAccountAccessAdminSet(tx);
+      await this.requireActiveAdminActor(tx, actor.id);
+      const target = await tx.user.findUnique({
+        where: { id: targetUserId },
+        select: adminUserAccountSelect,
+      });
+      if (!target) throw new BackendError("NOT_FOUND");
+      if (
+        target.updatedAt.getTime() !== expectedUpdatedAt.getTime() ||
+        target.accountStatus !== "SUSPENDED"
+      ) {
+        throw new BackendError("CONFLICT");
+      }
+
+      const now = new Date(
+        Math.max(Date.now(), target.updatedAt.getTime() + 1),
+      );
+      const changed = await tx.user.updateMany({
+        where: {
+          id: target.id,
+          accountStatus: "SUSPENDED",
+          updatedAt: target.updatedAt,
+        },
+        data: {
+          accountStatus: "ACTIVE",
+          suspendedAt: null,
+          suspendedByUserId: null,
+          suspensionReason: null,
+          updatedAt: now,
+        },
+      });
+      if (changed.count !== 1) throw new BackendError("CONFLICT");
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.id,
+          action: "ACCOUNT_RESTORED",
+          targetType: "User",
+          targetId: target.id,
+          metadata: {
+            previousAccountStatus: "SUSPENDED",
+            nextAccountStatus: "ACTIVE",
+          },
+        },
+      });
+      const updated = await tx.user.findUniqueOrThrow({
+        where: { id: target.id },
+        select: adminUserAccountSelect,
+      });
+      return this.toAdminUserAccount(updated);
+    });
   }
 
   async updateProfile(sessionToken: string, input: ProfileInput) {
@@ -650,7 +830,7 @@ export class PrismaTambikeBackend {
 
     const sessionUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
     const viewer =
-      sessionUser && sessionUser.verificationStatus !== "SUSPENDED"
+      sessionUser && sessionUser.accountStatus === "ACTIVE"
         ? { role: sessionUser.role, ownsProfile: sessionUser.id === profile.id }
         : null;
     if (!canViewMemberProfile(viewer, profile.profileVisibility)) {
@@ -928,7 +1108,7 @@ export class PrismaTambikeBackend {
       ? await this.getUserForSessionToken(sessionToken)
       : null;
     const viewerId =
-      viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+      viewer?.accountStatus === "SUSPENDED" ? undefined : viewer?.id;
     if (!(await this.canViewPublicEventGiveaway(giveaway, viewerId))) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
@@ -1571,7 +1751,7 @@ export class PrismaTambikeBackend {
       where: {
         id: { in: riderIds },
       },
-      select: { id: true, displayName: true, role: true, verificationStatus: true },
+      select: { id: true, displayName: true, role: true, accountStatus: true },
     });
     const actionAt = new Date();
     const candidates = await Promise.all(
@@ -1579,7 +1759,7 @@ export class PrismaTambikeBackend {
         if (activeManualRiderIds.has(rider.id)) {
           return { riderId: rider.id, label: rider.displayName.trim() || "Unnamed rider" };
         }
-        if (rider.role !== "rider" || rider.verificationStatus === "SUSPENDED") return null;
+        if (rider.role !== "rider" || rider.accountStatus === "SUSPENDED") return null;
         const qualification = await this.evaluateGiveawayEntryQualification(
           this.prisma,
           giveaway,
@@ -1968,7 +2148,7 @@ export class PrismaTambikeBackend {
     const event = await this.requireEvent(eventId);
     if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status)) return [];
     const viewer = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
-    const viewerId = viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    const viewerId = viewer?.accountStatus === "SUSPENDED" ? undefined : viewer?.id;
     const giveaways = await this.prisma.eventGiveaway.findMany({
       where: { eventId },
       include: giveawayConfigurationInclude,
@@ -2683,7 +2863,7 @@ export class PrismaTambikeBackend {
       if (!rider || rider.role !== "rider") {
         throw new BackendError("NOT_FOUND", "NOT_FOUND");
       }
-      if (rider.verificationStatus === "SUSPENDED") {
+      if (rider.accountStatus === "SUSPENDED") {
         throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
       }
       const existing = await this.lockGiveawayEntry(tx, giveaway.id, rider.id);
@@ -4259,7 +4439,7 @@ export class PrismaTambikeBackend {
     this.requireGiveawayConfigurator(actor, event);
     const users = await this.prisma.user.findMany({
       where: {
-        verificationStatus: { not: "SUSPENDED" },
+        accountStatus: "ACTIVE",
         role: { not: "admin" },
       },
       select: { id: true, displayName: true },
@@ -6525,7 +6705,7 @@ export class PrismaTambikeBackend {
       where: { id: giveaway.creatorUserId },
       include: { organizerProfile: true },
     });
-    if (!actor || actor.verificationStatus === "SUSPENDED") return null;
+    if (!actor || actor.accountStatus === "SUSPENDED") return null;
     try {
       this.requireGiveawayConfigurator(actor, giveaway.event);
       return actor;
@@ -9255,7 +9435,7 @@ export class PrismaTambikeBackend {
     if (!user) {
       throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     }
-    if (user.verificationStatus === "SUSPENDED") {
+    if (user.accountStatus === "SUSPENDED") {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
 
@@ -9269,6 +9449,29 @@ export class PrismaTambikeBackend {
     }
 
     return user;
+  }
+
+  private async lockAccountAccessAdminSet(tx: Prisma.TransactionClient) {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "User" WHERE "role" = 'admin' ORDER BY "id" FOR UPDATE`,
+    );
+  }
+
+  private async requireActiveAdminActor(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ) {
+    const actor = await tx.user.findUnique({
+      where: { id: userId },
+      select: { role: true, accountStatus: true },
+    });
+    if (
+      !actor ||
+      actor.role !== "admin" ||
+      actor.accountStatus !== "ACTIVE"
+    ) {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
   }
 
   private async requireEvent(eventId: string) {
@@ -9610,12 +9813,51 @@ export class PrismaTambikeBackend {
       email: user.email,
       role: user.role as AccountRole,
       verificationStatus: user.verificationStatus as UserProfile["verificationStatus"],
+      accountStatus: user.accountStatus as UserProfile["accountStatus"],
       area: user.area,
       bikeModel: user.bikeModel ?? undefined,
       clubName: user.clubName ?? undefined,
       joinedAt: formatJoinedAt(user.createdAt),
       organizerProfileId: user.organizerProfile?.id,
     };
+  }
+
+  private toAdminUserAccount(
+    user: PrismaAdminUserRecord,
+  ): AdminUserAccount {
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      email: user.email,
+      role: user.role as AccountRole,
+      verificationStatus:
+        user.verificationStatus as AdminUserAccount["verificationStatus"],
+      accountStatus: user.accountStatus,
+      area: user.area,
+      organizerProfileId: user.organizerProfile?.id,
+      suspendedAt: user.suspendedAt?.toISOString(),
+      suspendedReason: user.suspensionReason ?? undefined,
+      updatedAt: user.updatedAt.toISOString(),
+    };
+  }
+
+  private requireAdminReason(reason: string) {
+    const normalized = reason.trim();
+    if (normalized.length < 10 || normalized.length > 500) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return normalized;
+  }
+
+  private requireIsoTimestamp(value: string) {
+    const parsed = new Date(value);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString() !== value
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return parsed;
   }
 
   private toGiveawayPrizeImageSummary(image: {
@@ -10267,6 +10509,7 @@ export class PrismaTambikeBackend {
       select: {
         id: true,
         role: true,
+        accountStatus: true,
         profileSlug: true,
         profileVisibility: true,
         profilePhotoStorageKey: true,
@@ -10283,7 +10526,13 @@ export class PrismaTambikeBackend {
             motorcycle: {
               select: {
                 user: {
-                  select: { id: true, role: true, profileSlug: true, profileVisibility: true },
+                  select: {
+                    id: true,
+                    role: true,
+                    accountStatus: true,
+                    profileSlug: true,
+                    profileVisibility: true,
+                  },
                 },
               },
             },
@@ -10297,7 +10546,7 @@ export class PrismaTambikeBackend {
     }
 
     const sessionUser = sessionToken ? await this.getUserForSessionToken(sessionToken) : null;
-    const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
+    const validSessionUser = sessionUser?.accountStatus === "SUSPENDED" ? null : sessionUser;
     const ownsProfile = validSessionUser?.id === owner.id;
     const viewer = validSessionUser
       ? { role: validSessionUser.role as AccountRole, ownsProfile }
