@@ -83,18 +83,20 @@ describe("Tambike backend domain rules", () => {
             email: "suspended-admin@example.test",
             password: "password123",
             role: "admin",
-            verificationStatus: "SUSPENDED",
+            verificationStatus: "APPROVED",
+            accountStatus: "SUSPENDED",
             area: "Manila",
             joinedAt: "July 22, 2026",
           },
         ],
       },
     });
-    const suspendedAdmin = await suspendedBackend.loginWithPassword(
-      "suspended-admin@example.test",
-      "password123",
-    );
-    expect(suspendedBackend.getSnapshot(suspendedAdmin.sessionToken).users).toEqual([]);
+    await expect(
+      suspendedBackend.loginWithPassword(
+        "suspended-admin@example.test",
+        "password123",
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     expect(snapshot.events).toHaveLength(24);
     expect(snapshot.events.every((event) => event.organizerId === TAMBIKE_ORGANIZER_PROFILE_ID)).toBe(

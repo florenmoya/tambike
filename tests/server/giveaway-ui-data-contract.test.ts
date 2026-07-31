@@ -641,7 +641,7 @@ describe("giveaway UI data contracts", () => {
     });
 
     const store = backend as unknown as {
-      users: Map<string, { verificationStatus: string }>;
+      users: Map<string, { accountStatus: string }>;
       giveaways: {
         campaignsById: Map<
           string,
@@ -657,7 +657,7 @@ describe("giveaway UI data contracts", () => {
     for (const riderId of [context.rider.user.id, unenteredRider.user.id]) {
       const rider = store.users.get(riderId);
       if (!rider) throw new Error("TEST_RIDER_MISSING");
-      rider.verificationStatus = "SUSPENDED";
+      rider.accountStatus = "SUSPENDED";
     }
 
     await expect(
@@ -732,11 +732,11 @@ describe("giveaway UI data contracts", () => {
       attendanceType: "direct",
     });
     const store = backend as unknown as {
-      users: Map<string, { verificationStatus: string }>;
+      users: Map<string, { accountStatus: string }>;
     };
     const rider = store.users.get(context.rider.user.id);
     if (!rider) throw new Error("TEST_RIDER_MISSING");
-    rider.verificationStatus = "SUSPENDED";
+    rider.accountStatus = "SUSPENDED";
 
     await expect(
       backend.grantManualGiveawayEntry(context.organizer.sessionToken, {

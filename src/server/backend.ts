@@ -61,6 +61,10 @@ import {
   validateGiveawayUpdateInput,
 } from "@/features/giveaways/validation";
 import { demoEvents, seedUsers } from "@/features/tambike-demo/data";
+import type {
+  AccountAccessMutationInput,
+  AdminUserAccount,
+} from "@/features/admin/account-access-types";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
   EventScheduleValidationError,
@@ -192,6 +196,7 @@ export class BackendError extends Error {
       | "UNAUTHENTICATED"
       | "FORBIDDEN"
       | "NOT_FOUND"
+      | "CONFLICT"
       | "INVALID_INPUT"
       | "WRONG_EVENT"
       | "ALREADY_CHECKED_IN"
@@ -241,6 +246,8 @@ export type SignupWithPasswordInput = SignupInput & {
 export type AuditAction =
   | "USER_CREATED"
   | "SESSION_CREATED"
+  | "ACCOUNT_SUSPENDED"
+  | "ACCOUNT_RESTORED"
   | "PROFILE_UPDATED"
   | "EVENT_DRAFT_CREATED"
   | "RSVP_UPDATED"
@@ -301,6 +308,10 @@ export type AuditAction =
 
 type BackendUser = UserProfile & {
   passwordHash: string;
+  updatedAt: string;
+  suspendedAt?: string;
+  suspendedByUserId?: string;
+  suspensionReason?: string;
   profileSlug?: string;
   profileBio?: string;
   profileVisibility?: ProfileVisibility;
@@ -385,9 +396,12 @@ type AuditRecord = {
   action: AuditAction;
   actorUserId?: string;
   targetId?: string;
-  metadata?: Record<string, boolean>;
+  metadata?: AuditMetadata;
   createdAt: Date;
 };
+
+type AuditMetadataValue = string | number | boolean | null;
+type AuditMetadata = Record<string, AuditMetadataValue>;
 
 type PerkRedemptionRecord = {
   id: string;
@@ -798,7 +812,12 @@ type BackendSeed = {
 };
 
 export type TambikeTestFixture = {
-  users?: Array<UserProfile & { password: string }>;
+  users?: Array<
+    Omit<UserProfile, "accountStatus"> & {
+      accountStatus?: UserProfile["accountStatus"];
+      password: string;
+    }
+  >;
   rsvps?: Array<RSVP & { userId: string; goingAt?: string; id?: string }>;
   passes?: Array<Pass & { userId: string }>;
 };
@@ -840,6 +859,7 @@ function cloneUser(user: BackendUser): UserProfile {
     email: user.email,
     role: user.role,
     verificationStatus: user.verificationStatus,
+    accountStatus: user.accountStatus,
     area: user.area,
     bikeModel: user.bikeModel,
     clubName: user.clubName,
@@ -904,16 +924,20 @@ function defaultRulesForEvent(type: EventType) {
 async function createSeed(options: TambikeTestSeedOptions = {}): Promise<BackendSeed> {
   const passwordHash = await bcrypt.hash("password123", 10);
   const adminPasswordHash = await bcrypt.hash("secret_123", 10);
+  const updatedAt = new Date().toISOString();
   const fixtureUsers = await Promise.all(
     (options.fixture?.users ?? []).map(async ({ password, ...user }) => ({
       ...user,
+      accountStatus: user.accountStatus ?? "ACTIVE",
       passwordHash: await bcrypt.hash(password, 10),
+      updatedAt,
     })),
   );
   const users: BackendUser[] = [
     ...seedUsers.map<BackendUser>((user) => ({
       ...user,
       passwordHash: user.role === "admin" ? adminPasswordHash : passwordHash,
+      updatedAt,
     })),
     ...fixtureUsers,
   ];
@@ -1045,7 +1069,7 @@ export class TambikeBackend {
     return {
       currentUser: currentUser ? cloneUser(currentUser) : null,
       users:
-        currentUser?.role === "admin" && currentUser.verificationStatus !== "SUSPENDED"
+        currentUser?.role === "admin" && currentUser.accountStatus !== "SUSPENDED"
           ? this.listPublicUsers()
           : [],
       events,
@@ -1069,11 +1093,13 @@ export class TambikeBackend {
       email,
       role: "rider",
       verificationStatus: "UNVERIFIED",
+      accountStatus: "ACTIVE",
       area: input.area.trim(),
       bikeModel: input.bikeModel?.trim() || undefined,
       clubName: input.clubName?.trim() || undefined,
       joinedAt: "July 4, 2026",
       passwordHash,
+      updatedAt: new Date().toISOString(),
     };
 
     this.users.set(user.id, user);
@@ -1091,6 +1117,9 @@ export class TambikeBackend {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     }
+    if (user.accountStatus === "SUSPENDED") {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
 
     const session = this.createSessionForUser(user.id);
     return {
@@ -1105,7 +1134,85 @@ export class TambikeBackend {
     }
 
     const user = this.getUserForSessionToken(sessionToken);
-    return user ? cloneUser(user) : null;
+    return user?.accountStatus === "ACTIVE" ? cloneUser(user) : null;
+  }
+
+  async listAdminUserAccounts(sessionToken: string): Promise<AdminUserAccount[]> {
+    this.requireRole(sessionToken, "admin");
+    return Array.from(this.users.values())
+      .map((user) => this.toAdminUserAccount(user))
+      .sort(
+        (left, right) =>
+          left.displayName.localeCompare(right.displayName) ||
+          left.id.localeCompare(right.id),
+      );
+  }
+
+  async suspendUser(
+    sessionToken: string,
+    targetUserId: string,
+    input: AccountAccessMutationInput,
+  ): Promise<AdminUserAccount> {
+    const actor = this.requireRole(sessionToken, "admin");
+    const target = this.users.get(targetUserId);
+    if (!target) throw new BackendError("NOT_FOUND");
+    if (target.id === actor.id) throw new BackendError("FORBIDDEN");
+    if (target.updatedAt !== input.expectedUpdatedAt) {
+      throw new BackendError("CONFLICT");
+    }
+    const reason = this.requireAdminReason(input.reason);
+    if (target.role === "admin") {
+      const activeAdmins = Array.from(this.users.values()).filter(
+        (user) => user.role === "admin" && user.accountStatus === "ACTIVE",
+      ).length;
+      if (activeAdmins <= 1) throw new BackendError("FORBIDDEN");
+    }
+    if (target.accountStatus === "SUSPENDED") {
+      throw new BackendError("CONFLICT");
+    }
+
+    const now = this.nextUserUpdatedAt(target);
+    target.accountStatus = "SUSPENDED";
+    target.suspendedAt = now;
+    target.suspendedByUserId = actor.id;
+    target.suspensionReason = reason;
+    target.updatedAt = now;
+    for (const [token, session] of this.sessions) {
+      if (session.userId === target.id) this.sessions.delete(token);
+    }
+    this.audit("ACCOUNT_SUSPENDED", actor.id, target.id, {
+      previousAccountStatus: "ACTIVE",
+      nextAccountStatus: "SUSPENDED",
+    });
+    return this.toAdminUserAccount(target);
+  }
+
+  async restoreUser(
+    sessionToken: string,
+    targetUserId: string,
+    input: AccountAccessMutationInput,
+  ): Promise<AdminUserAccount> {
+    const actor = this.requireRole(sessionToken, "admin");
+    const target = this.users.get(targetUserId);
+    if (!target) throw new BackendError("NOT_FOUND");
+    if (target.updatedAt !== input.expectedUpdatedAt) {
+      throw new BackendError("CONFLICT");
+    }
+    this.requireAdminReason(input.reason);
+    if (target.accountStatus !== "SUSPENDED") {
+      throw new BackendError("CONFLICT");
+    }
+
+    target.accountStatus = "ACTIVE";
+    delete target.suspendedAt;
+    delete target.suspendedByUserId;
+    delete target.suspensionReason;
+    target.updatedAt = this.nextUserUpdatedAt(target);
+    this.audit("ACCOUNT_RESTORED", actor.id, target.id, {
+      previousAccountStatus: "SUSPENDED",
+      nextAccountStatus: "ACTIVE",
+    });
+    return this.toAdminUserAccount(target);
   }
 
   async updateProfile(sessionToken: string, input: ProfileInput) {
@@ -1136,7 +1243,7 @@ export class TambikeBackend {
 
     const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
     const viewer =
-      sessionUser && sessionUser.verificationStatus !== "SUSPENDED"
+      sessionUser && sessionUser.accountStatus !== "SUSPENDED"
         ? { role: sessionUser.role, ownsProfile: sessionUser.id === profile.id }
         : null;
     const visibility = profile.profileVisibility ?? "PRIVATE";
@@ -1353,7 +1460,7 @@ export class TambikeBackend {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
     const viewer = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
-    const viewerId = viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    const viewerId = viewer?.accountStatus === "SUSPENDED" ? undefined : viewer?.id;
     if (!this.canViewPublicEventGiveaway(giveaway, viewerId)) {
       throw new BackendError("NOT_FOUND", "NOT_FOUND");
     }
@@ -1964,7 +2071,7 @@ export class TambikeBackend {
     const candidatesByRiderId = new Map<string, GiveawayManualEntryCandidate>();
     for (const riderId of this.riderIdsWithEventActivity(giveaway.eventId)) {
       const rider = this.users.get(riderId);
-      if (!rider || rider.role !== "rider" || rider.verificationStatus === "SUSPENDED") continue;
+      if (!rider || rider.role !== "rider" || rider.accountStatus === "SUSPENDED") continue;
       const qualification = this.evaluateGiveawayEntryQualification(giveaway, rider.id, {
         manual: true,
         actionAt,
@@ -2267,7 +2374,7 @@ export class TambikeBackend {
     const event = this.requireEvent(eventId);
     if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status)) return [];
     const viewer = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
-    const viewerId = viewer?.verificationStatus === "SUSPENDED" ? undefined : viewer?.id;
+    const viewerId = viewer?.accountStatus === "SUSPENDED" ? undefined : viewer?.id;
     return Array.from(this.giveaways.giveawayIdsByEventId.get(eventId) ?? [])
       .map((id) => this.requireGiveaway(id))
       .filter((giveaway) => this.canViewPublicEventGiveaway(giveaway, viewerId))
@@ -2558,7 +2665,7 @@ export class TambikeBackend {
     this.requireGiveawayEntryMode(giveaway, "manual_only");
     const rider = this.users.get(parsed.riderId);
     if (!rider || rider.role !== "rider") throw new BackendError("NOT_FOUND", "NOT_FOUND");
-    if (rider.verificationStatus === "SUSPENDED") {
+    if (rider.accountStatus === "SUSPENDED") {
       throw new BackendError("GIVEAWAY_ENTRY_NOT_ELIGIBLE", "GIVEAWAY_ENTRY_NOT_ELIGIBLE");
     }
     const entry = this.createGiveawayEntryFromPath(giveaway, rider.id, {
@@ -3139,7 +3246,7 @@ export class TambikeBackend {
     const event = this.requireEvent(eventId);
     this.requireGiveawayConfigurator(actor, event);
     return Array.from(this.users.values())
-      .filter((user) => user.verificationStatus !== "SUSPENDED" && user.role !== "admin")
+      .filter((user) => user.accountStatus !== "SUSPENDED" && user.role !== "admin")
       .map((user) => ({ id: user.id, label: user.displayName.trim() || "Unnamed operator" }))
       .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
   }
@@ -7344,7 +7451,7 @@ export class TambikeBackend {
     // Cron has no session, but it must still honor the active-user guard that
     // every session-backed request receives. In particular, an admin-shaped
     // suspended creator must never become trusted lifecycle provenance.
-    if (!actor || actor.verificationStatus === "SUSPENDED") return null;
+    if (!actor || actor.accountStatus === "SUSPENDED") return null;
     try {
       this.requireGiveawayConfigurator(actor, event);
       return actor;
@@ -7871,7 +7978,7 @@ export class TambikeBackend {
     if (!user) {
       throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     }
-    if (user.verificationStatus === "SUSPENDED") {
+    if (user.accountStatus === "SUSPENDED") {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
 
@@ -8391,7 +8498,7 @@ export class TambikeBackend {
     }
 
     const sessionUser = sessionToken ? this.getUserForSessionToken(sessionToken) : null;
-    const validSessionUser = sessionUser?.verificationStatus === "SUSPENDED" ? null : sessionUser;
+    const validSessionUser = sessionUser?.accountStatus === "SUSPENDED" ? null : sessionUser;
     const ownsProfile = validSessionUser?.id === owner.id;
     const viewer = validSessionUser
       ? { role: validSessionUser.role, ownsProfile }
@@ -8426,11 +8533,44 @@ export class TambikeBackend {
     return error;
   }
 
+  private toAdminUserAccount(user: BackendUser): AdminUserAccount {
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      email: user.email,
+      role: user.role,
+      verificationStatus: user.verificationStatus,
+      accountStatus: user.accountStatus,
+      area: user.area,
+      organizerProfileId: user.organizerProfileId,
+      suspendedAt: user.suspendedAt,
+      suspendedReason: user.suspensionReason,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  private requireAdminReason(reason: string) {
+    const normalized = reason.trim();
+    if (normalized.length < 10 || normalized.length > 500) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return normalized;
+  }
+
+  private nextUserUpdatedAt(user: BackendUser) {
+    const previous = Date.parse(user.updatedAt);
+    return new Date(
+      Number.isFinite(previous)
+        ? Math.max(Date.now(), previous + 1)
+        : Date.now(),
+    ).toISOString();
+  }
+
   private audit(
     action: AuditAction,
     actorUserId?: string,
     targetId?: string,
-    metadata?: Record<string, boolean>,
+    metadata?: AuditMetadata,
   ) {
     this.audits.push({
       id: `audit-${randomUUID()}`,

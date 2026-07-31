@@ -239,12 +239,12 @@ describe("scheduled giveaway lifecycle", () => {
     const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now);
     const store = backend as unknown as {
-      users: Map<string, { role: string; verificationStatus: string }>;
+      users: Map<string, { role: string; accountStatus: string }>;
     };
     const creator = store.users.get(context.organizer.user.id);
     if (!creator) throw new Error("TEST_CREATOR_MISSING");
     creator.role = "admin";
-    creator.verificationStatus = "SUSPENDED";
+    creator.accountStatus = "SUSPENDED";
 
     await expect(
       backend.advanceScheduledGiveawayLifecycle(new Date(now.getTime() + 300_000)),
@@ -261,7 +261,7 @@ describe("scheduled giveaway lifecycle", () => {
     const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now);
     const store = backend as unknown as {
-      users: Map<string, { role: string; verificationStatus: string }>;
+      users: Map<string, { role: string; accountStatus: string }>;
       giveaways: {
         campaignsById: Map<
           string,
@@ -285,7 +285,7 @@ describe("scheduled giveaway lifecycle", () => {
     const campaign = store.giveaways.campaignsById.get(context.giveaway.id);
     if (!creator || !campaign) throw new Error("TEST_RETENTION_SETUP_MISSING");
     creator.role = "admin";
-    creator.verificationStatus = "SUSPENDED";
+    creator.accountStatus = "SUSPENDED";
     const detail = {
       id: "expired-system-retention-detail",
       awardId: "expired-system-retention-award",
