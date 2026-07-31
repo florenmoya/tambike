@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { Prisma, type PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { describe, expect, test } from "vitest";
 
@@ -11,14 +12,157 @@ import {
 } from "./clients";
 import { createPrismaEventFixture } from "./fixtures";
 
+type PrismaEventFixture = Awaited<
+  ReturnType<typeof createPrismaEventFixture>
+>;
+
+const retainedAdminStateSelect = {
+  id: true,
+  accountStatus: true,
+  suspendedAt: true,
+  suspendedByUserId: true,
+  suspensionReason: true,
+  updatedAt: true,
+  sessions: {
+    select: {
+      id: true,
+      tokenHash: true,
+      userId: true,
+      expiresAt: true,
+      createdAt: true,
+    },
+    orderBy: { id: "asc" as const },
+  },
+} satisfies Prisma.UserSelect;
+
 function hashSessionToken(token: string) {
   return createHash("sha256").update(token).digest("base64url");
 }
 
-function createBackendClients() {
+function createBackendClients(
+  applicationNames = [
+    "tambike-account-access-primary",
+    "tambike-account-access-secondary",
+  ],
+) {
+  let clientIndex = 0;
   return createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
-    const backend = PrismaTambikeBackend.create(databaseUrl);
+    const namedDatabaseUrl = new URL(databaseUrl);
+    namedDatabaseUrl.searchParams.set(
+      "application_name",
+      applicationNames[clientIndex++]!,
+    );
+    const backend = PrismaTambikeBackend.create(namedDatabaseUrl.toString());
     return { backend, $disconnect: () => backend.disconnect() };
+  });
+}
+
+async function waitForApplicationLock(
+  prisma: PrismaClient,
+  applicationName: string,
+) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const [result] = await prisma.$queryRaw<Array<{ blocked: bigint }>>(
+      Prisma.sql`
+        SELECT COUNT(*)::bigint AS "blocked"
+        FROM pg_stat_activity
+        WHERE application_name = ${applicationName}
+          AND wait_event_type = 'Lock'
+      `,
+    );
+    if (Number(result?.blocked ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const activity = await prisma.$queryRaw<
+    Array<{
+      applicationName: string;
+      query: string;
+      state: string;
+      waitEvent: string | null;
+      waitEventType: string | null;
+    }>
+  >(
+    Prisma.sql`
+      SELECT
+        application_name AS "applicationName",
+        LEFT(query, 160) AS "query",
+        state,
+        wait_event AS "waitEvent",
+        wait_event_type AS "waitEventType"
+      FROM pg_stat_activity
+      WHERE application_name = ${applicationName}
+    `,
+  );
+  throw new Error(
+    `Timed out waiting for ${applicationName} to block: ${JSON.stringify(activity)}`,
+  );
+}
+
+async function cleanupPrismaEventFixture(
+  prisma: PrismaClient,
+  fixture: PrismaEventFixture,
+) {
+  const userIds = [
+    fixture.adminId,
+    fixture.organizerId,
+    ...fixture.riders.map((rider) => rider.userId),
+  ];
+  await prisma.$transaction(async (tx) => {
+    await tx.auditLog.deleteMany({
+      where: {
+        OR: [
+          { actorUserId: { in: userIds } },
+          { targetId: { in: userIds } },
+        ],
+      },
+    });
+    await tx.event.deleteMany({ where: { id: fixture.eventId } });
+    await tx.session.deleteMany({ where: { userId: { in: userIds } } });
+    await tx.organizerProfile.deleteMany({
+      where: { id: fixture.organizerProfileId },
+    });
+    await tx.user.deleteMany({ where: { id: { in: userIds } } });
+  });
+}
+
+async function readRetainedAdminState(
+  prisma: PrismaClient,
+  userIds?: string[],
+) {
+  return prisma.user.findMany({
+    where: {
+      role: "admin",
+      ...(userIds ? { id: { in: userIds } } : { accountStatus: "ACTIVE" }),
+    },
+    select: retainedAdminStateSelect,
+    orderBy: { id: "asc" },
+  });
+}
+
+async function restoreRetainedAdminState(
+  prisma: PrismaClient,
+  retainedAdmins: Awaited<ReturnType<typeof readRetainedAdminState>>,
+) {
+  const userIds = retainedAdmins.map((admin) => admin.id);
+  await prisma.$transaction(async (tx) => {
+    await tx.session.deleteMany({ where: { userId: { in: userIds } } });
+    for (const admin of retainedAdmins) {
+      await tx.user.update({
+        where: { id: admin.id },
+        data: {
+          accountStatus: admin.accountStatus,
+          suspendedAt: admin.suspendedAt,
+          suspendedByUserId: admin.suspendedByUserId,
+          suspensionReason: admin.suspensionReason,
+          updatedAt: admin.updatedAt,
+        },
+      });
+    }
+    const sessions = retainedAdmins.flatMap((admin) => admin.sessions);
+    if (sessions.length > 0) {
+      await tx.session.createMany({ data: sessions });
+    }
   });
 }
 
@@ -179,6 +323,170 @@ describe("Prisma account access", () => {
     }
   });
 
+  test("serializes login and suspension on the user row in either race order", async () => {
+    for (const order of ["login-first", "suspension-first"] as const) {
+      const suffix = `account-login-race-${order}-${randomUUID()}`;
+      const applicationKey = randomUUID().slice(0, 8);
+      const loginApplication = `tbk-aa-${applicationKey}-login`;
+      const suspensionApplication = `tbk-aa-${applicationKey}-suspension`;
+      const rawClients = createPrismaIntegrationClients();
+      const backendClients = createBackendClients([
+        loginApplication,
+        suspensionApplication,
+      ]);
+      let fixture: PrismaEventFixture | undefined;
+
+      try {
+        fixture = await createPrismaEventFixture(rawClients.primary, {
+          suffix,
+        });
+        const riderId = fixture.riders[0].userId;
+        const riderEmail = `integration-rider-1-${suffix}@example.test`;
+        await rawClients.primary.user.update({
+          where: { id: riderId },
+          data: { passwordHash: await bcrypt.hash("password123", 4) },
+        });
+        const before = (
+          await backendClients.primary.backend.listAdminUserAccounts(
+            fixture.adminSession,
+          )
+        ).find((account) => account.id === riderId)!;
+
+        type LoginOutcome =
+          | {
+              status: "fulfilled";
+              value: Awaited<
+                ReturnType<
+                  typeof backendClients.primary.backend.loginWithPassword
+                >
+              >;
+            }
+          | { status: "rejected"; reason: unknown };
+        type SuspensionOutcome =
+          | {
+              status: "fulfilled";
+              value: Awaited<
+                ReturnType<typeof backendClients.primary.backend.suspendUser>
+              >;
+            }
+          | { status: "rejected"; reason: unknown };
+
+        let loginOutcomePromise: Promise<LoginOutcome> | undefined;
+        let suspensionOutcomePromise: Promise<SuspensionOutcome> | undefined;
+        const startLogin = () => {
+          loginOutcomePromise = backendClients.primary.backend
+            .loginWithPassword(riderEmail, "password123")
+            .then(
+              (value) => ({ status: "fulfilled" as const, value }),
+              (reason: unknown) => ({
+                status: "rejected" as const,
+                reason,
+              }),
+            );
+        };
+        const startSuspension = () => {
+          suspensionOutcomePromise = backendClients.secondary.backend
+            .suspendUser(fixture!.adminSession, riderId, {
+              reason: `Deterministic ${order} account race suspension.`,
+              expectedUpdatedAt: before.updatedAt,
+            })
+            .then(
+              (value) => ({ status: "fulfilled" as const, value }),
+              (reason: unknown) => ({
+                status: "rejected" as const,
+                reason,
+              }),
+            );
+        };
+
+        await rawClients.primary.$transaction(async (tx) => {
+          await tx.$queryRaw(
+            Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${riderId} FOR UPDATE`,
+          );
+          if (order === "login-first") {
+            startLogin();
+            await waitForApplicationLock(
+              rawClients.secondary,
+              loginApplication,
+            );
+            startSuspension();
+            await waitForApplicationLock(
+              rawClients.secondary,
+              suspensionApplication,
+            );
+          } else {
+            startSuspension();
+            await waitForApplicationLock(
+              rawClients.secondary,
+              suspensionApplication,
+            );
+            startLogin();
+            await waitForApplicationLock(
+              rawClients.secondary,
+              loginApplication,
+            );
+          }
+        });
+
+        const [loginOutcome, suspensionOutcome] = await Promise.all([
+          loginOutcomePromise!,
+          suspensionOutcomePromise!,
+        ]);
+        expect(suspensionOutcome.status).toBe("fulfilled");
+        if (suspensionOutcome.status !== "fulfilled") {
+          throw suspensionOutcome.reason;
+        }
+        await expect(
+          rawClients.secondary.session.count({ where: { userId: riderId } }),
+        ).resolves.toBe(0);
+
+        if (order === "login-first") {
+          expect(loginOutcome.status).toBe("fulfilled");
+        } else {
+          expect(loginOutcome).toMatchObject({
+            status: "rejected",
+            reason: { code: "FORBIDDEN" },
+          });
+        }
+
+        await backendClients.secondary.backend.restoreUser(
+          fixture.adminSession,
+          riderId,
+          {
+            reason: `Restore after deterministic ${order} race.`,
+            expectedUpdatedAt: suspensionOutcome.value.updatedAt,
+          },
+        );
+        if (loginOutcome.status === "fulfilled") {
+          await expect(
+            backendClients.primary.backend.getCurrentUser(
+              loginOutcome.value.sessionToken,
+            ),
+          ).resolves.toBeNull();
+          await expect(
+            rawClients.secondary.session.findUnique({
+              where: {
+                tokenHash: hashSessionToken(loginOutcome.value.sessionToken),
+              },
+            }),
+          ).resolves.toBeNull();
+        }
+        await expect(
+          rawClients.secondary.session.count({ where: { userId: riderId } }),
+        ).resolves.toBe(0);
+      } finally {
+        try {
+          if (fixture) {
+            await cleanupPrismaEventFixture(rawClients.primary, fixture);
+          }
+        } finally {
+          await closePrismaIntegrationClientPair(backendClients);
+          await closePrismaIntegrationClientPair(rawClients);
+        }
+      }
+    }
+  });
+
   test("rejects a stale updatedAt account transition", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createBackendClients();
@@ -243,27 +551,36 @@ describe("Prisma account access", () => {
   test("serializes mutual suspension so one active admin remains", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createBackendClients();
+    const retainedAdmins = await readRetainedAdminState(rawClients.primary);
+    const retainedAdminIds = retainedAdmins.map((admin) => admin.id);
+    let fixture: PrismaEventFixture | undefined;
 
     try {
       await rawClients.primary.user.updateMany({
-        where: { role: "admin", accountStatus: "ACTIVE" },
+        where: {
+          id: { in: retainedAdminIds },
+          role: "admin",
+          accountStatus: "ACTIVE",
+        },
         data: { accountStatus: "SUSPENDED" },
       });
-      const fixture = await createPrismaEventFixture(rawClients.primary, {
+      fixture = await createPrismaEventFixture(rawClients.primary, {
         suffix: `account-last-admin-${randomUUID()}`,
       });
+      const fixtureAdminId = fixture.adminId;
+      const fixtureRiderId = fixture.riders[0].userId;
       await rawClients.primary.user.update({
-        where: { id: fixture.riders[0].userId },
+        where: { id: fixtureRiderId },
         data: { role: "admin" },
       });
       const accounts = await backendClients.primary.backend.listAdminUserAccounts(
         fixture.adminSession,
       );
       const firstAdmin = accounts.find(
-        (account) => account.id === fixture.adminId,
+        (account) => account.id === fixtureAdminId,
       )!;
       const secondAdmin = accounts.find(
-        (account) => account.id === fixture.riders[0].userId,
+        (account) => account.id === fixtureRiderId,
       )!;
 
       const results = await Promise.allSettled([
@@ -305,8 +622,41 @@ describe("Prisma account access", () => {
         }),
       ).resolves.toBe(1);
     } finally {
-      await closePrismaIntegrationClientPair(backendClients);
-      await closePrismaIntegrationClientPair(rawClients);
+      try {
+        try {
+          await restoreRetainedAdminState(rawClients.primary, retainedAdmins);
+          await expect(
+            readRetainedAdminState(rawClients.secondary, retainedAdminIds),
+          ).resolves.toEqual(retainedAdmins);
+        } finally {
+          if (fixture) {
+            const fixtureUserIds = [
+              fixture.adminId,
+              fixture.organizerId,
+              ...fixture.riders.map((rider) => rider.userId),
+            ];
+            await cleanupPrismaEventFixture(rawClients.primary, fixture);
+            await expect(
+              rawClients.secondary.user.count({
+                where: { id: { in: fixtureUserIds } },
+              }),
+            ).resolves.toBe(0);
+            await expect(
+              rawClients.secondary.auditLog.count({
+                where: {
+                  OR: [
+                    { actorUserId: { in: fixtureUserIds } },
+                    { targetId: { in: fixtureUserIds } },
+                  ],
+                },
+              }),
+            ).resolves.toBe(0);
+          }
+        }
+      } finally {
+        await closePrismaIntegrationClientPair(backendClients);
+        await closePrismaIntegrationClientPair(rawClients);
+      }
     }
   });
 

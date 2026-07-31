@@ -627,15 +627,31 @@ export class PrismaTambikeBackend {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
     }
-    if (user.accountStatus === "SUSPENDED") {
-      throw new BackendError("FORBIDDEN", "FORBIDDEN");
-    }
 
-    const sessionToken = await this.createSessionForUser(user.id);
-    return {
-      user: this.toUserProfile(user),
-      sessionToken,
-    };
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await this.lockAccountAccessUser(tx, user.id))) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      const lockedUser = await tx.user.findUnique({
+        where: { id: user.id },
+        include: { organizerProfile: true },
+      });
+      if (!lockedUser) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      if (lockedUser.accountStatus === "SUSPENDED") {
+        throw new BackendError("FORBIDDEN", "FORBIDDEN");
+      }
+
+      const sessionToken = await this.createSessionForUser(
+        lockedUser.id,
+        tx,
+      );
+      return {
+        user: this.toUserProfile(lockedUser),
+        sessionToken,
+      };
+    });
   }
 
   async getCurrentUser(sessionToken?: string | null) {
@@ -675,6 +691,7 @@ export class PrismaTambikeBackend {
     return this.prisma.$transaction(async (tx) => {
       await this.lockAccountAccessAdminSet(tx);
       await this.requireActiveAdminActor(tx, actor.id);
+      await this.lockAccountAccessUser(tx, targetUserId);
       const target = await tx.user.findUnique({
         where: { id: targetUserId },
         select: adminUserAccountSelect,
@@ -9405,16 +9422,26 @@ export class PrismaTambikeBackend {
     });
   }
 
-  private async createSessionForUser(userId: string) {
+  private async createSessionForUser(
+    userId: string,
+    client: Prisma.TransactionClient | PrismaClient = this.prisma,
+  ) {
     const token = makeSessionToken();
-    await this.prisma.session.create({
+    await client.session.create({
       data: {
         tokenHash: hashToken(token),
         userId,
         expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
       },
     });
-    await this.audit("SESSION_CREATED", userId, "Session", userId);
+    await client.auditLog.create({
+      data: {
+        action: "SESSION_CREATED",
+        actorUserId: userId,
+        targetType: "Session",
+        targetId: userId,
+      },
+    });
     return token;
   }
 
@@ -9455,6 +9482,16 @@ export class PrismaTambikeBackend {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "User" WHERE "role" = 'admin' ORDER BY "id" FOR UPDATE`,
     );
+  }
+
+  private async lockAccountAccessUser(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`,
+    );
+    return rows.length === 1;
   }
 
   private async requireActiveAdminActor(
