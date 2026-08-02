@@ -21,21 +21,21 @@ import {
   suspendUserAction,
 } from "@/server/admin/account-actions";
 
-import type { AdminUserAccount } from "./account-access-types";
+import type { AdminUserAccountView } from "./account-access-types";
 
 type AdminUserAccountsProps = {
   currentUserId: string;
-  initialAccounts: AdminUserAccount[];
+  initialAccounts: AdminUserAccountView[];
 };
 
 type AccountAction = "restore" | "suspend";
 
 type SelectedAccountAction = {
-  account: AdminUserAccount;
+  account: AdminUserAccountView;
   action: AccountAction;
 };
 
-const idleActionState: ActionState<AdminUserAccount> = {
+const idleActionState: ActionState<AdminUserAccountView> = {
   status: "idle",
   message: "",
 };
@@ -54,8 +54,11 @@ export function AdminUserAccounts({
   const [selected, setSelected] = React.useState<SelectedAccountAction | null>(
     null,
   );
+  const activeRequest = React.useRef<SelectedAccountAction | null>(null);
+  const [pendingRequest, setPendingRequest] =
+    React.useState<SelectedAccountAction | null>(null);
   const [feedback, setFeedback] =
-    React.useState<ActionState<AdminUserAccount>>(idleActionState);
+    React.useState<ActionState<AdminUserAccountView>>(idleActionState);
 
   const activeAdminCount = accounts.filter(
     (account) =>
@@ -63,17 +66,48 @@ export function AdminUserAccounts({
   ).length;
 
   const openAction = React.useCallback(
-    (account: AdminUserAccount, action: AccountAction) => {
+    (account: AdminUserAccountView, action: AccountAction) => {
       setFeedback(idleActionState);
       setSelected({ account, action });
     },
     [],
   );
 
+  const handleStarted = React.useCallback((origin: SelectedAccountAction) => {
+    if (activeRequest.current !== null) {
+      return activeRequest.current === origin;
+    }
+    activeRequest.current = origin;
+    setPendingRequest(origin);
+    return true;
+  }, []);
+
+  const handleSettled = React.useCallback((origin: SelectedAccountAction) => {
+    if (activeRequest.current !== origin) return;
+    activeRequest.current = null;
+    setPendingRequest(null);
+  }, []);
+
+  const handleClose = React.useCallback((origin: SelectedAccountAction) => {
+    if (activeRequest.current === origin) return;
+    setSelected((current) => (current === origin ? null : current));
+  }, []);
+
   const handleCommitted = React.useCallback(
-    (account: AdminUserAccount, message: string) => {
+    (
+      origin: SelectedAccountAction,
+      account: AdminUserAccountView,
+      message: string,
+    ) => {
+      if (activeRequest.current !== origin) return;
+      activeRequest.current = null;
+      setPendingRequest(null);
+      if (account.id !== origin.account.id) return;
+
       setAccounts((current) =>
-        current.map((item) => (item.id === account.id ? account : item)),
+        current.map((item) =>
+          item.id === origin.account.id ? account : item,
+        ),
       );
       setFeedback({
         status: "success",
@@ -81,7 +115,7 @@ export function AdminUserAccounts({
         message,
         data: account,
       });
-      setSelected(null);
+      setSelected((current) => (current === origin ? null : current));
     },
     [],
   );
@@ -90,10 +124,11 @@ export function AdminUserAccounts({
     () =>
       getAccountColumns({
         activeAdminCount,
+        actionsDisabled: pendingRequest !== null,
         currentUserId,
         openAction,
       }),
-    [activeAdminCount, currentUserId, openAction],
+    [activeAdminCount, currentUserId, openAction, pendingRequest],
   );
 
   return (
@@ -124,6 +159,7 @@ export function AdminUserAccounts({
                 key={account.id}
                 account={account}
                 activeAdminCount={activeAdminCount}
+                actionsDisabled={pendingRequest !== null}
                 currentUserId={currentUserId}
                 onAction={openAction}
               />
@@ -145,8 +181,11 @@ export function AdminUserAccounts({
         <AccountActionDialog
           key={`${selected.account.id}-${selected.action}`}
           selected={selected}
-          onCancel={() => setSelected(null)}
+          requestPending={pendingRequest === selected}
+          onCancel={handleClose}
           onCommitted={handleCommitted}
+          onSettled={handleSettled}
+          onStarted={handleStarted}
         />
       ) : null}
     </div>
@@ -156,13 +195,15 @@ export function AdminUserAccounts({
 function AccountCard({
   account,
   activeAdminCount,
+  actionsDisabled,
   currentUserId,
   onAction,
 }: {
-  account: AdminUserAccount;
+  account: AdminUserAccountView;
   activeAdminCount: number;
+  actionsDisabled: boolean;
   currentUserId: string;
-  onAction: (account: AdminUserAccount, action: AccountAction) => void;
+  onAction: (account: AdminUserAccountView, action: AccountAction) => void;
 }) {
   const blockReason = getSuspendBlockReason(
     account,
@@ -197,6 +238,7 @@ function AccountCard({
 
       <AccountActionControl
         account={account}
+        actionsDisabled={actionsDisabled}
         blockReason={blockReason}
         mobile
         onAction={onAction}
@@ -226,14 +268,16 @@ function AccountDetail({
 
 function AccountActionControl({
   account,
+  actionsDisabled,
   blockReason,
   mobile = false,
   onAction,
 }: {
-  account: AdminUserAccount;
+  account: AdminUserAccountView;
+  actionsDisabled: boolean;
   blockReason: string | null;
   mobile?: boolean;
-  onAction: (account: AdminUserAccount, action: AccountAction) => void;
+  onAction: (account: AdminUserAccountView, action: AccountAction) => void;
 }) {
   const isSuspended = account.accountStatus === "SUSPENDED";
   const action = isSuspended ? "restore" : "suspend";
@@ -244,8 +288,8 @@ function AccountActionControl({
       <Button
         type="button"
         variant={isSuspended ? "outline" : "destructive"}
-        disabled={Boolean(blockReason)}
-        className={mobile ? "min-h-11 w-full" : undefined}
+        disabled={actionsDisabled || Boolean(blockReason)}
+        className={`min-h-11${mobile ? " w-full" : ""}`}
         onClick={() => onAction(account, action)}
       >
         {label}
@@ -262,26 +306,44 @@ function AccountActionControl({
 function AccountActionDialog({
   onCancel,
   onCommitted,
+  onSettled,
+  onStarted,
+  requestPending,
   selected,
 }: {
-  onCancel: () => void;
-  onCommitted: (account: AdminUserAccount, message: string) => void;
+  onCancel: (origin: SelectedAccountAction) => void;
+  onCommitted: (
+    origin: SelectedAccountAction,
+    account: AdminUserAccountView,
+    message: string,
+  ) => void;
+  onSettled: (origin: SelectedAccountAction) => void;
+  onStarted: (origin: SelectedAccountAction) => boolean;
+  requestPending: boolean;
   selected: SelectedAccountAction;
 }) {
   const serverAction =
     selected.action === "suspend" ? suspendUserAction : restoreUserAction;
   const submitAction = React.useCallback(
     async (
-      previous: ActionState<AdminUserAccount>,
+      previous: ActionState<AdminUserAccountView>,
       formData: FormData,
-    ): Promise<ActionState<AdminUserAccount>> => {
-      const result = await serverAction(previous, formData);
-      if (result.status === "success") {
-        onCommitted(result.data, result.message);
+    ): Promise<ActionState<AdminUserAccountView>> => {
+      if (!onStarted(selected)) return previous;
+      try {
+        const result = await serverAction(previous, formData);
+        if (result.status === "success") {
+          onCommitted(selected, result.data, result.message);
+        } else {
+          onSettled(selected);
+        }
+        return result;
+      } catch (error) {
+        onSettled(selected);
+        throw error;
       }
-      return result;
     },
-    [onCommitted, serverAction],
+    [onCommitted, onSettled, onStarted, selected, serverAction],
   );
   const [state, formAction, pending] = React.useActionState(
     submitAction,
@@ -296,10 +358,21 @@ function AccountActionDialog({
   ).toLowerCase();
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onCancel()}>
+    <Dialog.Root open onOpenChange={(open) => !open && onCancel(selected)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100svh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none sm:p-6">
+        <Dialog.Overlay data-radix-dialog-overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px]" />
+        <Dialog.Content
+          className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100svh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none sm:p-6"
+          onEscapeKeyDown={(event) => {
+            if (pending || requestPending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (pending || requestPending) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (pending || requestPending) event.preventDefault();
+          }}
+        >
           <Dialog.Title className="text-lg font-semibold">
             {actionLabel.replace(" account", "")} {selected.account.displayName}’s
             account?
@@ -311,7 +384,11 @@ function AccountActionDialog({
             Verification stays {verificationLabel}.
           </Dialog.Description>
 
-          <form action={formAction} className="mt-5 grid gap-4">
+          <form
+            action={formAction}
+            className="mt-5 grid gap-4"
+            onSubmitCapture={() => onStarted(selected)}
+          >
             <input type="hidden" name="userId" value={selected.account.id} />
             <input
               type="hidden"
@@ -367,16 +444,16 @@ function AccountActionDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="min-h-11 sm:order-first sm:min-h-8"
+                className="min-h-11 sm:order-first"
                 disabled={pending}
-                onClick={onCancel}
+                onClick={() => onCancel(selected)}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 variant={isSuspension ? "destructive" : "default"}
-                className="min-h-11 sm:min-h-8"
+                className="min-h-11"
                 disabled={pending}
               >
                 {pending ? pendingLabel : actionLabel}
@@ -391,13 +468,15 @@ function AccountActionDialog({
 
 function getAccountColumns({
   activeAdminCount,
+  actionsDisabled,
   currentUserId,
   openAction,
 }: {
   activeAdminCount: number;
+  actionsDisabled: boolean;
   currentUserId: string;
-  openAction: (account: AdminUserAccount, action: AccountAction) => void;
-}): ColumnDef<AdminUserAccount>[] {
+  openAction: (account: AdminUserAccountView, action: AccountAction) => void;
+}): ColumnDef<AdminUserAccountView>[] {
   return [
     {
       accessorKey: "displayName",
@@ -445,6 +524,7 @@ function getAccountColumns({
       cell: ({ row }) => (
         <AccountActionControl
           account={row.original}
+          actionsDisabled={actionsDisabled}
           blockReason={getSuspendBlockReason(
             row.original,
             currentUserId,
@@ -466,14 +546,14 @@ function LastUpdated({ value }: { value: string }) {
   );
 }
 
-function RoleBadge({ role }: { role: AdminUserAccount["role"] }) {
+function RoleBadge({ role }: { role: AdminUserAccountView["role"] }) {
   return <Badge variant="secondary">{formatEnumLabel(role)}</Badge>;
 }
 
 function VerificationBadge({
   status,
 }: {
-  status: AdminUserAccount["verificationStatus"];
+  status: AdminUserAccountView["verificationStatus"];
 }) {
   if (status === "APPROVED") {
     return (
@@ -499,7 +579,7 @@ function VerificationBadge({
 function AccessBadge({
   status,
 }: {
-  status: AdminUserAccount["accountStatus"];
+  status: AdminUserAccountView["accountStatus"];
 }) {
   if (status === "ACTIVE") {
     return (
@@ -519,7 +599,7 @@ function AccessBadge({
 }
 
 function getSuspendBlockReason(
-  account: AdminUserAccount,
+  account: AdminUserAccountView,
   currentUserId: string,
   activeAdminCount: number,
 ) {

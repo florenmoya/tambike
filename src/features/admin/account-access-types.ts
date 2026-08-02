@@ -18,6 +18,18 @@ export type AdminUserAccount = {
   updatedAt: string;
 };
 
+export type AdminUserAccountView = Pick<
+  AdminUserAccount,
+  | "id"
+  | "displayName"
+  | "email"
+  | "role"
+  | "verificationStatus"
+  | "accountStatus"
+  | "area"
+  | "updatedAt"
+>;
+
 export type AccountAccessMutationInput = {
   reason: string;
   expectedUpdatedAt: string;

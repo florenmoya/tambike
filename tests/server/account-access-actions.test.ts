@@ -1,5 +1,9 @@
 import { BackendError } from "../../src/server/backend";
 import type { AdminUserAccount } from "../../src/features/admin/account-access-types";
+import {
+  projectAccountActionState,
+  projectAdminUserAccount,
+} from "../../src/server/admin/account-action-view";
 import { describe, expect, test, vi } from "vitest";
 
 type AccountBackend = {
@@ -69,6 +73,7 @@ const account: AdminUserAccount = {
   verificationStatus: "UNVERIFIED",
   accountStatus: "SUSPENDED",
   area: "Pasig City",
+  organizerProfileId: "organizer-profile-private",
   suspendedAt: "2026-07-31T01:05:00.000Z",
   suspendedReason: "A sufficiently clear moderation reason.",
   updatedAt: "2026-07-31T01:05:00.000Z",
@@ -97,6 +102,43 @@ function dependencies(overrides: Partial<AccountActionDependencies> = {}): Accou
 }
 
 describe("admin account access actions", () => {
+  test("projects the exact public account shape at the client boundary", () => {
+    const projected = projectAdminUserAccount(account);
+
+    expect(projected).toEqual({
+      id: "rider-1",
+      displayName: "Rider One",
+      email: "rider@example.test",
+      role: "rider",
+      verificationStatus: "UNVERIFIED",
+      accountStatus: "SUSPENDED",
+      area: "Pasig City",
+      updatedAt: "2026-07-31T01:05:00.000Z",
+    });
+    expect(Object.keys(projected)).toEqual([
+      "id",
+      "displayName",
+      "email",
+      "role",
+      "verificationStatus",
+      "accountStatus",
+      "area",
+      "updatedAt",
+    ]);
+    expect(
+      projectAccountActionState({
+        status: "success",
+        code: "SUCCESS",
+        message: "Account suspended.",
+        data: account,
+      }),
+    ).toEqual({
+      status: "success",
+      code: "SUCCESS",
+      message: "Account suspended.",
+      data: projected,
+    });
+  });
   test("returns field errors before a malformed suspension reaches the backend", async () => {
     const { createAccountAccessActions } = await loadAccountActions();
     const getBackend = vi.fn(async () => {
