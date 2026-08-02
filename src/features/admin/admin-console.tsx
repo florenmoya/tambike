@@ -44,7 +44,7 @@ import {
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { adminApproval, organizers } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
-import type { Event, UserProfile, VerificationStatus } from "@/features/tambike-demo/types";
+import type { Event, UserProfile } from "@/features/tambike-demo/types";
 
 export type AdminSection =
   | "overview"
@@ -65,16 +65,6 @@ type EventReviewRow = {
   location: string;
   riders: number;
   risk: string;
-};
-
-type UserRow = {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  status: VerificationStatus;
-  area: string;
-  organizerProfileId?: string;
 };
 
 type ValidationRow = {
@@ -149,19 +139,16 @@ export function AdminConsole({
   reportEventId,
   reviewId,
   section,
+  userContent,
 }: {
   section: AdminSection;
   giveawayContent?: React.ReactNode;
   reportEventId?: string;
   reviewId?: string;
+  userContent?: React.ReactNode;
 }) {
   const { adminDecision, approvePublish, currentUser, events, users } = useDemo();
-  const [userStatusOverrides, setUserStatusOverrides] = React.useState<Record<string, VerificationStatus>>({});
   const [eventStatusOverrides, setEventStatusOverrides] = React.useState<Record<string, Event["status"]>>({});
-
-  const setUserStatus = React.useCallback((userId: string, status: VerificationStatus) => {
-    setUserStatusOverrides((current) => ({ ...current, [userId]: status }));
-  }, []);
 
   const setEventStatus = React.useCallback((eventId: string, status: Event["status"]) => {
     setEventStatusOverrides((current) => ({ ...current, [eventId]: status }));
@@ -190,7 +177,6 @@ export function AdminConsole({
     return status ? { ...event, status } : event;
   });
   const eventRows = getEventRows(effectiveEvents);
-  const userRows = getUserRows(users, userStatusOverrides);
   const validationRows = getValidationRows();
   const reportRows = getReportRows(effectiveEvents);
   const metrics = {
@@ -198,7 +184,7 @@ export function AdminConsole({
   };
   const cards = getSectionCards({
     events: eventRows,
-    users: userRows,
+    users,
   });
   const chartData = getChartData(effectiveEvents);
   const reportEvent = reportEventId ? effectiveEvents.find((event) => event.id === reportEventId) ?? null : null;
@@ -253,9 +239,7 @@ export function AdminConsole({
             {!hasDetail && section === "events" ? <EventsSection rows={eventRows} /> : null}
             {!hasDetail && section === "giveaways" ? giveawayContent : null}
             {!hasDetail && section === "reports" ? <ReportsSection rows={reportRows} /> : null}
-            {!hasDetail && section === "users" ? (
-              <UsersSection currentUserId={currentUser.id} onSetStatus={setUserStatus} rows={userRows} />
-            ) : null}
+            {!hasDetail && section === "users" ? userContent : null}
             {!hasDetail && section === "validation" ? <ValidationSection rows={validationRows} /> : null}
             {!hasDetail && section === "moderation" ? <ModerationSection rows={eventRows} /> : null}
           </div>
@@ -715,30 +699,6 @@ function AdminReportDetail({ event, eventId }: { event: Event | null; eventId: s
   );
 }
 
-function UsersSection({
-  currentUserId,
-  onSetStatus,
-  rows,
-}: {
-  currentUserId: string;
-  onSetStatus: (userId: string, status: VerificationStatus) => void;
-  rows: UserRow[];
-}) {
-  const columns = React.useMemo(
-    () => getUserColumns(onSetStatus, currentUserId),
-    [currentUserId, onSetStatus],
-  );
-
-  return (
-    <TablePanel
-      title="User accounts"
-      description="Role, status, and area overview for rider, organizer, and ops accounts."
-    >
-      <DataTable columns={columns} data={rows} filterColumn="name" filterPlaceholder="Filter users..." />
-    </TablePanel>
-  );
-}
-
 function ValidationSection({ rows }: { rows: ValidationRow[] }) {
   return (
     <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,480px)] lg:px-6">
@@ -961,62 +921,6 @@ function getEventColumns(): ColumnDef<EventReviewRow>[] {
   ];
 }
 
-function getUserColumns(
-  onSetStatus: (userId: string, status: VerificationStatus) => void,
-  currentUserId: string,
-): ColumnDef<UserRow>[] {
-  return [
-    selectColumn<UserRow>(),
-    {
-      accessorKey: "name",
-      header: ({ column }) => <SortableHeader column={column}>Name</SortableHeader>,
-      cell: ({ row }) => (
-        <div className="min-w-48">
-          <div className="font-medium">{row.original.name}</div>
-          <div className="text-sm text-muted-foreground">{row.original.email}</div>
-        </div>
-      ),
-    },
-    {
-      accessorKey: "role",
-      header: "Role",
-      cell: ({ row }) => <Badge variant="secondary">{row.original.role}</Badge>,
-    },
-    {
-      accessorKey: "status",
-      header: "Status",
-      cell: ({ row }) => <StatusBadge status={row.original.status} />,
-    },
-    {
-      accessorKey: "area",
-      header: "Area",
-    },
-    actionsColumn<UserRow>((row) => {
-      const items: RowActionItem[] = [];
-
-      if (row.organizerProfileId) {
-        items.push({ label: "Organizer account", disabled: true });
-      }
-
-      if (row.status === "SUSPENDED") {
-        items.push({
-          label: "Restore account",
-          onSelect: () => onSetStatus(row.id, "APPROVED"),
-        });
-      } else {
-        items.push({
-          label: "Disable account",
-          destructive: true,
-          disabled: row.id === currentUserId,
-          onSelect: () => onSetStatus(row.id, "SUSPENDED"),
-        });
-      }
-
-      return items;
-    }),
-  ];
-}
-
 const validationColumns: ColumnDef<ValidationRow>[] = [
   selectColumn<ValidationRow>(),
   {
@@ -1159,28 +1063,6 @@ function actionsColumn<TData>(
   };
 }
 
-function StatusBadge({ status }: { status: VerificationStatus }) {
-  if (status === "APPROVED") {
-    return (
-      <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300">
-        <CheckCircle2Icon data-icon="inline-start" />
-        Approved
-      </Badge>
-    );
-  }
-
-  if (status === "SUSPENDED" || status === "REJECTED") {
-    return (
-      <Badge variant="destructive">
-        <ShieldAlertIcon data-icon="inline-start" />
-        {status.toLowerCase()}
-      </Badge>
-    );
-  }
-
-  return <Badge variant="secondary">{status.toLowerCase()}</Badge>;
-}
-
 function EventStatusBadge({ status }: { status: Event["status"] }) {
   const label = status.replaceAll("_", " ").toLowerCase();
   if (status === "PUBLISHED" || status === "COMPLETED") {
@@ -1256,21 +1138,6 @@ function getEventRows(events: Event[]): EventReviewRow[] {
   }));
 }
 
-function getUserRows(
-  users: UserProfile[],
-  statusOverrides: Record<string, VerificationStatus>,
-): UserRow[] {
-  return users.map((user) => ({
-    id: user.id,
-    name: user.displayName,
-    email: user.email,
-    role: user.role,
-    status: statusOverrides[user.id] ?? user.verificationStatus,
-    area: user.area,
-    organizerProfileId: user.organizerProfileId,
-  }));
-}
-
 function getValidationRows(): ValidationRow[] {
   return [
     {
@@ -1314,7 +1181,7 @@ function getSectionCards({
   users,
 }: {
   events: EventReviewRow[];
-  users: UserRow[];
+  users: UserProfile[];
 }): SectionCard[] {
   const pendingReview = events.filter((event) => event.status === "PENDING_ADMIN_REVIEW").length;
   const published = events.filter((event) => event.status === "PUBLISHED").length;

@@ -54,7 +54,7 @@ type CreateAccountAccessActions = (
 async function loadAccountActions() {
   // This remains runnable for the RED phase while the action module does not
   // yet exist. The action factory itself is the public behavior under test.
-  const modulePath = `../../src/server/admin/${"account-actions"}`;
+  const modulePath = `../../src/server/admin/${"account-actions-core"}`;
   const loaded = await import(modulePath);
   return loaded as { createAccountAccessActions: CreateAccountAccessActions };
 }
