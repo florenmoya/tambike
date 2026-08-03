@@ -38,6 +38,75 @@ ALTER TABLE "EventApproval"
 UPDATE "EventApproval"
 SET "submittedAt" = "createdAt";
 
+-- A legacy queued event could exist without an approval row. Repair only that incomplete lifecycle
+-- state so the transactional review path has a current version to decide. The length-prefixed event
+-- ID makes each base identifier injective; the bounded suffix search deterministically avoids any
+-- pre-existing approval ID that happens to use the same reserved migration prefix.
+WITH pending_without_history AS (
+  SELECT
+    event."id" AS "eventId",
+    event."createdAt" AS "submittedAt",
+    'event-review-lifecycle:pending:v1:'
+      || octet_length(convert_to(event."id", 'UTF8'))::text
+      || ':' || event."id" AS "baseApprovalId"
+  FROM "Event" event
+  WHERE event."status" = 'PENDING_ADMIN_REVIEW'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM "EventApproval" approval
+      WHERE approval."eventId" = event."id"
+    )
+), synthetic_pending AS (
+  SELECT
+    pending."eventId",
+    pending."submittedAt",
+    generated."approvalId"
+  FROM pending_without_history pending
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE
+        WHEN candidate.suffix = 0 THEN pending."baseApprovalId"
+        ELSE pending."baseApprovalId" || ':collision:' || candidate.suffix::text
+      END AS "approvalId"
+    FROM generate_series(
+      0::bigint,
+      (SELECT count(*) FROM "EventApproval")
+    ) AS candidate(suffix)
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM "EventApproval" existing
+      WHERE existing."id" = CASE
+        WHEN candidate.suffix = 0 THEN pending."baseApprovalId"
+        ELSE pending."baseApprovalId" || ':collision:' || candidate.suffix::text
+      END
+    )
+    ORDER BY candidate.suffix
+    LIMIT 1
+  ) generated
+)
+INSERT INTO "EventApproval" (
+  "id",
+  "eventId",
+  "submissionVersion",
+  "reviewerId",
+  "decision",
+  "notes",
+  "submittedAt",
+  "decidedAt",
+  "createdAt"
+)
+SELECT
+  synthetic."approvalId",
+  synthetic."eventId",
+  1,
+  NULL,
+  'pending',
+  NULL,
+  synthetic."submittedAt",
+  NULL,
+  synthetic."submittedAt"
+FROM synthetic_pending synthetic;
+
 -- Refuse to truncate historical review notes when applying the new bounded contract.
 DO $$
 BEGIN
