@@ -32,6 +32,17 @@ async function createPendingEvent(namespace: string) {
 }
 
 describe("memory event-review lifecycle", () => {
+  test("uses concise rider-facing default event brief copy", async () => {
+    const { event } = await createPendingEvent("rider-facing-brief");
+
+    expect(event.whatHappens).toBe(
+      "See the event schedule and organizer updates for timing, activities, and on-site instructions.",
+    );
+    expect(event.whatHappens).not.toMatch(
+      /\b(?:submission|review|approval|publication|backend|admin|draft)\b/i,
+    );
+  });
+
   test.each([
     ["PUBLISH", "PUBLISHED", "published", "ADMIN_PUBLISHED"],
     [

@@ -1,7 +1,7 @@
 import type { CreateEventInput, Event } from "../tambike-demo/types";
 
 export const ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS =
-  "Organizer-created event submitted directly for admin review and publication.";
+  "See the event schedule and organizer updates for timing, activities, and on-site instructions.";
 
 export type EventReviewDecision =
   | "PUBLISH"

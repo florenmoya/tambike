@@ -648,6 +648,12 @@ describe("Prisma event review lifecycle", () => {
         memory.createEventDraft(memoryActors.organizer.sessionToken, input),
         backends.primary.backend.createEventDraft(fixture.organizerSession, input),
       ]);
+      expect(prismaEvent.whatHappens).toBe(
+        "See the event schedule and organizer updates for timing, activities, and on-site instructions.",
+      );
+      expect(prismaEvent.whatHappens).not.toMatch(
+        /\b(?:submission|review|approval|publication|backend|admin|draft)\b/i,
+      );
       expect(prismaEvent).toEqual({
         ...memoryEvent,
         organizerId: fixture.organizerProfileId,
