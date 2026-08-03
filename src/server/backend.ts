@@ -1188,6 +1188,7 @@ export class TambikeBackend {
     this.audit("ACCOUNT_SUSPENDED", actor.id, target.id, {
       previousAccountStatus: "ACTIVE",
       nextAccountStatus: "SUSPENDED",
+      reason,
     });
     return this.toAdminUserAccount(target);
   }
@@ -1203,7 +1204,7 @@ export class TambikeBackend {
     if (target.updatedAt !== input.expectedUpdatedAt) {
       throw new BackendError("CONFLICT");
     }
-    this.requireAdminReason(input.reason);
+    const reason = this.requireAdminReason(input.reason);
     if (target.accountStatus !== "SUSPENDED") {
       throw new BackendError("CONFLICT");
     }
@@ -1216,6 +1217,7 @@ export class TambikeBackend {
     this.audit("ACCOUNT_RESTORED", actor.id, target.id, {
       previousAccountStatus: "SUSPENDED",
       nextAccountStatus: "ACTIVE",
+      reason,
     });
     return this.toAdminUserAccount(target);
   }

@@ -175,7 +175,7 @@ describe("account access domain", () => {
       actors.admin.sessionToken,
       actors.rider.user.id,
       {
-        reason: "Temporary safety hold pending rider contact.",
+        reason: "  Temporary safety hold pending rider contact.  ",
         expectedUpdatedAt: before.updatedAt,
       },
     );
@@ -184,7 +184,7 @@ describe("account access domain", () => {
       actors.admin.sessionToken,
       actors.rider.user.id,
       {
-        reason: "Safety hold reviewed and resolved.",
+        reason: "  Safety hold reviewed and resolved.  ",
         expectedUpdatedAt: suspended.updatedAt,
       },
     );
@@ -195,6 +195,51 @@ describe("account access domain", () => {
       suspendedAt: undefined,
       suspendedReason: undefined,
     });
+    const internal = backend as unknown as {
+      audits: Array<{
+        action: string;
+        targetId?: string;
+        metadata?: Record<string, string>;
+      }>;
+      users: Map<
+        string,
+        {
+          suspendedAt?: string;
+          suspendedByUserId?: string;
+          suspensionReason?: string;
+        }
+      >;
+    };
+    expect(
+      internal.audits
+        .filter(
+          (audit) =>
+            audit.targetId === actors.rider.user.id &&
+            ["ACCOUNT_SUSPENDED", "ACCOUNT_RESTORED"].includes(audit.action),
+        )
+        .map((audit) => ({ action: audit.action, metadata: audit.metadata })),
+    ).toEqual([
+      {
+        action: "ACCOUNT_SUSPENDED",
+        metadata: {
+          previousAccountStatus: "ACTIVE",
+          nextAccountStatus: "SUSPENDED",
+          reason: "Temporary safety hold pending rider contact.",
+        },
+      },
+      {
+        action: "ACCOUNT_RESTORED",
+        metadata: {
+          previousAccountStatus: "SUSPENDED",
+          nextAccountStatus: "ACTIVE",
+          reason: "Safety hold reviewed and resolved.",
+        },
+      },
+    ]);
+    const restoredUser = internal.users.get(actors.rider.user.id);
+    expect(restoredUser).not.toHaveProperty("suspendedAt");
+    expect(restoredUser).not.toHaveProperty("suspendedByUserId");
+    expect(restoredUser).not.toHaveProperty("suspensionReason");
     await expect(
       backend.loginWithPassword(actors.rider.user.email, "password123"),
     ).resolves.toMatchObject({

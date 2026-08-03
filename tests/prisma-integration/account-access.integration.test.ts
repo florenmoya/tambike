@@ -208,7 +208,7 @@ describe("Prisma account access", () => {
         fixture.adminSession,
         fixture.riders[0].userId,
         {
-          reason: suspensionReason,
+          reason: `  ${suspensionReason}  `,
           expectedUpdatedAt: before.updatedAt,
         },
       );
@@ -280,11 +280,9 @@ describe("Prisma account access", () => {
         metadata: {
           previousAccountStatus: "ACTIVE",
           nextAccountStatus: "SUSPENDED",
+          reason: suspensionReason,
         },
       });
-      expect(JSON.stringify(suspensionAudit.metadata)).not.toContain(
-        suspensionReason,
-      );
       expect(JSON.stringify(suspensionAudit.metadata)).not.toContain(
         fixture.riders[0].sessionToken,
       );
@@ -292,11 +290,12 @@ describe("Prisma account access", () => {
         "password123",
       );
 
+      const restorationReason = "Disposable integration restoration reason.";
       const restored = await backendClients.primary.backend.restoreUser(
         fixture.adminSession,
         fixture.riders[0].userId,
         {
-          reason: "Disposable integration restoration reason.",
+          reason: `  ${restorationReason}  `,
           expectedUpdatedAt: suspended.updatedAt,
         },
       );
@@ -310,18 +309,116 @@ describe("Prisma account access", () => {
         Date.parse(suspended.updatedAt),
       );
       await expect(
-        rawClients.secondary.auditLog.count({
+        rawClients.secondary.auditLog.findFirstOrThrow({
           where: {
             action: "ACCOUNT_RESTORED",
             targetId: fixture.riders[0].userId,
           },
         }),
-      ).resolves.toBe(1);
+      ).resolves.toMatchObject({
+        metadata: {
+          previousAccountStatus: "SUSPENDED",
+          nextAccountStatus: "ACTIVE",
+          reason: restorationReason,
+        },
+      });
+      await expect(
+        rawClients.secondary.user.findUniqueOrThrow({
+          where: { id: fixture.riders[0].userId },
+          select: {
+            accountStatus: true,
+            suspendedAt: true,
+            suspendedByUserId: true,
+            suspensionReason: true,
+          },
+        }),
+      ).resolves.toEqual({
+        accountStatus: "ACTIVE",
+        suspendedAt: null,
+        suspendedByUserId: null,
+        suspensionReason: null,
+      });
     } finally {
       await closePrismaIntegrationClientPair(backendClients);
       await closePrismaIntegrationClientPair(rawClients);
     }
   });
+
+  test.each([
+    {
+      writer: "basic profile",
+      update: async (
+        backend: PrismaTambikeBackend,
+        sessionToken: string,
+      ) =>
+        backend.updateProfile(sessionToken, {
+          displayName: "Monotonic Basic Profile",
+          area: "Pasig City",
+          bikeModel: "Yamaha NMAX",
+        }),
+    },
+    {
+      writer: "member profile",
+      update: async (
+        backend: PrismaTambikeBackend,
+        sessionToken: string,
+      ) =>
+        backend.updateMemberProfile(sessionToken, {
+          displayName: "Monotonic Member Profile",
+          area: "Mandaluyong City",
+          bio: "A disposable profile concurrency regression.",
+          visibility: "PUBLIC",
+          defaultRosterIdentity: "VISIBLE",
+        }),
+    },
+  ])(
+    "$writer edits advance updatedAt by one millisecond and stale the prior account token",
+    async ({ update }) => {
+      const rawClients = createPrismaIntegrationClients();
+      const backendClients = createBackendClients();
+      const suffix = `account-profile-token-${randomUUID()}`;
+      let fixture: PrismaEventFixture | undefined;
+
+      try {
+        fixture = await createPrismaEventFixture(rawClients.primary, { suffix });
+        const riderId = fixture.riders[0].userId;
+        const previousUpdatedAt = new Date("2099-08-03T00:00:00.000Z");
+        await rawClients.primary.user.update({
+          where: { id: riderId },
+          data: { updatedAt: previousUpdatedAt },
+        });
+
+        await update(
+          backendClients.primary.backend,
+          fixture.riders[0].sessionToken,
+        );
+
+        const updated = await rawClients.secondary.user.findUniqueOrThrow({
+          where: { id: riderId },
+          select: { updatedAt: true },
+        });
+        expect(updated.updatedAt.toISOString()).toBe(
+          "2099-08-03T00:00:00.001Z",
+        );
+        await expect(
+          backendClients.secondary.backend.suspendUser(
+            fixture.adminSession,
+            riderId,
+            {
+              reason: "The pre-profile-edit token must be rejected.",
+              expectedUpdatedAt: previousUpdatedAt.toISOString(),
+            },
+          ),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      } finally {
+        if (fixture) {
+          await cleanupPrismaEventFixture(rawClients.primary, fixture);
+        }
+        await closePrismaIntegrationClientPair(backendClients);
+        await closePrismaIntegrationClientPair(rawClients);
+      }
+    },
+  );
 
   test("serializes login and suspension on the user row in either race order", async () => {
     for (const order of ["login-first", "suspension-first"] as const) {

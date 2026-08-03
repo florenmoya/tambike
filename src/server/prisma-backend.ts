@@ -743,6 +743,7 @@ export class PrismaTambikeBackend {
           metadata: {
             previousAccountStatus: "ACTIVE",
             nextAccountStatus: "SUSPENDED",
+            reason,
           },
         },
       });
@@ -760,7 +761,7 @@ export class PrismaTambikeBackend {
     input: AccountAccessMutationInput,
   ): Promise<AdminUserAccount> {
     const actor = await this.requireRole(sessionToken, "admin");
-    this.requireAdminReason(input.reason);
+    const reason = this.requireAdminReason(input.reason);
     const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
 
     return this.prisma.$transaction(async (tx) => {
@@ -806,6 +807,7 @@ export class PrismaTambikeBackend {
           metadata: {
             previousAccountStatus: "SUSPENDED",
             nextAccountStatus: "ACTIVE",
+            reason,
           },
         },
       });
@@ -819,15 +821,32 @@ export class PrismaTambikeBackend {
 
   async updateProfile(sessionToken: string, input: ProfileInput) {
     const user = await this.requireUser(sessionToken);
-    const updated = await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        displayName: input.displayName.trim(),
-        area: input.area.trim(),
-        bikeModel: input.bikeModel?.trim() || null,
-        clubName: input.clubName?.trim() || null,
-      },
-      include: { organizerProfile: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (!(await this.lockAccountAccessUser(tx, user.id))) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      const lockedUser = await tx.user.findUnique({
+        where: { id: user.id },
+        select: { accountStatus: true, updatedAt: true },
+      });
+      if (!lockedUser) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      if (lockedUser.accountStatus === "SUSPENDED") {
+        throw new BackendError("FORBIDDEN", "FORBIDDEN");
+      }
+
+      return tx.user.update({
+        where: { id: user.id },
+        data: {
+          displayName: input.displayName.trim(),
+          area: input.area.trim(),
+          bikeModel: input.bikeModel?.trim() || null,
+          clubName: input.clubName?.trim() || null,
+          updatedAt: this.nextUserUpdatedAt(lockedUser.updatedAt),
+        },
+        include: { organizerProfile: true },
+      });
     });
     await this.audit("PROFILE_UPDATED", user.id, "User", user.id);
     return this.toUserProfile(updated);
@@ -894,18 +913,30 @@ export class PrismaTambikeBackend {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      if (!(await this.lockAccountAccessUser(tx, sessionUser.id))) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      const lockedUser = await tx.user.findUnique({
+        where: { id: sessionUser.id },
+        select: {
+          accountStatus: true,
+          profileSlug: true,
+          updatedAt: true,
+        },
+      });
+      if (!lockedUser) {
+        throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
+      }
+      if (lockedUser.accountStatus === "SUSPENDED") {
+        throw new BackendError("FORBIDDEN", "FORBIDDEN");
+      }
+
       const profileSlug = await resolveStableProfileSlug(parsed.displayName, {
         acquireOwnerLock: () => {
           const resource = profileOwnerLockResource(sessionUser.id);
           return tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
         },
-        readCurrentSlug: async () =>
-          (
-            await tx.user.findUniqueOrThrow({
-              where: { id: sessionUser.id },
-              select: { profileSlug: true },
-            })
-          ).profileSlug,
+        readCurrentSlug: async () => lockedUser.profileSlug,
         acquireSlugAllocationLock: () => {
           const resource = profileSlugAllocationLockResource();
           return tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${resource}, 0))`;
@@ -921,6 +952,7 @@ export class PrismaTambikeBackend {
           profileVisibility: parsed.visibility,
           defaultRosterIdentity: parsed.defaultRosterIdentity,
           profileSlug,
+          updatedAt: this.nextUserUpdatedAt(lockedUser.updatedAt),
         },
       });
     });
@@ -9898,6 +9930,10 @@ export class PrismaTambikeBackend {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     return parsed;
+  }
+
+  private nextUserUpdatedAt(previous: Date) {
+    return new Date(Math.max(Date.now(), previous.getTime() + 1));
   }
 
   private toGiveawayPrizeImageSummary(image: {
