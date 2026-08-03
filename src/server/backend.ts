@@ -66,13 +66,14 @@ import type {
   AccountAccessMutationInput,
   AdminUserAccount,
 } from "@/features/admin/account-access-types";
-import type {
-  AdminEventReviewView,
-  EventReviewHistoryItem,
-  EventStatusMutationInput,
-  OrganizerEventSubmissionView,
-  ResubmitEventInput,
-  ReviewEventInput,
+import {
+  ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+  type AdminEventReviewView,
+  type EventReviewHistoryItem,
+  type EventStatusMutationInput,
+  type OrganizerEventSubmissionView,
+  type ResubmitEventInput,
+  type ReviewEventInput,
 } from "@/features/admin/event-review-types";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
@@ -1612,7 +1613,7 @@ export class TambikeBackend {
       time: labels.time,
       ...schedule,
       shortDescription: `${title} is awaiting admin review.`,
-      whatHappens: "Organizer-created event submitted directly for admin review and publication.",
+      whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
       going: 0,
       interested: 0,
       expectedRiders,
@@ -5170,23 +5171,12 @@ export class TambikeBackend {
       time: labels.time,
       ...schedule,
       shortDescription: `${title} is awaiting admin review.`,
-      whatHappens:
-        "Organizer-created event submitted directly for admin review and publication.",
+      whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
       expectedRiders,
       perkPreview,
       tags: [input.event.type, "Admin review"],
       riskFlags: this.riskFlagsFor(input.event.type, expectedRiders),
       rules: defaultRulesForEvent(input.event.type),
-      perks: [
-        {
-          id: event.perks[0]?.id ?? `perk-${event.id}`,
-          type: "Check-in perk",
-          description: perkPreview,
-          ...(event.perks[0]?.quantity
-            ? { quantity: event.perks[0].quantity }
-            : {}),
-        },
-      ],
     });
     this.eventUpdatedAt.set(event.id, submittedAt);
     this.eventSubmissionVersions.set(event.id, submissionVersion);

@@ -1,15 +1,82 @@
 import { randomUUID } from "node:crypto";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import type { CreateEventInput } from "../../src/features/tambike-demo/types";
 import { PrismaTambikeBackend } from "../../src/server/prisma-backend";
+import { createTambikeTestBackend } from "../../src/server/testing";
+import { createTestActors } from "../server/support/tambike-fixtures";
 import {
   closePrismaIntegrationClientPair,
   createPrismaIntegrationClientPair,
   createPrismaIntegrationClients,
 } from "./clients";
 import { createPrismaEventFixture } from "./fixtures";
+
+type ReviewFixture = Awaited<ReturnType<typeof createPrismaEventFixture>>;
+const cleanupTargets: ReviewFixture[] = [];
+
+function trackFixture(fixture: ReviewFixture) {
+  cleanupTargets.push(fixture);
+  return fixture;
+}
+
+afterEach(async () => {
+  const targets = cleanupTargets.splice(0);
+  if (targets.length === 0) return;
+  const clients = createPrismaIntegrationClients();
+  try {
+    for (const target of targets) {
+      const userIds = [
+        target.organizerId,
+        target.adminId,
+        ...target.riders.map((rider) => rider.userId),
+      ];
+      const eventIds = (
+        await clients.primary.event.findMany({
+          where: { organizerId: target.organizerProfileId },
+          select: { id: true },
+        })
+      ).map((event) => event.id);
+      await clients.primary.$transaction(async (tx) => {
+        await tx.auditLog.deleteMany({
+          where: {
+            OR: [
+              { actorUserId: { in: userIds } },
+              { targetId: { in: [...eventIds, ...userIds] } },
+            ],
+          },
+        });
+        await tx.notification.deleteMany({ where: { userId: { in: userIds } } });
+        await tx.event.deleteMany({ where: { id: { in: eventIds } } });
+        await tx.user.deleteMany({ where: { id: { in: userIds } } });
+      });
+      const [events, approvals, audits, notifications, users] = await Promise.all([
+        clients.primary.event.count({ where: { id: { in: eventIds } } }),
+        clients.primary.eventApproval.count({ where: { eventId: { in: eventIds } } }),
+        clients.primary.auditLog.count({
+          where: {
+            OR: [
+              { actorUserId: { in: userIds } },
+              { targetId: { in: [...eventIds, ...userIds] } },
+            ],
+          },
+        }),
+        clients.primary.notification.count({ where: { userId: { in: userIds } } }),
+        clients.primary.user.count({ where: { id: { in: userIds } } }),
+      ]);
+      expect({ events, approvals, audits, notifications, users }).toEqual({
+        events: 0,
+        approvals: 0,
+        audits: 0,
+        notifications: 0,
+        users: 0,
+      });
+    }
+  } finally {
+    await closePrismaIntegrationClientPair(clients);
+  }
+});
 
 const draftInput = (suffix: string): CreateEventInput => ({
   title: `Prisma Review ${suffix}`,
@@ -41,7 +108,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const adminView = await backends.primary.backend.getAdminEventReview(
         fixture.adminSession,
         fixture.eventId,
@@ -88,7 +155,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const created = await backends.primary.backend.createEventDraft(
         fixture.organizerSession,
         draftInput(suffix),
@@ -176,7 +243,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const event = await backends.primary.backend.createEventDraft(
         fixture.organizerSession,
         draftInput(suffix),
@@ -220,7 +287,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const event = await backends.primary.backend.createEventDraft(fixture.organizerSession, draftInput(suffix));
       const initial = await backends.primary.backend.getAdminEventReview(fixture.adminSession, event.id);
       await expect(backends.primary.backend.reviewEvent(fixture.adminSession, event.id, {
@@ -249,7 +316,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const event = await backends.primary.backend.createEventDraft(fixture.organizerSession, draftInput(suffix));
       const pending = await backends.primary.backend.getAdminEventReview(fixture.adminSession, event.id);
       const published = await backends.primary.backend.reviewEvent(fixture.adminSession, event.id, { decision: "PUBLISH", expectedUpdatedAt: pending.expectedUpdatedAt });
@@ -279,7 +346,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       await backends.primary.backend.configureEventRoster(
         fixture.organizerSession,
         fixture.eventId,
@@ -319,7 +386,7 @@ describe("Prisma event review lifecycle", () => {
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const event = await backends.primary.backend.createEventDraft(fixture.organizerSession, draftInput(suffix));
       const pending = await backends.primary.backend.getAdminEventReview(fixture.adminSession, event.id);
       await expect(backends.primary.backend.disableEvent(fixture.adminSession, event.id, {
@@ -371,12 +438,232 @@ describe("Prisma event review lifecycle", () => {
     }
   });
 
+  test("checks authorization, locked state, and CAS before detailed mutation payloads", async () => {
+    const raw = createPrismaIntegrationClients();
+    const backends = createBackends();
+    const suffix = randomUUID();
+    try {
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
+      const event = await backends.primary.backend.createEventDraft(
+        fixture.organizerSession,
+        draftInput(suffix),
+      );
+      const pending = await backends.primary.backend.getAdminEventReview(
+        fixture.adminSession,
+        event.id,
+      );
+      const invalidEvent = {
+        ...draftInput(suffix),
+        startDate: "not-a-date",
+      };
+      const beforePending = await raw.secondary.event.findUniqueOrThrow({
+        where: { id: event.id },
+        include: { approvals: true },
+      });
+      const pendingAuditCount = await raw.secondary.auditLog.count({
+        where: { targetId: event.id },
+      });
+      const pendingNotificationCount = await raw.secondary.notification.count({
+        where: { userId: fixture.organizerId },
+      });
+
+      await expect(
+        backends.primary.backend.resubmitEvent(
+          fixture.riders[0]!.sessionToken,
+          event.id,
+          {
+            event: invalidEvent,
+            reason: "short",
+            expectedUpdatedAt: "not-a-timestamp",
+          },
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        backends.primary.backend.reviewEvent(fixture.adminSession, event.id, {
+          decision: "REJECT",
+          reason: "short",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(
+        backends.primary.backend.disableEvent(fixture.adminSession, event.id, {
+          reason: "short",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(
+        backends.primary.backend.resubmitEvent(fixture.organizerSession, event.id, {
+          event: invalidEvent,
+          reason: "short",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await raw.secondary.event.findUniqueOrThrow({
+        where: { id: event.id },
+        include: { approvals: true },
+      })).toEqual(beforePending);
+      await expect(raw.secondary.auditLog.count({ where: { targetId: event.id } })).resolves.toBe(pendingAuditCount);
+      await expect(raw.secondary.notification.count({ where: { userId: fixture.organizerId } })).resolves.toBe(pendingNotificationCount);
+
+      const changes = await backends.primary.backend.reviewEvent(
+        fixture.adminSession,
+        event.id,
+        {
+          decision: "REQUEST_CHANGES",
+          reason: "Please clarify the venue before resubmitting this event.",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        },
+      );
+      const beforeStale = await raw.secondary.event.findUniqueOrThrow({
+        where: { id: event.id },
+        include: { approvals: true },
+      });
+      const staleAuditCount = await raw.secondary.auditLog.count({
+        where: { targetId: event.id },
+      });
+      const staleNotificationCount = await raw.secondary.notification.count({
+        where: { userId: fixture.organizerId },
+      });
+      await expect(
+        backends.primary.backend.reviewEvent(fixture.adminSession, event.id, {
+          decision: "REJECT",
+          reason: "short",
+          expectedUpdatedAt: changes.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(
+        backends.primary.backend.resubmitEvent(fixture.organizerSession, event.id, {
+          event: invalidEvent,
+          reason: "short",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await raw.secondary.event.findUniqueOrThrow({
+        where: { id: event.id },
+        include: { approvals: true },
+      })).toEqual(beforeStale);
+      await expect(raw.secondary.auditLog.count({ where: { targetId: event.id } })).resolves.toBe(staleAuditCount);
+      await expect(raw.secondary.notification.count({ where: { userId: fixture.organizerId } })).resolves.toBe(staleNotificationCount);
+
+      await raw.primary.user.update({
+        where: { id: fixture.organizerId },
+        data: { accountStatus: "SUSPENDED" },
+      });
+      await expect(
+        backends.primary.backend.resubmitEvent(fixture.organizerSession, event.id, {
+          event: invalidEvent,
+          reason: "short",
+          expectedUpdatedAt: changes.expectedUpdatedAt,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(await raw.secondary.event.findUniqueOrThrow({
+        where: { id: event.id },
+        include: { approvals: true },
+      })).toEqual(beforeStale);
+      expect(beforePending.status).toBe("PENDING_ADMIN_REVIEW");
+    } finally {
+      await closePrismaIntegrationClientPair(backends);
+      await closePrismaIntegrationClientPair(raw);
+    }
+  });
+
+  test.each(["multiple", "zero"] as const)(
+    "keeps %s relational perks independent from the canonical submission preview",
+    async (perkFixture) => {
+      const raw = createPrismaIntegrationClients();
+      const backends = createBackends();
+      const suffix = randomUUID();
+      try {
+        const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
+        const event = await backends.primary.backend.createEventDraft(
+          fixture.organizerSession,
+          draftInput(suffix),
+        );
+        const pending = await backends.primary.backend.getAdminEventReview(
+          fixture.adminSession,
+          event.id,
+        );
+        const changes = await backends.primary.backend.reviewEvent(
+          fixture.adminSession,
+          event.id,
+          {
+            decision: "REQUEST_CHANGES",
+            reason: "Please revise the event preview before resubmitting.",
+            expectedUpdatedAt: pending.expectedUpdatedAt,
+          },
+        );
+        if (perkFixture === "multiple") {
+          await raw.primary.perk.create({
+            data: {
+              id: `unrelated-perk-${suffix}`,
+              eventId: event.id,
+              type: "Sponsor benefit",
+              description: "This unrelated sponsor benefit must remain unchanged.",
+            },
+          });
+        } else {
+          await raw.primary.perk.deleteMany({ where: { eventId: event.id } });
+        }
+        const beforePerks = await raw.primary.perk.findMany({
+          where: { eventId: event.id },
+          orderBy: { id: "asc" },
+        });
+        const revised = {
+          ...draftInput(suffix),
+          perkPreview: "A revised canonical event preview",
+        };
+        const result = await backends.primary.backend.resubmitEvent(
+          fixture.organizerSession,
+          event.id,
+          {
+            event: revised,
+            reason: "Updated the canonical event preview for another review.",
+            expectedUpdatedAt: changes.expectedUpdatedAt,
+          },
+        );
+        const persisted = await raw.secondary.event.findUniqueOrThrow({
+          where: { id: event.id },
+          include: { perks: { orderBy: { id: "asc" } } },
+        });
+        expect(result.event.perkPreview).toBe(revised.perkPreview);
+        expect(persisted.perkPreview).toBe(revised.perkPreview);
+        expect(persisted.perks).toEqual(beforePerks);
+      } finally {
+        await closePrismaIntegrationClientPair(backends);
+        await closePrismaIntegrationClientPair(raw);
+      }
+    },
+  );
+
+  test("returns the exact same normalized draft Event projection as the memory backend", async () => {
+    const raw = createPrismaIntegrationClients();
+    const backends = createBackends();
+    const suffix = randomUUID();
+    try {
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
+      const memory = await createTambikeTestBackend();
+      const memoryActors = await createTestActors(memory, `prisma-parity-${suffix}`);
+      const input = draftInput(suffix);
+      const [memoryEvent, prismaEvent] = await Promise.all([
+        memory.createEventDraft(memoryActors.organizer.sessionToken, input),
+        backends.primary.backend.createEventDraft(fixture.organizerSession, input),
+      ]);
+      expect(prismaEvent).toEqual({
+        ...memoryEvent,
+        organizerId: fixture.organizerProfileId,
+      });
+    } finally {
+      await closePrismaIntegrationClientPair(backends);
+      await closePrismaIntegrationClientPair(raw);
+    }
+  });
+
   test("outsiders cannot mutate or copy any lifecycle state", async () => {
     const raw = createPrismaIntegrationClients();
     const backends = createBackends();
     const suffix = randomUUID();
     try {
-      const fixture = await createPrismaEventFixture(raw.primary, { suffix });
+      const fixture = trackFixture(await createPrismaEventFixture(raw.primary, { suffix }));
       const event = await backends.primary.backend.createEventDraft(fixture.organizerSession, draftInput(suffix));
       const before = await raw.primary.event.findUniqueOrThrow({ where: { id: event.id }, include: { approvals: true } });
       const expectedUpdatedAt = before.updatedAt.toISOString();

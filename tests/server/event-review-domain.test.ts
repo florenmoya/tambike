@@ -200,6 +200,7 @@ describe("memory event-review lifecycle", () => {
 
   test("allows only the approved owner to update and resubmit NEEDS_CHANGES", async () => {
     const { backend, actors, event } = await createPendingEvent("resubmit-owner");
+    const originalPerks = event.perks.map((perk) => ({ ...perk }));
     const pending = await backend.getAdminEventReview(
       actors.admin.sessionToken,
       event.id,
@@ -266,6 +267,7 @@ describe("memory event-review lifecycle", () => {
       locationAddress: "202 Revised Avenue, Quezon City",
       area: "Quezon City",
     });
+    expect(result.event.perks).toEqual(originalPerks);
     expect(result.submissionVersion).toBe(2);
     expect(result.history.map((item) => item.decision)).toEqual([
       "needs_changes",

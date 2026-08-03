@@ -98,13 +98,14 @@ import type {
   SignupInput,
   UserProfile,
 } from "@/features/tambike-demo/types";
-import type {
-  AdminEventReviewView,
-  EventReviewHistoryItem,
-  EventStatusMutationInput,
-  OrganizerEventSubmissionView,
-  ResubmitEventInput,
-  ReviewEventInput,
+import {
+  ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+  type AdminEventReviewView,
+  type EventReviewHistoryItem,
+  type EventStatusMutationInput,
+  type OrganizerEventSubmissionView,
+  type ResubmitEventInput,
+  type ReviewEventInput,
 } from "@/features/admin/event-review-types";
 import type {
   MemberProfileEditorView,
@@ -5102,8 +5103,7 @@ export class PrismaTambikeBackend {
           area: normalized.location.area,
           expectedRiders: normalized.expectedRiders,
           description: `${normalized.title} is awaiting admin review.`,
-          whatHappens:
-            "Organizer-created draft that will move through admin publish.",
+          whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
           perkPreview: normalized.perkPreview,
           tags: [normalized.type, "Admin review"],
           riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),
@@ -5779,23 +5779,25 @@ export class PrismaTambikeBackend {
     input: ReviewEventInput,
   ): Promise<AdminEventReviewView> {
     const actor = await this.requireRole(sessionToken, "admin");
-    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
-    if (!["PUBLISH", "REQUEST_CHANGES", "REJECT"].includes(input.decision)) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
-    const reason = input.decision === "PUBLISH"
-      ? undefined
-      : this.requireEventReason(input.reason, 1000);
-    const transition = input.decision === "PUBLISH"
-      ? { status: "PUBLISHED" as const, decision: "published" as const, audit: "ADMIN_PUBLISHED" as const }
-      : input.decision === "REQUEST_CHANGES"
-        ? { status: "NEEDS_CHANGES" as const, decision: "needs_changes" as const, audit: "EVENT_CHANGES_REQUESTED" as const }
-        : { status: "REJECTED" as const, decision: "rejected" as const, audit: "EVENT_REJECTED" as const };
-
     const record = await this.prisma.$transaction(async (tx) => {
       await this.requireActiveLifecycleActor(tx, actor.id, "admin");
       const event = await this.lockEventReview(tx, eventId);
-      this.requirePrismaEventTransition(event, "PENDING_ADMIN_REVIEW", expectedUpdatedAt);
+      this.requirePrismaEventTransition(
+        event,
+        "PENDING_ADMIN_REVIEW",
+        input.expectedUpdatedAt,
+      );
+      if (!["PUBLISH", "REQUEST_CHANGES", "REJECT"].includes(input.decision)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      const reason = input.decision === "PUBLISH"
+        ? undefined
+        : this.requireEventReason(input.reason, 1000);
+      const transition = input.decision === "PUBLISH"
+        ? { status: "PUBLISHED" as const, decision: "published" as const, audit: "ADMIN_PUBLISHED" as const }
+        : input.decision === "REQUEST_CHANGES"
+          ? { status: "NEEDS_CHANGES" as const, decision: "needs_changes" as const, audit: "EVENT_CHANGES_REQUESTED" as const }
+          : { status: "REJECTED" as const, decision: "rejected" as const, audit: "EVENT_REJECTED" as const };
       const currentApproval = event.approvals.find(
         (approval) => approval.submissionVersion === event.submissionVersion,
       );
@@ -5855,12 +5857,11 @@ export class PrismaTambikeBackend {
     input: EventStatusMutationInput,
   ): Promise<AdminEventReviewView> {
     const actor = await this.requireRole(sessionToken, "admin");
-    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
-    const reason = this.requireEventReason(input.reason, 500);
     const record = await this.prisma.$transaction(async (tx) => {
       await this.requireActiveLifecycleActor(tx, actor.id, "admin");
       const event = await this.lockEventReview(tx, eventId);
-      this.requirePrismaEventTransition(event, "PUBLISHED", expectedUpdatedAt);
+      this.requirePrismaEventTransition(event, "PUBLISHED", input.expectedUpdatedAt);
+      const reason = this.requireEventReason(input.reason, 500);
       const disabledAt = this.nextEventUpdatedAt(event.updatedAt);
       const changed = await tx.event.updateMany({
         where: { id: event.id, status: "PUBLISHED", submissionVersion: event.submissionVersion, updatedAt: event.updatedAt },
@@ -5890,12 +5891,11 @@ export class PrismaTambikeBackend {
     input: EventStatusMutationInput,
   ): Promise<AdminEventReviewView> {
     const actor = await this.requireRole(sessionToken, "admin");
-    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
-    const reason = this.requireEventReason(input.reason, 500);
     const record = await this.prisma.$transaction(async (tx) => {
       await this.requireActiveLifecycleActor(tx, actor.id, "admin");
       const event = await this.lockEventReview(tx, eventId);
-      this.requirePrismaEventTransition(event, "DISABLED", expectedUpdatedAt);
+      this.requirePrismaEventTransition(event, "DISABLED", input.expectedUpdatedAt);
+      const reason = this.requireEventReason(input.reason, 500);
       const submittedAt = this.nextEventUpdatedAt(event.updatedAt);
       const submissionVersion = event.submissionVersion + 1;
       const changed = await tx.event.updateMany({
@@ -5949,14 +5949,13 @@ export class PrismaTambikeBackend {
     input: ResubmitEventInput,
   ): Promise<OrganizerEventSubmissionView> {
     const actor = await this.requireUser(sessionToken);
-    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
-    const reason = this.requireEventReason(input.reason, 500);
-    const normalized = this.normalizeEventSubmissionInput(input.event);
     const record = await this.prisma.$transaction(async (tx) => {
       const currentActor = await this.requireActiveLifecycleActor(tx, actor.id, "organizer");
       const event = await this.lockEventReview(tx, eventId);
       this.requireOwnedPrismaOrganizer(currentActor, event);
-      this.requirePrismaEventTransition(event, "NEEDS_CHANGES", expectedUpdatedAt);
+      this.requirePrismaEventTransition(event, "NEEDS_CHANGES", input.expectedUpdatedAt);
+      const reason = this.requireEventReason(input.reason, 500);
+      const normalized = this.normalizeEventSubmissionInput(input.event);
       const submittedAt = this.nextEventUpdatedAt(event.updatedAt);
       const submissionVersion = event.submissionVersion + 1;
       const changed = await tx.event.updateMany({
@@ -5979,7 +5978,7 @@ export class PrismaTambikeBackend {
           area: normalized.location.area,
           expectedRiders: normalized.expectedRiders,
           description: `${normalized.title} is awaiting admin review.`,
-          whatHappens: "Organizer-created event submitted directly for admin review and publication.",
+          whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
           perkPreview: normalized.perkPreview,
           tags: [normalized.type, "Admin review"],
           riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),
@@ -5988,7 +5987,6 @@ export class PrismaTambikeBackend {
         },
       });
       if (changed.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
-      await tx.perk.updateMany({ where: { eventId: event.id }, data: { description: normalized.perkPreview } });
       await tx.eventApproval.create({
         data: { id: `event-approval-${randomUUID()}`, eventId: event.id, submissionVersion, decision: "pending", notes: reason, submittedAt },
       });
@@ -9901,12 +9899,12 @@ export class PrismaTambikeBackend {
   private requirePrismaEventTransition(
     event: Pick<PrismaEventReviewRecord, "status" | "updatedAt">,
     status: EventStatus,
-    expectedUpdatedAt: Date,
+    expectedUpdatedAt: string,
   ) {
-    if (
-      event.status !== status ||
-      event.updatedAt.getTime() !== expectedUpdatedAt.getTime()
-    ) {
+    if (event.status !== status) {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
+    if (event.updatedAt.toISOString() !== expectedUpdatedAt) {
       throw new BackendError("CONFLICT", "CONFLICT");
     }
   }
@@ -10694,7 +10692,9 @@ export class PrismaTambikeBackend {
             endsAt: event.endsAt.toISOString(),
             timeZone: event.timeZone,
             recurrence: event.recurrence,
-            recurrenceEndsAt: event.recurrenceEndsAt?.toISOString(),
+            ...(event.recurrenceEndsAt
+              ? { recurrenceEndsAt: event.recurrenceEndsAt.toISOString() }
+              : {}),
           }
         : undefined;
     const hasLegacyRecurrence =
@@ -10746,7 +10746,7 @@ export class PrismaTambikeBackend {
         id: perk.id,
         type: perk.type,
         description: perk.description,
-        quantity: perk.quantity ?? undefined,
+        ...(perk.quantity !== null ? { quantity: perk.quantity } : {}),
       })),
     };
   }
