@@ -8,6 +8,7 @@ import {
   normalizeRosterPageLimit,
 } from "../../src/server/member-profiles/roster-domain";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import type { CreateEventInput } from "../../src/features/tambike-demo/types";
 import {
   createPublishedTestEvent,
   createTestActors,
@@ -65,6 +66,126 @@ describe("event roster policy helpers", () => {
 });
 
 describe("in-memory organizer-controlled event rosters", () => {
+  test("hides retained non-public rosters from guessed IDs while preserving owner and admin access", async () => {
+    const backend = await createTambikeTestBackend();
+    const actors = await createTestActors(backend, "retained-private-roster");
+    const eventInput: CreateEventInput = {
+      title: "Retained private roster event",
+      type: "Bike Night",
+      startDate: "2099-07-25",
+      startTime: "18:00",
+      endDate: "2099-07-25",
+      endTime: "21:00",
+      timeZone: "Asia/Manila",
+      recurrence: "NONE",
+      expectedRiders: 40,
+      perkPreview: "Fixture check-in sticker",
+      locationName: "Fixture Event Grounds",
+      locationAddress: "123 Fixture Avenue, Quezon City",
+      locationMapLink: "https://maps.example.test/fixture-event",
+      area: "Quezon City",
+    };
+    const event = await createPublishedTestEvent(backend, actors, eventInput);
+    await backend.updateMemberProfile(actors.rider.sessionToken, visibleProfile);
+    await backend.registerForEvent(actors.rider.sessionToken, event.id, {
+      status: "going",
+      attendanceType: "direct",
+      rosterIdentity: "VISIBLE",
+    });
+    await backend.configureEventRoster(actors.organizer.sessionToken, event.id, {
+      enabled: true,
+    });
+    await expect(
+      backend.listEventAttendees(actors.outsider.sessionToken, event.id),
+    ).resolves.toMatchObject({
+      summary: { goingCount: 1, visibleCount: 1, anonymousCount: 0 },
+      attendees: [{ displayName: "Visible Rider" }],
+    });
+
+    const assertRetainedRosterIsPrivate = async () => {
+      await expect(
+        backend.listEventAttendees(actors.outsider.sessionToken, event.id),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        backend.listEventAttendees(undefined, event.id),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        backend.getEventAttendeeSummary(event.id),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        backend.getPublicEventAttendeePreview(event.id),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      for (const sessionToken of [
+        actors.organizer.sessionToken,
+        actors.admin.sessionToken,
+      ]) {
+        await expect(
+          backend.listEventAttendees(sessionToken, event.id),
+        ).resolves.toMatchObject({
+          summary: { goingCount: 1, visibleCount: 1, anonymousCount: 0 },
+          attendees: [{ displayName: "Visible Rider" }],
+        });
+      }
+    };
+
+    const published = await backend.getAdminEventReview(
+      actors.admin.sessionToken,
+      event.id,
+    );
+    const disabled = await backend.disableEvent(
+      actors.admin.sessionToken,
+      event.id,
+      {
+        reason: "Retain operations data while the event is disabled.",
+        expectedUpdatedAt: published.expectedUpdatedAt,
+      },
+    );
+    await assertRetainedRosterIsPrivate();
+
+    const restored = await backend.restoreEventToReview(
+      actors.admin.sessionToken,
+      event.id,
+      {
+        reason: "Return the retained event to review without public exposure.",
+        expectedUpdatedAt: disabled.expectedUpdatedAt,
+      },
+    );
+    await assertRetainedRosterIsPrivate();
+
+    const needsChanges = await backend.reviewEvent(
+      actors.admin.sessionToken,
+      event.id,
+      {
+        decision: "REQUEST_CHANGES",
+        reason: "Revise the event details before this can become public again.",
+        expectedUpdatedAt: restored.expectedUpdatedAt,
+      },
+    );
+    await assertRetainedRosterIsPrivate();
+
+    const resubmitted = await backend.resubmitEvent(
+      actors.organizer.sessionToken,
+      event.id,
+      {
+        event: eventInput,
+        reason: "Revised the event details while retaining operations data.",
+        expectedUpdatedAt: needsChanges.expectedUpdatedAt,
+      },
+    );
+    const rejected = await backend.reviewEvent(
+      actors.admin.sessionToken,
+      event.id,
+      {
+        decision: "REJECT",
+        reason: "This submission is final and must remain outside public access.",
+        expectedUpdatedAt: resubmitted.expectedUpdatedAt,
+      },
+    );
+    expect(rejected.event.status).toBe("REJECTED");
+    await assertRetainedRosterIsPrivate();
+  });
+
   test("updates attendance counts only when an RSVP changes status", async () => {
     const backend = await createTambikeTestBackend();
     const actors = await createTestActors(backend, "roster-counts");

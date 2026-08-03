@@ -26,6 +26,66 @@ async function signInForCheckInPolicy() {
 }
 
 describe("event self-check-in policies", () => {
+  test("blocks staff confirmation and fresh scans after event disablement without losing retained operations data", async () => {
+    const { backend, operator, admin, rider, outsider, eventId } =
+      await signInForCheckInPolicy();
+    const freshPass = await registerTestPass(backend, outsider, eventId);
+    await backend.configureCheckIn(operator.sessionToken, eventId, {
+      mode: "self_review",
+      state: "open",
+      qrMode: "rotating",
+    });
+    const qr = await backend.issueSelfCheckInQr(operator.sessionToken, eventId);
+    const pending = await backend.selfCheckIn(rider.sessionToken, qr.token);
+    expect(pending).toMatchObject({ status: "pending", pass: { status: "active" } });
+
+    const published = await backend.getAdminEventReview(admin.sessionToken, eventId);
+    await backend.disableEvent(admin.sessionToken, eventId, {
+      reason: "Disable staff check-in while retaining existing event operations data.",
+      expectedUpdatedAt: published.expectedUpdatedAt,
+    });
+
+    await expect(
+      backend.scanPass(
+        operator.sessionToken,
+        eventId,
+        pending.pass.qrToken,
+        "staff_camera",
+      ),
+    ).rejects.toMatchObject({ code: "CHECK_IN_NOT_OPEN" });
+    await expect(
+      backend.scanPass(
+        admin.sessionToken,
+        eventId,
+        freshPass.qrToken,
+        "staff_manual",
+      ),
+    ).rejects.toMatchObject({ code: "CHECK_IN_NOT_OPEN" });
+
+    for (const sessionToken of [operator.sessionToken, admin.sessionToken]) {
+      const retainedEvent = backend
+        .getSnapshot(sessionToken)
+        .events.find((event) => event.id === eventId);
+      expect(retainedEvent).toMatchObject({
+        status: "DISABLED",
+        confirmedCheckIns: 0,
+        pendingCheckIns: 1,
+      });
+    }
+    expect(
+      backend
+        .getSnapshot(rider.sessionToken)
+        .passes.find((pass) => pass.eventId === eventId),
+    ).toMatchObject({ status: "active" });
+    expect(
+      backend
+        .getSnapshot(outsider.sessionToken)
+        .passes.find((pass) => pass.eventId === eventId),
+    ).toMatchObject({ status: "active" });
+    await expect(backend.auditCount("CHECK_IN_CONFIRMED")).resolves.toBe(0);
+    await expect(backend.auditCount("CHECK_IN_CREATED")).resolves.toBe(0);
+  });
+
   test("rejects a previously issued rider QR after the organizer switches to staff-only", async () => {
     const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 

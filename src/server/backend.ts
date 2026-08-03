@@ -4631,10 +4631,17 @@ export class TambikeBackend {
     options: { cursor?: string; limit?: number } = {},
   ): Promise<EventAttendeeRosterPage> {
     const event = this.requireEvent(eventId);
+    const viewer = sessionToken ? this.requireUser(sessionToken) : null;
+    const canReadRetainedRoster =
+      viewer?.role === "admin" ||
+      (viewer?.role === "organizer" &&
+        viewer.organizerProfileId === event.organizerId);
+    if (!canReadRetainedRoster) {
+      this.requirePublicEvent(event);
+    }
     const enabled = this.rosterSettings.get(event.id) ?? false;
     if (enabled) {
       if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
-      this.requireUser(sessionToken);
     }
     const limit = normalizeRosterPageLimit(options.limit);
     const cursor = options.cursor ? decodeRosterCursor(options.cursor) : undefined;
@@ -4914,6 +4921,9 @@ export class TambikeBackend {
     const scanner = this.requireUser(sessionToken);
     const event = this.requireEvent(eventId);
     this.requireCheckInStaff(scanner, event);
+    if (!this.isSelfCheckInEvent(event)) {
+      throw new BackendError("CHECK_IN_NOT_OPEN", "CHECK_IN_NOT_OPEN");
+    }
     const staffMethod = normalizeStaffScanMethod(method);
     const pass = Array.from(this.passes.values()).find(
       (candidate) => candidate.qrToken === qrToken,
