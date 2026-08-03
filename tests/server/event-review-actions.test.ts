@@ -403,6 +403,27 @@ describe("admin event review actions", () => {
     await expect(suspended.loadAdminEventReviewForPage("event-1")).resolves.toBeNull();
   });
 
+  test("hides a missing admin review across a development module reload", async () => {
+    const { createAdminEventReviewActions } = await loadAdminCore();
+    const reloadedNotFound = Object.assign(new Error("NOT_FOUND"), {
+      code: "NOT_FOUND" as const,
+      name: "BackendError",
+    });
+    const actions = createAdminEventReviewActions(
+      dependencies(
+        adminBackend({
+          getAdminEventReview: async () => {
+            throw reloadedNotFound;
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      actions.loadAdminEventReviewForPage("event-1"),
+    ).resolves.toBeNull();
+  });
+
   test("publishes through the authoritative backend and revalidates exact affected paths", async () => {
     const { createAdminEventReviewActions } = await loadAdminCore();
     const reviewEvent = vi.fn(async () => adminView);
@@ -661,6 +682,31 @@ describe("organizer event submission actions", () => {
     await expect(actions.loadRejectedEventCopySource("event-1")).resolves.toEqual(
       copySource,
     );
+  });
+
+  test("hides missing organizer content across a development module reload", async () => {
+    const { createOrganizerEventSubmissionActions } = await loadOrganizerCore();
+    const reloadedNotFound = Object.assign(new Error("NOT_FOUND"), {
+      code: "NOT_FOUND" as const,
+      name: "BackendError",
+    });
+    const actions = createOrganizerEventSubmissionActions(
+      dependencies(
+        organizerBackend({
+          getOrganizerEventSubmission: async () => {
+            throw reloadedNotFound;
+          },
+          getRejectedEventCopySource: async () => {
+            throw reloadedNotFound;
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      actions.loadOrganizerEventSubmissionForPage("event-1"),
+    ).resolves.toBeNull();
+    await expect(actions.loadRejectedEventCopySource("event-1")).resolves.toBeNull();
   });
 
   test.each(["FORBIDDEN", "NOT_FOUND", "CONFLICT", "UNAUTHENTICATED"] as const)(

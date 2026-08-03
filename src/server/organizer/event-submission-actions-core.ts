@@ -142,8 +142,12 @@ function invalidInputState(
 }
 
 function isSafeLoaderError(error: unknown) {
+  const isBackendError =
+    error instanceof BackendError ||
+    (error instanceof Error && error.name === "BackendError");
   return (
-    error instanceof BackendError &&
+    isBackendError &&
+    "code" in error &&
     (error.code === "UNAUTHENTICATED" ||
       error.code === "FORBIDDEN" ||
       error.code === "NOT_FOUND" ||

@@ -122,6 +122,19 @@ function reviewSuccessMessage(decision: EventReviewDecision) {
   return "Event submission rejected.";
 }
 
+function isSafeLoaderError(error: unknown) {
+  const isBackendError =
+    error instanceof BackendError ||
+    (error instanceof Error && error.name === "BackendError");
+  return (
+    isBackendError &&
+    "code" in error &&
+    (error.code === "UNAUTHENTICATED" ||
+      error.code === "FORBIDDEN" ||
+      error.code === "NOT_FOUND")
+  );
+}
+
 export function createAdminEventReviewActions(
   dependencies: AdminEventReviewActionDependencies,
 ) {
@@ -137,14 +150,7 @@ export function createAdminEventReviewActions(
         parsedEventId.data,
       );
     } catch (error) {
-      if (
-        error instanceof BackendError &&
-        (error.code === "UNAUTHENTICATED" ||
-          error.code === "FORBIDDEN" ||
-          error.code === "NOT_FOUND")
-      ) {
-        return null;
-      }
+      if (isSafeLoaderError(error)) return null;
       throw error;
     }
   }
