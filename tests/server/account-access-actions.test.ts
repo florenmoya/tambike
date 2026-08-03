@@ -252,6 +252,42 @@ describe("admin account access actions", () => {
     expect(revalidate.mock.calls).toEqual([["/admin"], ["/admin/users"], ["/login"]]);
   });
 
+  test("returns the restored account and revalidates only affected routes", async () => {
+    const { createAccountAccessActions } = await loadAccountActions();
+    const restoredAccount: AdminUserAccount = {
+      ...account,
+      accountStatus: "ACTIVE",
+      suspendedAt: undefined,
+      suspendedReason: undefined,
+      updatedAt: "2026-07-31T01:10:00.000Z",
+    };
+    const revalidate = vi.fn();
+    const restoreUser = vi.fn(async () => restoredAccount);
+    const action = createAccountAccessActions(
+      dependencies({
+        getBackend: async () => ({
+          getCurrentUser: async () => ({ id: "admin-1" }),
+          listAdminUserAccounts: async () => [account],
+          suspendUser: async () => account,
+          restoreUser,
+        }),
+        revalidate,
+      }),
+    );
+
+    await expect(action.restoreUserAction(idle, validForm())).resolves.toEqual({
+      status: "success",
+      code: "SUCCESS",
+      message: "Account restored.",
+      data: restoredAccount,
+    });
+    expect(restoreUser).toHaveBeenCalledWith("admin-session", "rider-1", {
+      reason: "A sufficiently clear moderation reason.",
+      expectedUpdatedAt: "2026-07-31T01:00:00.000Z",
+    });
+    expect(revalidate.mock.calls).toEqual([["/admin"], ["/admin/users"], ["/login"]]);
+  });
+
   test("does not revalidate or convert unexpected action failures", async () => {
     const { createAccountAccessActions } = await loadAccountActions();
     const revalidate = vi.fn();
@@ -308,5 +344,22 @@ describe("admin account access actions", () => {
 
     await expect(unauthenticated.loadAdminUserAccountsForPage()).resolves.toBeNull();
     await expect(forbidden.loadAdminUserAccountsForPage()).resolves.toBeNull();
+  });
+
+  test("exposes only async functions from the client-imported Server Action module", async () => {
+    const modulePath = `../../src/server/admin/${"account-actions"}`;
+    const actionModule = await import(modulePath);
+    const runtimeExports = Object.entries(actionModule);
+
+    expect(runtimeExports.map(([name]) => name).sort()).toEqual([
+      "loadAdminUserAccountsForPage",
+      "restoreUserAction",
+      "suspendUserAction",
+    ]);
+    expect(runtimeExports).not.toHaveLength(0);
+    for (const [, exportedValue] of runtimeExports) {
+      expect(exportedValue).toBeTypeOf("function");
+      expect(Object.prototype.toString.call(exportedValue)).toBe("[object AsyncFunction]");
+    }
   });
 });

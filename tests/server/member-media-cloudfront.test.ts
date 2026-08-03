@@ -63,7 +63,7 @@ describe("member media CloudFront configuration", () => {
   });
 
   test("defaults the signed URL lifetime to five minutes", () => {
-    const environment = { ...completeEnvironment };
+    const environment: Record<string, string | undefined> = { ...completeEnvironment };
     delete environment.MEMBER_MEDIA_CLOUDFRONT_URL_TTL_SECONDS;
 
     expect(loadMemberMediaCloudFrontConfig(environment)).toEqual({

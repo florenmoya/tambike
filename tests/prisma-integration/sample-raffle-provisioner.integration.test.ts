@@ -17,11 +17,13 @@ import {
   createPrismaIntegrationClients,
 } from "./clients";
 import { PrismaTambikeBackend } from "../../src/server/prisma-backend";
+import { SAMPLE_RAFFLE_PHOTO_SOURCES } from "../../src/server/giveaways/sample-raffle-presentation";
 import { requirePrismaIntegrationTestDatabaseUrl } from "./environment";
 import { createPrismaEventFixture } from "./fixtures";
 
 const completedAuditActions = [
   "GIVEAWAY_CREATED",
+  "GIVEAWAY_UPDATED",
   "GIVEAWAY_SUBMITTED_FOR_REVIEW",
   "GIVEAWAY_COMPLIANCE_REVIEWED",
   "GIVEAWAY_OPENED",
@@ -35,15 +37,14 @@ const completedAuditActions = [
   "GIVEAWAY_CLAIM_VERIFIED",
   "GIVEAWAY_AWARD_FULFILLED",
   "GIVEAWAY_COMPLETED",
-  "GIVEAWAY_UPDATED",
 ] as const;
 
 const ongoingAuditActions = [
   "GIVEAWAY_CREATED",
+  "GIVEAWAY_UPDATED",
   "GIVEAWAY_SUBMITTED_FOR_REVIEW",
   "GIVEAWAY_COMPLIANCE_REVIEWED",
   "GIVEAWAY_OPENED",
-  "GIVEAWAY_UPDATED",
 ] as const;
 
 function validIntegrationInput(): SampleRaffleProvisioningInput {
@@ -66,6 +67,16 @@ describe("guarded Prisma sample raffle provisioner", () => {
     const suffix = randomUUID();
     const previousEncryptionKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
     process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY = Buffer.alloc(32, 83).toString("base64");
+    const mutablePhotoSources = SAMPLE_RAFFLE_PHOTO_SOURCES as {
+      completed: { mediaId: string };
+      ongoing: { mediaId: string };
+    };
+    const originalMediaIds = {
+      completed: mutablePhotoSources.completed.mediaId,
+      ongoing: mutablePhotoSources.ongoing.mediaId,
+    };
+    mutablePhotoSources.completed.mediaId = `integration-sample-raffle-completed-${suffix}`;
+    mutablePhotoSources.ongoing.mediaId = `integration-sample-raffle-ongoing-${suffix}`;
 
     try {
       const fixture = await createPrismaEventFixture(prisma, {
@@ -94,12 +105,14 @@ describe("guarded Prisma sample raffle provisioner", () => {
           passwordHash: adminPasswordHash,
           role: "admin",
           verificationStatus: "APPROVED",
+          accountStatus: "ACTIVE",
           area: "Antipolo",
         },
         update: {
           passwordHash: adminPasswordHash,
           role: "admin",
           verificationStatus: "APPROVED",
+          accountStatus: "ACTIVE",
         },
       });
 
@@ -149,7 +162,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         completed: {
           state: "completed",
           winnerCount: 1,
-          winnerAlias: "Cafe Classico Rider",
+          winnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
         },
         ongoing: { state: "open", winnerCount: 0 },
         changed: true,
@@ -166,10 +179,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         where: {
           eventId: fixture.eventId,
           title: {
-            in: [
-              "Cafe Classico Helmet Raffle",
-              "Weekend Rider Gear Raffle",
-            ],
+            in: [COMPLETED_SAMPLE_RAFFLE_TITLE, ONGOING_SAMPLE_RAFFLE_TITLE],
           },
         },
       })).toBe(2);
@@ -218,13 +228,13 @@ describe("guarded Prisma sample raffle provisioner", () => {
         mechanicsVersions: [{
           mechanics: "One eligible rider was selected from valid entries.",
           terms:
-            "The winner receives one Cafe Classico Helmet. The organizer will contact the winner with claiming instructions.",
+            "The winner receives one HJC C10 FOP Full-Face Helmet. The organizer will contact the winner with claiming instructions.",
         }],
         prizePools: [{
-          publicTitle: "Cafe Classico Helmet",
-          publicDescription: "A full-face helmet for safer everyday rides.",
+          publicTitle: "HJC C10 FOP Full-Face Helmet",
+          publicDescription: "A branded full-face helmet for everyday road riding.",
           publicImage: {
-            mediaId: "sample-raffle-helmet-photo-v1",
+            mediaId: SAMPLE_RAFFLE_PHOTO_SOURCES.completed.mediaId,
             mimeType: "image/webp",
             width: 1200,
             height: 900,
@@ -233,7 +243,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
         awards: [{
           isCurrent: true,
           status: "fulfilled",
-          publicWinnerAlias: "Cafe Classico Rider",
+          publicWinnerAlias: SAMPLE_RAFFLE_WINNER_ALIAS,
           winner: { email: manifest.winnerEmail },
         }],
       });
@@ -289,7 +299,7 @@ describe("guarded Prisma sample raffle provisioner", () => {
           publicTitle: "Weekend Rider Gear Package",
           publicDescription: "Helmet, riding gloves, and Tambike gear for your next ride.",
           publicImage: {
-            mediaId: "sample-raffle-gear-photo-v1",
+            mediaId: SAMPLE_RAFFLE_PHOTO_SOURCES.ongoing.mediaId,
             mimeType: "image/webp",
             width: 1200,
             height: 900,
@@ -375,18 +385,18 @@ describe("guarded Prisma sample raffle provisioner", () => {
 
         expect(completedPublic?.giveaway.prizePools).toEqual([
           expect.objectContaining({
-            presentation: {
+            presentation: expect.objectContaining({
               disclosure: "revealed",
-              title: "Cafe Classico Helmet",
-            },
+              title: "HJC C10 FOP Full-Face Helmet",
+            }),
           }),
         ]);
         expect(ongoingPublic?.giveaway.prizePools).toEqual([
           expect.objectContaining({
-            presentation: {
+            presentation: expect.objectContaining({
               disclosure: "revealed",
               title: "Weekend Rider Gear Package",
-            },
+            }),
           }),
         ]);
         for (const publicGiveaway of [completedPublic, ongoingPublic]) {
@@ -430,6 +440,8 @@ describe("guarded Prisma sample raffle provisioner", () => {
         await publicBackend.disconnect();
       }
     } finally {
+      mutablePhotoSources.completed.mediaId = originalMediaIds.completed;
+      mutablePhotoSources.ongoing.mediaId = originalMediaIds.ongoing;
       if (previousEncryptionKey === undefined) {
         delete process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
       } else {

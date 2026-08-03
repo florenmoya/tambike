@@ -147,10 +147,6 @@ async function createScheduledCampaign(
   const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Scheduled lifecycle test",
     type: "Bike Night",
-    startDate: "2026-08-15",
-    startTime: "19:00",
-    endDate: "2026-08-15",
-    endTime: "22:00",
     locationName: "Lifecycle Test Grounds",
     locationAddress: "15 Lifecycle Avenue, Antipolo",
     locationMapLink: "https://maps.example.test/lifecycle-test-grounds",
@@ -174,7 +170,7 @@ let lifecycleFixtureSequence = 0;
 describe("scheduled giveaway lifecycle", () => {
   test("advances only scheduled/open campaigns and records one initial cron draw", async () => {
     const backend = asLifecycleBackend(await createTambikeTestBackend());
-    const now = new Date("2026-08-01T00:00:00.000Z");
+    const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now);
     const previousKey = process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY;
     process.env.GIVEAWAY_DRAW_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
@@ -203,7 +199,7 @@ describe("scheduled giveaway lifecycle", () => {
 
   test("never opens an unapproved draft or reopens a paused campaign", async () => {
     const backend = asLifecycleBackend(await createTambikeTestBackend());
-    const now = new Date("2026-08-02T00:00:00.000Z");
+    const now = new Date(Date.now() + 60_000);
     const context = await createScheduledCampaign(backend, now);
     await backend.openGiveaway(context.organizer.sessionToken, context.giveaway.id);
     await backend.pauseGiveaway(context.organizer.sessionToken, context.giveaway.id);

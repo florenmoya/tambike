@@ -105,8 +105,12 @@ describe("guarded Prisma sample rider provisioner", () => {
           organizerId: "sample-provisioner-organizer",
           locationName: "Casa Classico",
           locationAddress: "Manga St., Tugbok, Davao City",
-          dateLabel: "Every Saturday",
+          dateLabel: "July 25, 2099",
           timeLabel: "6:00 PM - 8:00 PM",
+          startsAt: new Date("2099-07-25T10:00:00.000Z"),
+          endsAt: new Date("2099-07-25T12:00:00.000Z"),
+          timeZone: "Asia/Manila",
+          recurrence: "NONE",
           area: "Davao City",
           expectedRiders: 55,
           description: "Disposable provisioner integration event.",
@@ -117,7 +121,14 @@ describe("guarded Prisma sample rider provisioner", () => {
           riskFlags: [],
           safetyRules: [],
         },
-        update: { status: "PUBLISHED" },
+        update: {
+          status: "PUBLISHED",
+          dateLabel: "July 25, 2099",
+          startsAt: new Date("2099-07-25T10:00:00.000Z"),
+          endsAt: new Date("2099-07-25T12:00:00.000Z"),
+          timeZone: "Asia/Manila",
+          recurrence: "NONE",
+        },
       });
 
       const input = {

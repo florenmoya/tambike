@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { canSuspendAdminWithoutOrphaningAccess } from "./account-access-policy";
 import type {
   AdminGiveawayAudit,
   CreateGiveawayCampaignCodeInput,
@@ -708,7 +709,9 @@ export class PrismaTambikeBackend {
         const activeAdmins = await tx.user.count({
           where: { role: "admin", accountStatus: "ACTIVE" },
         });
-        if (activeAdmins <= 1) throw new BackendError("FORBIDDEN");
+        if (!canSuspendAdminWithoutOrphaningAccess(activeAdmins)) {
+          throw new BackendError("FORBIDDEN");
+        }
       }
 
       const now = new Date(

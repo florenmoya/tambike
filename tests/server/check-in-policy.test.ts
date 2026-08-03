@@ -1,13 +1,18 @@
 import { describe, expect, test, vi } from "vitest";
 import { createTambikeTestBackend } from "../../src/server/testing";
-import { createTestActors, registerTestPass } from "./support/tambike-fixtures";
-
-const eventId = "tambike-cafe-classico";
+import {
+  createPublishedTestEvent,
+  createTestActors,
+  registerTestPass,
+} from "./support/tambike-fixtures";
 
 async function signInForCheckInPolicy() {
   const backend = await createTambikeTestBackend();
   const actors = await createTestActors(backend, "check-in-policy");
-  const pass = await registerTestPass(backend, actors.rider, eventId);
+  const event = await createPublishedTestEvent(backend, actors, {
+    title: "Check-in policy test event",
+  });
+  const pass = await registerTestPass(backend, actors.rider, event.id);
 
   return {
     backend,
@@ -15,13 +20,14 @@ async function signInForCheckInPolicy() {
     admin: actors.admin,
     rider: actors.rider,
     outsider: actors.outsider,
+    eventId: event.id,
     pass,
   };
 }
 
 describe("event self-check-in policies", () => {
   test("rejects a previously issued rider QR after the organizer switches to staff-only", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -44,7 +50,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("holds a review-mode rider request until staff scans the pass", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_review",
@@ -68,7 +74,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("reports the staff confirmation time rather than the pending request time", async () => {
-    const { backend, operator, admin, rider, pass } = await signInForCheckInPolicy();
+    const { backend, operator, admin, rider, eventId, pass } = await signInForCheckInPolicy();
 
     vi.useFakeTimers();
     try {
@@ -93,7 +99,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("confirms an active rider pass immediately in automatic mode", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -113,7 +119,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("requires an explicit acknowledgement before an organizer can enable a fixed QR", async () => {
-    const { backend, operator } = await signInForCheckInPolicy();
+    const { backend, operator, eventId } = await signInForCheckInPolicy();
 
     await expect(
       backend.configureCheckIn(operator.sessionToken, eventId, {
@@ -125,7 +131,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("does not accept a guessed fixed link while the event uses rotating QR sessions", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -157,6 +163,10 @@ describe("event self-check-in policies", () => {
       },
     });
     const actors = await createTestActors(backend, "check-in-policy-denial");
+    const event = await createPublishedTestEvent(backend, actors, {
+      title: "Check-in policy denial test event",
+    });
+    const eventId = event.id;
     const unrelatedOrganizer = await backend.loginWithPassword(
       "unrelated-organizer-check-in@example.test",
       "password123",
@@ -179,7 +189,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("accepts self check-in only from a rider account with its own active pass", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -195,7 +205,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("pauses rider self-check-in without blocking an authorized staff scan", async () => {
-    const { backend, operator, rider, pass } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId, pass } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -218,7 +228,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("rejects expired rotating QRs and requires the rider's own active pass", async () => {
-    const { backend, operator } = await signInForCheckInPolicy();
+    const { backend, operator, eventId } = await signInForCheckInPolicy();
     const unregisteredRider = await backend.signUpRider({
       displayName: "No Pass Rider",
       email: "no-pass-rider@example.com",
@@ -250,7 +260,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("records exactly one confirmed arrival for simultaneous automatic check-in attempts", async () => {
-    const { backend, operator, rider } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -271,7 +281,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("keeps separate active passes and confirmed arrivals for two riders at one event", async () => {
-    const { backend, operator, rider, pass } = await signInForCheckInPolicy();
+    const { backend, operator, rider, eventId, pass } = await signInForCheckInPolicy();
     const secondRider = await backend.signUpRider({
       displayName: "Second Rider",
       email: "second-rider@example.com",
@@ -305,7 +315,7 @@ describe("event self-check-in policies", () => {
   });
 
   test("resolves an open organizer QR to its event before a rider checks in", async () => {
-    const { backend, operator } = await signInForCheckInPolicy();
+    const { backend, operator, eventId } = await signInForCheckInPolicy();
 
     await backend.configureCheckIn(operator.sessionToken, eventId, {
       mode: "self_instant",
@@ -315,7 +325,7 @@ describe("event self-check-in policies", () => {
     const qr = await backend.issueSelfCheckInQr(operator.sessionToken, eventId);
 
     await expect(backend.getSelfCheckInContext(qr.token)).resolves.toMatchObject({
-      event: { id: eventId, title: "Tambike at Cafe Classico" },
+      event: { id: eventId, title: "Check-in policy test event" },
       mode: "self_instant",
       state: "open",
       available: true,

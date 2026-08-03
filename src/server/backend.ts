@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
+import { canSuspendAdminWithoutOrphaningAccess } from "./account-access-policy";
 import type { PrismaTambikeBackend } from "./prisma-backend";
 import { resolveRuntimeBackend } from "./database-url";
 import type {
@@ -1167,7 +1168,9 @@ export class TambikeBackend {
       const activeAdmins = Array.from(this.users.values()).filter(
         (user) => user.role === "admin" && user.accountStatus === "ACTIVE",
       ).length;
-      if (activeAdmins <= 1) throw new BackendError("FORBIDDEN");
+      if (!canSuspendAdminWithoutOrphaningAccess(activeAdmins)) {
+        throw new BackendError("FORBIDDEN");
+      }
     }
     if (target.accountStatus === "SUSPENDED") {
       throw new BackendError("CONFLICT");

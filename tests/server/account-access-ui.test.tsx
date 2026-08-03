@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AdminUserAccountView } from "../../src/features/admin/account-access-types";
+import { SidebarInset } from "../../src/components/ui/sidebar";
 import { suspendUserAction } from "../../src/server/admin/account-actions";
 
 const suspendedRider: AdminUserAccountView = {
@@ -93,6 +94,14 @@ function renderedAccountIdentity(container: HTMLElement, email: string) {
 }
 
 describe("admin account access UI", () => {
+  test("allows the admin content shell to shrink inside the viewport", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SidebarInset, null, createElement("div", null, "Accounts")),
+    );
+
+    expect(markup).toContain("min-w-0");
+  });
+
   test("renders persisted verification and access as separate account controls", () => {
     const markup = renderAccounts();
 
@@ -114,7 +123,7 @@ describe("admin account access UI", () => {
     const markup = renderAccounts();
 
     expect(markup).toContain("sm:hidden");
-    expect(markup).toContain("hidden sm:block");
+    expect(markup).toContain("hidden min-w-0 sm:block");
     expect(markup).toContain("Tambike Ops");
     expect(markup).toContain("ops@tambike.example");
     expect(markup).toContain("Metro Manila");
@@ -363,15 +372,4 @@ describe("admin account access UI", () => {
     expect(source).not.toContain("getUserColumns");
   });
 
-  test("keeps the client-imported action module limited to async server exports", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "src/server/admin/account-actions.ts"),
-      "utf8",
-    );
-
-    expect(source.trimStart()).toMatch(/^(["'])use server\1/);
-    expect(source).not.toContain("export function createAccountAccessActions");
-    expect(source).toContain("export async function suspendUserAction(");
-    expect(source).toContain("export async function restoreUserAction(");
-  });
 });

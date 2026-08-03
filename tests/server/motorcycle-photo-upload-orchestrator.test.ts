@@ -93,7 +93,9 @@ describe("motorcycle photo upload orchestration", () => {
     await harness.scheduler.processNext({
       uploadEnabled: true,
       motorcyclePhotoPosition: 1,
-      upload: async (next) => harness.events.push(`upload:${next.id}`),
+      upload: async (next) => {
+        harness.events.push(`upload:${next.id}`);
+      },
       refresh,
       describeFailure: memberMediaUploadFailure,
     });

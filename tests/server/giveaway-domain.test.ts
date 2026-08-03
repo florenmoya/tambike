@@ -425,10 +425,6 @@ async function createPublishedOrganizerEvent(backend: GiveawayBackend) {
   const event = await createPublishedTestEvent(backend, { organizer, admin }, {
     title: "Giveaway eligibility test ride",
     type: "Bike Night",
-    startDate: "2026-08-15",
-    startTime: "19:00",
-    endDate: "2026-08-15",
-    endTime: "22:00",
     locationName: "Giveaway Test Grounds",
     locationAddress: "15 Giveaway Avenue, Antipolo",
     locationMapLink: "https://maps.example.test/giveaway-test-grounds",
@@ -3341,52 +3337,58 @@ describe("in-memory event giveaway lifecycle", () => {
   });
 
   test("rejects a finite perk redemption before it can create another eligibility entry", async () => {
-    const backend = asGiveawayBackend(
-      await createTambikeTestBackend({ perkQuantities: { "classic-coffee-discount": 1 } }),
-    );
-    const { admin, rider } = await sessions(backend);
-    const eventId = "tambike-cafe-classico";
-    const perkId = "classic-coffee-discount";
-    const giveaway = await backend.createGiveaway(
-      admin.sessionToken,
-      eventId,
-      giveawayInput(eventId, {
-        eligibilityGroups: [
-          {
-            id: "finite-perk-entry",
-            label: "Finite perk redemption",
-            weight: 1,
-            conditions: [{ source: "perk_redemption", perkId }],
-          },
-        ],
-      }),
-    );
-    await backend.submitGiveawayForReview(admin.sessionToken, giveaway.id);
-    await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, {
-      decision: "approved",
-    });
-    await backend.openGiveaway(admin.sessionToken, giveaway.id);
-    const secondRider = await createExtraRider(backend, "finite-perk");
-    await Promise.all([
-      backend.registerForEvent(rider.sessionToken, eventId, {
-        status: "going",
-        attendanceType: "direct",
-      }),
-      backend.registerForEvent(secondRider.sessionToken, eventId, {
-        status: "going",
-        attendanceType: "direct",
-      }),
-    ]);
-    await backend.redeemGiveawayPerk(rider.sessionToken, perkId);
-    await expect(
-      backend.getRiderGiveawayState(rider.sessionToken, giveaway.id),
-    ).resolves.toMatchObject({ giveawayId: giveaway.id, status: "entered", entryCount: 1 });
-    await expect(backend.redeemGiveawayPerk(secondRider.sessionToken, perkId)).rejects.toMatchObject({
-      code: "GIVEAWAY_PERK_UNAVAILABLE",
-    });
-    await expect(
-      backend.getRiderGiveawayState(secondRider.sessionToken, giveaway.id),
-    ).resolves.toEqual({ giveawayId: giveaway.id, status: "not_eligible", entryCount: 0 });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-31T00:00:00.000Z"));
+    try {
+      const backend = asGiveawayBackend(
+        await createTambikeTestBackend({ perkQuantities: { "classic-coffee-discount": 1 } }),
+      );
+      const { admin, rider } = await sessions(backend);
+      const eventId = "tambike-cafe-classico";
+      const perkId = "classic-coffee-discount";
+      const giveaway = await backend.createGiveaway(
+        admin.sessionToken,
+        eventId,
+        giveawayInput(eventId, {
+          eligibilityGroups: [
+            {
+              id: "finite-perk-entry",
+              label: "Finite perk redemption",
+              weight: 1,
+              conditions: [{ source: "perk_redemption", perkId }],
+            },
+          ],
+        }),
+      );
+      await backend.submitGiveawayForReview(admin.sessionToken, giveaway.id);
+      await backend.reviewGiveawayCompliance(admin.sessionToken, giveaway.id, {
+        decision: "approved",
+      });
+      await backend.openGiveaway(admin.sessionToken, giveaway.id);
+      const secondRider = await createExtraRider(backend, "finite-perk");
+      await Promise.all([
+        backend.registerForEvent(rider.sessionToken, eventId, {
+          status: "going",
+          attendanceType: "direct",
+        }),
+        backend.registerForEvent(secondRider.sessionToken, eventId, {
+          status: "going",
+          attendanceType: "direct",
+        }),
+      ]);
+      await backend.redeemGiveawayPerk(rider.sessionToken, perkId);
+      await expect(
+        backend.getRiderGiveawayState(rider.sessionToken, giveaway.id),
+      ).resolves.toMatchObject({ giveawayId: giveaway.id, status: "entered", entryCount: 1 });
+      await expect(
+        backend.redeemGiveawayPerk(secondRider.sessionToken, perkId),
+      ).rejects.toMatchObject({ code: "GIVEAWAY_PERK_UNAVAILABLE" });
+      await expect(
+        backend.getRiderGiveawayState(secondRider.sessionToken, giveaway.id),
+      ).resolves.toEqual({ giveawayId: giveaway.id, status: "not_eligible", entryCount: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

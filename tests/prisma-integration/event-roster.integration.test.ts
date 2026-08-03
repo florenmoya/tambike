@@ -78,7 +78,7 @@ describe("Prisma event rosters", () => {
     }
   });
 
-  test("uses the current global roster privacy for an existing RSVP", async () => {
+  test("preserves an existing RSVP choice until the rider changes that event", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
       const backend = PrismaTambikeBackend.create(databaseUrl);
@@ -131,16 +131,24 @@ describe("Prisma event rosters", () => {
       await expect(
         backendClients.primary.backend.listEventAttendees(rider.sessionToken, fixture.eventId),
       ).resolves.toMatchObject({
-        summary: { goingCount: 1, visibleCount: 0, anonymousCount: 1 },
-        attendees: [],
+        summary: { goingCount: 1, visibleCount: 1, anonymousCount: 0 },
+        attendees: [{ slug: profile.slug }],
       });
 
-      await backendClients.primary.backend.updateMemberProfile(rider.sessionToken, profileInput);
+      await backendClients.primary.backend.registerForEvent(
+        rider.sessionToken,
+        fixture.eventId,
+        {
+          status: "going",
+          attendanceType: "direct",
+          rosterIdentity: "ANONYMOUS",
+        },
+      );
       await expect(
         backendClients.primary.backend.listEventAttendees(rider.sessionToken, fixture.eventId),
       ).resolves.toMatchObject({
-        summary: { goingCount: 1, visibleCount: 1, anonymousCount: 0 },
-        attendees: [{ slug: profile.slug }],
+        summary: { goingCount: 1, visibleCount: 0, anonymousCount: 1 },
+        attendees: [],
       });
     } finally {
       await closePrismaIntegrationClientPair(backendClients);

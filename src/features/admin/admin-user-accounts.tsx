@@ -166,7 +166,7 @@ export function AdminUserAccounts({
             ))}
           </div>
 
-          <div className="hidden sm:block">
+          <div className="hidden min-w-0 sm:block">
             <DataTable
               columns={columns}
               data={accounts}

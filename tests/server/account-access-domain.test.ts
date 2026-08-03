@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createTambikeTestBackend } from "../../src/server/testing";
+import { canSuspendAdminWithoutOrphaningAccess } from "../../src/server/account-access-policy";
 import {
   createPublishedTestEvent,
   createTestActors,
@@ -7,6 +8,11 @@ import {
 } from "./support/tambike-fixtures";
 
 describe("account access domain", () => {
+  test("blocks the count guard when only one active admin remains", () => {
+    expect(canSuspendAdminWithoutOrphaningAccess(1)).toBe(false);
+    expect(canSuspendAdminWithoutOrphaningAccess(2)).toBe(true);
+  });
+
   test("lists safe account details in a stable order for admins only", async () => {
     const backend = await createTambikeTestBackend();
     const actors = await createTestActors(backend, "account-list");
@@ -35,6 +41,42 @@ describe("account access domain", () => {
     });
     expect(JSON.stringify(accounts)).not.toContain("passwordHash");
     expect(JSON.stringify(accounts)).not.toContain("suspendedByUserId");
+  });
+
+  test("uses the account id as the stable tie-breaker for duplicate display names", async () => {
+    const backend = await createTambikeTestBackend({
+      fixture: {
+        users: [
+          {
+            id: "user-z-duplicate-name",
+            displayName: "Duplicate Rider",
+            email: "duplicate-z@example.test",
+            password: "password123",
+            role: "rider",
+            verificationStatus: "UNVERIFIED",
+            area: "Pasig City",
+            joinedAt: "July 15, 2026",
+          },
+          {
+            id: "user-a-duplicate-name",
+            displayName: "Duplicate Rider",
+            email: "duplicate-a@example.test",
+            password: "password123",
+            role: "rider",
+            verificationStatus: "UNVERIFIED",
+            area: "Pasig City",
+            joinedAt: "July 15, 2026",
+          },
+        ],
+      },
+    });
+    const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
+
+    const duplicateIds = (await backend.listAdminUserAccounts(admin.sessionToken))
+      .filter((account) => account.displayName === "Duplicate Rider")
+      .map((account) => account.id);
+
+    expect(duplicateIds).toEqual(["user-a-duplicate-name", "user-z-duplicate-name"]);
   });
 
   test("treats a retained suspended-user session as anonymous in snapshots", async () => {
