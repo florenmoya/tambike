@@ -10,11 +10,15 @@ import {
 } from "../../src/features/tambike-demo/event-state";
 import type { Event } from "../../src/features/tambike-demo/types";
 
-const organizerSource = readFileSync(
-  resolve(process.cwd(), "src/features/organizer/organizer-console.tsx"),
+const eventEditorSource = readFileSync(
+  resolve(process.cwd(), "src/features/organizer/event-editor-fields.tsx"),
   "utf8",
 );
 const adminSource = readFileSync(resolve(process.cwd(), "src/features/admin/admin-console.tsx"), "utf8");
+const adminReviewSource = readFileSync(
+  resolve(process.cwd(), "src/features/admin/event-review-controls.tsx"),
+  "utf8",
+);
 const screenSource = readFileSync(
   resolve(process.cwd(), "src/features/tambike-demo/tambike-screen.tsx"),
   "utf8",
@@ -86,14 +90,14 @@ describe("account and event-location UI contracts", () => {
   });
 
   test("uses organizer-defined location inputs and the event-detail Venue and perk structure", () => {
-    expect(organizerSource).toContain('name="locationName"');
-    expect(organizerSource).toContain('name="locationAddress"');
-    expect(organizerSource).toContain('name="locationMapLink"');
-    expect(organizerSource).toContain('name="area"');
-    expect(organizerSource).toContain("EVENT_LOCATION_LIMITS");
-    expect(organizerSource).not.toContain('name="venueId"');
+    expect(eventEditorSource).toContain('inputProps("locationName")');
+    expect(eventEditorSource).toContain('inputProps("locationAddress")');
+    expect(eventEditorSource).toContain('inputProps("locationMapLink")');
+    expect(eventEditorSource).toContain('inputProps("area")');
+    expect(eventEditorSource).toContain("EVENT_LOCATION_LIMITS");
+    expect(eventEditorSource).not.toContain('inputProps("venueId")');
     expect(adminSource).toContain("event.locationName");
-    expect(adminSource).toContain("event.locationAddress");
+    expect(adminReviewSource).toContain("view.event.locationAddress");
     expect(screenSource).toContain('className="event-detail-perk"');
     expect(screenSource).toContain('eyebrow="Venue"');
     expect(screenSource).toContain("event-detail-essentials");

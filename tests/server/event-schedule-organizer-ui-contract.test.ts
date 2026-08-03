@@ -3,47 +3,44 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-const source = readFileSync(
+const organizerSource = readFileSync(
   resolve(
     process.cwd(),
     "src/features/organizer/organizer-console.tsx",
   ),
   "utf8",
 );
-const sectionStart = source.indexOf("function CreateEventSection");
-const sectionEnd = source.indexOf("function EventDetailSection", sectionStart);
-const createEventSection = source.slice(sectionStart, sectionEnd);
+const editorSource = readFileSync(
+  resolve(process.cwd(), "src/features/organizer/event-editor-fields.tsx"),
+  "utf8",
+);
 
 describe("organizer structured event schedule UI", () => {
   test("uses labelled native schedule controls instead of display-label text", () => {
-    for (const field of [
+    for (const [label, name, type] of [
       ["Start date", "startDate", "date"],
       ["Start time", "startTime", "time"],
       ["End date", "endDate", "date"],
       ["End time", "endTime", "time"],
     ]) {
-      expect(createEventSection).toContain(
-        `<Field label="${field[0]}" htmlFor="${field[1]}">`,
-      );
-      expect(createEventSection).toMatch(
-        new RegExp(
-          `<Input[^>]*id="${field[1]}"[^>]*name="${field[1]}"[^>]*type="${field[2]}"`,
-        ),
-      );
+      expect(editorSource).toContain(`label="${label}"`);
+      expect(editorSource).toContain(`inputProps("${name}")`);
+      expect(editorSource).toContain(`type="${type}"`);
     }
-    expect(createEventSection).not.toContain('label="Date label"');
-    expect(createEventSection).not.toContain('label="Time label"');
-    expect(createEventSection).not.toContain('formData.get("date")');
-    expect(createEventSection).not.toContain('formData.get("time")');
+    expect(editorSource).not.toContain('label="Date label"');
+    expect(editorSource).not.toContain('label="Time label"');
+    expect(organizerSource).not.toContain('formData.get("date")');
+    expect(organizerSource).not.toContain('formData.get("time")');
   });
 
-  test("submits a one-time schedule without recurrence controls", () => {
-    expect(createEventSection).toContain('name="timeZone"');
-    expect(createEventSection).toContain('value="Asia/Manila"');
-    expect(createEventSection).toContain('recurrence: "NONE"');
-    expect(createEventSection).not.toContain('name="recurrence"');
-    expect(createEventSection).not.toContain('value="WEEKLY"');
-    expect(createEventSection).not.toContain('recurrence === "WEEKLY"');
-    expect(createEventSection).not.toContain('name="recurrenceEndsOn"');
+  test("submits a one-time schedule with an explicit, restricted recurrence control", () => {
+    expect(editorSource).toContain('inputProps("timeZone")');
+    expect(editorSource).toContain('<option value="Asia/Manila">');
+    expect(editorSource).toContain('inputProps("recurrence")');
+    expect(editorSource).toContain('<option value="NONE">One-time event</option>');
+    expect(organizerSource).toContain('formData.get("recurrence") ?? "NONE"');
+    expect(editorSource).not.toContain('value="WEEKLY"');
+    expect(editorSource).not.toContain('recurrence === "WEEKLY"');
+    expect(editorSource).not.toContain('inputProps("recurrenceEndsOn")');
   });
 });

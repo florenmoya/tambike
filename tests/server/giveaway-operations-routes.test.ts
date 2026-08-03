@@ -188,7 +188,7 @@ describe("giveaway operations UI boundaries", () => {
     expect(sidebarSource).toContain('href: "/admin/giveaways"');
     expect(sidebarSource).toContain('section: "giveaways"');
     expect(adminSource).toContain('section === "giveaways"');
-    expect(organizerSource).toContain("/giveaway-ops/${event.id}");
+    expect(organizerSource).toContain("/giveaway-ops/${row.id}");
     expect(organizerSource).toContain("Claim desk");
     expect(operatorSource).toContain("/organizer/events/${encodeURIComponent(eventId)}/giveaways");
     expect(operatorSource).not.toContain("/venue/");

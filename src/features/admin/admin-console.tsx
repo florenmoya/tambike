@@ -42,7 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { adminApproval, organizers } from "@/features/tambike-demo/data";
+import { organizers } from "@/features/tambike-demo/data";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type { Event, UserProfile } from "@/features/tambike-demo/types";
 
@@ -135,6 +135,7 @@ const sectionCopy: Record<AdminSection, { title: string; description: string; st
 };
 
 export function AdminConsole({
+  eventReviewContent,
   giveawayContent,
   reportEventId,
   reviewId,
@@ -142,17 +143,13 @@ export function AdminConsole({
   userContent,
 }: {
   section: AdminSection;
+  eventReviewContent?: React.ReactNode;
   giveawayContent?: React.ReactNode;
   reportEventId?: string;
   reviewId?: string;
   userContent?: React.ReactNode;
 }) {
-  const { adminDecision, approvePublish, currentUser, events, users } = useDemo();
-  const [eventStatusOverrides, setEventStatusOverrides] = React.useState<Record<string, Event["status"]>>({});
-
-  const setEventStatus = React.useCallback((eventId: string, status: Event["status"]) => {
-    setEventStatusOverrides((current) => ({ ...current, [eventId]: status }));
-  }, []);
+  const { currentUser, events, users } = useDemo();
 
   if (!currentUser) {
     return (
@@ -172,13 +169,9 @@ export function AdminConsole({
     );
   }
 
-  const effectiveEvents = events.map((event) => {
-    const status = eventStatusOverrides[event.id];
-    return status ? { ...event, status } : event;
-  });
-  const eventRows = getEventRows(effectiveEvents);
+  const eventRows = getEventRows(events);
   const validationRows = getValidationRows();
-  const reportRows = getReportRows(effectiveEvents);
+  const reportRows = getReportRows(events);
   const metrics = {
     pendingEvents: eventRows.filter((row) => row.status === "PENDING_ADMIN_REVIEW").length,
   };
@@ -186,14 +179,13 @@ export function AdminConsole({
     events: eventRows,
     users,
   });
-  const chartData = getChartData(effectiveEvents);
-  const reportEvent = reportEventId ? effectiveEvents.find((event) => event.id === reportEventId) ?? null : null;
-  const reviewEvent = reviewId ? findReviewEvent(effectiveEvents, reviewId) : null;
+  const chartData = getChartData(events);
+  const reportEvent = reportEventId ? events.find((event) => event.id === reportEventId) ?? null : null;
   const hasDetail = Boolean(reviewId || reportEventId);
   const copy = reviewId
     ? {
-        title: reviewEvent?.title ?? "Event review detail",
-        description: "Review publish readiness, risk flags, location snapshot, and organizer context.",
+        title: "Event review",
+        description: "Review the submitted event and choose the next step.",
         status: "Review",
       }
     : reportEventId
@@ -219,15 +211,7 @@ export function AdminConsole({
         <SiteHeader title={copy.title} description={copy.description} status={copy.status} />
         <div className="@container/main flex flex-1 flex-col">
           <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
-            {reviewId ? (
-              <EventReviewDetail
-                adminDecision={adminDecision}
-                event={reviewEvent}
-                onApprove={approvePublish}
-                onSetStatus={setEventStatus}
-                reviewId={reviewId}
-              />
-            ) : null}
+            {reviewId ? eventReviewContent : null}
             {reportEventId ? <AdminReportDetail event={reportEvent} eventId={reportEventId} /> : null}
             {!hasDetail && section === "overview" ? (
               <OverviewSection
@@ -341,241 +325,6 @@ export function adminEventReviewSummary(
     return `${event.title} is published and visible to riders.`;
   }
   return event.shortDescription;
-}
-
-function EventReviewDetail({
-  adminDecision,
-  event,
-  onApprove,
-  onSetStatus,
-  reviewId,
-}: {
-  adminDecision: "pending" | "published";
-  event: Event | null;
-  onApprove: (eventId: string) => Promise<void>;
-  onSetStatus: (eventId: string, status: Event["status"]) => void;
-  reviewId: string;
-}) {
-  const [error, setError] = React.useState("");
-  const [isSubmitting, setIsSubmitting] = React.useState(false);
-
-  if (!event) {
-    return (
-      <TablePanel
-        title="Review not found"
-        description="This review id does not match the current admin approval queue."
-        actions={
-          <Button asChild variant="outline" size="sm">
-            <Link href="/admin/events/review">Back to queue</Link>
-          </Button>
-        }
-      >
-        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-          Review id: <span className="font-mono text-foreground">{reviewId}</span>
-        </div>
-      </TablePanel>
-    );
-  }
-
-  const organizer = organizers.find((item) => item.id === event.organizerId);
-  const isClosed = event.status === "NEEDS_CHANGES" || event.status === "REJECTED" || event.status === "CANCELLED";
-  const isPublished =
-    !isClosed && (event.status === "PUBLISHED" || (event.id === adminApproval.eventId && adminDecision === "published"));
-  const isPendingReview = event.status === "PENDING_ADMIN_REVIEW";
-  const isDisabled = event.status === "CANCELLED";
-  const detailItems = [
-    ["Type", event.type],
-    ["Date", `${event.date} · ${event.time}`],
-    ["Area", event.area],
-    ["Expected riders", String(event.expectedRiders)],
-  ];
-  const actionTitle = isDisabled
-    ? "Event disabled"
-    : isPublished
-      ? "Published event controls"
-      : event.status === "NEEDS_CHANGES"
-        ? "Changes requested"
-        : isPendingReview
-          ? "Pending admin decision"
-          : "Review controls";
-  const actionDescription = isDisabled
-    ? "This event is hidden from public operations until an admin restores it to review."
-    : isPublished
-      ? "This event is live. Approval is complete, so the available admin action is to disable the public listing."
-      : event.status === "NEEDS_CHANGES"
-        ? "The organizer needs to update the listing before admin approval can continue."
-        : event.id === adminApproval.eventId
-          ? adminApproval.notes
-          : "Review risk flags, location snapshot, and organizer context before publishing.";
-
-  return (
-    <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:px-6">
-      <div className="grid gap-4">
-        <Card>
-          <CardHeader className="gap-3">
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-start">
-              <div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="secondary">Admin review</Badge>
-                  <EventStatusBadge status={event.status} />
-                </div>
-                <CardTitle className="mt-3 text-2xl">{event.title}</CardTitle>
-                <CardDescription className="mt-1">
-                  {adminEventReviewSummary(event, { isDisabled, isPublished })}
-                </CardDescription>
-              </div>
-              <EventPosterPreview poster={event.poster} title={event.title} variant="detail" />
-            </div>
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {detailItems.map(([label, value]) => (
-                <div key={label} className="rounded-lg border bg-muted/30 p-3">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-                  <div className="mt-1 text-sm font-medium">{value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="grid gap-2">
-              <h2 className="text-sm font-semibold">Review signals</h2>
-              <div className="flex flex-wrap gap-2">
-                {event.riskFlags.map((flag) => (
-                  <Badge key={flag} variant="outline" className="border-destructive/30 text-destructive">
-                    <ShieldAlertIcon data-icon="inline-start" />
-                    {flag}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Organizer</CardTitle>
-              <CardDescription>{organizer?.type ?? "Organizer profile"}</CardDescription>
-            </CardHeader>
-            <CardContent className="text-sm">
-              <div className="font-medium">{organizer?.displayName ?? "Unknown organizer"}</div>
-              <div className="mt-1 text-muted-foreground">
-                {organizer?.verificationStatus.toLowerCase() ?? "status unknown"} · {organizer?.pastEvents ?? 0} past events
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Location</CardTitle>
-              <CardDescription>{event.area}</CardDescription>
-            </CardHeader>
-            <CardContent className="text-sm">
-              <div className="font-medium">{event.locationName}</div>
-              <div className="mt-1 text-muted-foreground">{event.locationAddress}</div>
-              {event.locationMapLink ? (
-                <Button asChild className="mt-3" size="sm" variant="outline">
-                  <Link href={event.locationMapLink} target="_blank" rel="noreferrer">Open map</Link>
-                </Button>
-              ) : null}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <Card className="h-fit lg:sticky lg:top-24">
-        <CardHeader>
-          <CardTitle>{actionTitle}</CardTitle>
-          <CardDescription>{actionDescription}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {isPublished ? (
-            <ActionNotice
-              title="Published to riders"
-              body="This record no longer needs approval. Use disable only when the listing must be removed from public operations."
-              tone="success"
-            />
-          ) : null}
-          {event.status === "NEEDS_CHANGES" ? (
-            <ActionNotice
-              title="Changes requested"
-              body="Approval actions are paused until the organizer updates the event."
-              tone="warning"
-            />
-          ) : null}
-          {isDisabled ? (
-            <ActionNotice
-              title="Disabled event"
-              body="Riders should not be able to register while this event is disabled."
-              tone="danger"
-            />
-          ) : null}
-          {isPendingReview ? (
-            <Button
-              disabled={isSubmitting}
-              onClick={async () => {
-                setError("");
-                setIsSubmitting(true);
-                try {
-                  await onApprove(event.id);
-                } catch (actionError) {
-                  setError(getActionErrorMessage(actionError));
-                } finally {
-                  setIsSubmitting(false);
-                }
-              }}
-            >
-              {isSubmitting ? "Publishing..." : "Approve publish"}
-            </Button>
-          ) : null}
-          {isPendingReview ? (
-            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "NEEDS_CHANGES")}>
-              Request changes
-            </Button>
-          ) : null}
-          {!isPendingReview && !isPublished && !isDisabled ? (
-            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "PENDING_ADMIN_REVIEW")}>
-              Restore to review
-            </Button>
-          ) : null}
-          {!isDisabled ? (
-            <Button type="button" variant="destructive" onClick={() => onSetStatus(event.id, "CANCELLED")}>
-              Disable event
-            </Button>
-          ) : (
-            <Button type="button" variant="outline" onClick={() => onSetStatus(event.id, "PENDING_ADMIN_REVIEW")}>
-              Restore to review
-            </Button>
-          )}
-          <Button asChild variant="outline">
-            <Link href="/admin/events/review">Back to review queue</Link>
-          </Button>
-          {event.sourceUrl ? (
-            <Button asChild variant="ghost">
-              <Link href={event.sourceUrl} target="_blank" rel="noreferrer">
-                Open source listing
-              </Link>
-            </Button>
-          ) : null}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function findReviewEvent(events: Event[], reviewId: string) {
-  if (reviewId === adminApproval.id) {
-    return events.find((event) => event.id === adminApproval.eventId) ?? null;
-  }
-
-  return events.find((event) => event.id === reviewId) ?? null;
-}
-
-function getActionErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "The admin action could not be completed.";
 }
 
 function ReportsSection({ rows }: { rows: ReportRow[] }) {
@@ -766,33 +515,6 @@ function TablePanel({
         </CardHeader>
         <CardContent>{children}</CardContent>
       </Card>
-    </div>
-  );
-}
-
-function ActionNotice({
-  body,
-  title,
-  tone = "neutral",
-}: {
-  body: string;
-  title: string;
-  tone?: "neutral" | "success" | "warning" | "danger";
-}) {
-  const toneClasses = {
-    neutral: "border-border bg-muted/30 text-muted-foreground",
-    success: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100",
-    warning: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100",
-    danger: "border-destructive/30 bg-destructive/10 text-destructive",
-  } satisfies Record<"neutral" | "success" | "warning" | "danger", string>;
-
-  return (
-    <div className={`rounded-lg border p-3 text-sm ${toneClasses[tone]}`}>
-      <div className="flex items-center gap-2 font-medium">
-        {tone === "success" ? <CheckCircle2Icon className="size-4" /> : <ShieldAlertIcon className="size-4" />}
-        {title}
-      </div>
-      <p className="mt-1">{body}</p>
     </div>
   );
 }

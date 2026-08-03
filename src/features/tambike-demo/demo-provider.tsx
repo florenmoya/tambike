@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  approvePublishAction,
   configureCheckInAction,
   configureEventRosterAction,
   createEventDraftAction,
@@ -104,8 +103,6 @@ interface DemoContextValue {
   ) => Promise<EventCheckInSettings>;
   issueSelfCheckInQr: (eventId: string) => Promise<SelfCheckInQr>;
   checkedInCount: number;
-  adminDecision: "pending" | "published";
-  approvePublish: (eventId: string) => Promise<void>;
 }
 
 const DemoContext = createContext<DemoContextValue | null>(null);
@@ -139,7 +136,6 @@ export function DemoProvider({
   const [attendanceType, setAttendanceType] = useState<AttendanceType>("direct");
   const [passCreated, setPassCreated] = useState(initialState.passCreated);
   const [scannerOutcome, setScannerOutcomeState] = useState<ScannerOutcome>("idle");
-  const [adminDecision, setAdminDecision] = useState<"pending" | "published">("pending");
 
   const role: Role = currentUser?.role ?? "guest";
 
@@ -302,16 +298,6 @@ export function DemoProvider({
     [applyState],
   );
 
-  const approvePublish = useCallback(async (eventId: string) => {
-    const published = await approvePublishAction(eventId);
-    setEvents((currentEvents) =>
-      currentEvents.map((event) =>
-        event.id === published.event.id ? published.event : event,
-      ),
-    );
-    setAdminDecision("published");
-  }, []);
-
   const configureCheckIn = useCallback(
     async (eventId: string, input: CheckInConfiguration) => {
       const result = await configureCheckInAction(eventId, input);
@@ -361,13 +347,9 @@ export function DemoProvider({
       configureCheckIn,
       issueSelfCheckInQr,
       checkedInCount,
-      adminDecision,
-      approvePublish,
     }),
     [
-      adminDecision,
       applyState,
-      approvePublish,
       attendanceType,
       authNotice,
       checkedInCount,

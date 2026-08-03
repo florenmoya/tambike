@@ -42,8 +42,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Sidebar,
   SidebarContent,
@@ -60,22 +58,18 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { QrScannerPanel } from "@/features/check-in/qr-scanner-panel";
-import { CheckInPolicyPanel } from "@/features/check-in/check-in-policy-panel";
 import { OrganizerGiveawayWorkspace } from "@/features/giveaways/organizer-giveaway-workspace";
 import { OrganizerRosterPanel } from "@/features/member-profiles/organizer-roster-panel";
+import { EventEditorFields } from "@/features/organizer/event-editor-fields";
 import { demoEvents } from "@/features/tambike-demo/data";
-import { EVENT_LOCATION_LIMITS } from "@/features/tambike-demo/event-location";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type {
   CreateEventInput,
-  CheckInConfiguration,
   Event,
-  EventCheckInSettings,
   EventStatus,
   EventType,
   ScanMethod,
   ScanPassResult,
-  SelfCheckInQr,
   UserProfile,
 } from "@/features/tambike-demo/types";
 
@@ -166,24 +160,14 @@ const sectionCopy: Record<OrganizerSection, { title: string; description: string
   },
 };
 
-const eventTypes: EventType[] = [
-  "Tambike",
-  "Bike Night",
-  "Coffee Ride",
-  "Club EB",
-  "Brand Event",
-  "Test Ride",
-  "Charity Ride",
-  "Track Day",
-  "Endurance Ride",
-  "Moto Expo",
-  "Race",
-];
-
 export function OrganizerConsole({
+  copyDefaults,
+  submissionContent,
   section,
   eventId,
 }: {
+  copyDefaults?: Partial<CreateEventInput>;
+  submissionContent?: React.ReactNode;
   section: OrganizerSection;
   eventId?: string;
 }) {
@@ -215,7 +199,7 @@ export function OrganizerConsole({
   const organizerEvents = getOrganizerEvents(currentUser, events);
   const selectedEvent = getSelectedEvent(organizerEvents, eventId);
 
-  if ((section === "event" || section === "attendees" || section === "scanner" || section === "giveaways" || section === "report") && !selectedEvent) {
+  if (((section === "event" && !submissionContent) || section === "attendees" || section === "scanner" || section === "giveaways" || section === "report") && !selectedEvent) {
     return (
       <OrganizerAccessState
         title="Event access needed"
@@ -232,7 +216,7 @@ export function OrganizerConsole({
     organizerEvents.reduce((total, event) => total + (event.confirmedCheckIns ?? 0), 0),
   );
   const chartData = getChartData(organizerEvents);
-  const activeEventId = selectedEvent?.id ?? organizerEvents[0]?.id ?? null;
+  const activeEventId = eventId ?? selectedEvent?.id ?? organizerEvents[0]?.id ?? null;
   const createDisabledReason =
     currentUser.role !== "organizer"
       ? "Admin accounts can review organizer activity, but only approved organizer accounts can create event drafts."
@@ -274,11 +258,12 @@ export function OrganizerConsole({
             {section === "create" ? (
               <CreateEventSection
                 canCreate={currentUser.role === "organizer" && currentUser.verificationStatus === "APPROVED"}
+                defaults={copyDefaults}
                 disabledReason={createDisabledReason}
                 createEventDraft={createEventDraft}
               />
             ) : null}
-            {section === "event" && selectedEvent ? <EventDetailSection event={selectedEvent} /> : null}
+            {section === "event" ? submissionContent : null}
             {section === "attendees" && selectedEvent ? <AttendeesSection event={selectedEvent} /> : null}
             {section === "scanner" && selectedEvent ? (
               <ScannerSection
@@ -593,10 +578,12 @@ function EventsSection({ rows }: { rows: OrganizerEventRow[] }) {
 function CreateEventSection({
   canCreate,
   createEventDraft,
+  defaults,
   disabledReason,
 }: {
   canCreate: boolean;
   createEventDraft: (input: CreateEventInput) => Promise<Event | null>;
+  defaults?: Partial<CreateEventInput>;
   disabledReason: string;
 }) {
   const [createdEvent, setCreatedEvent] = React.useState<Event | null>(null);
@@ -636,7 +623,9 @@ function CreateEventSection({
                 endDate: String(formData.get("endDate") ?? ""),
                 endTime: String(formData.get("endTime") ?? ""),
                 timeZone: String(formData.get("timeZone") ?? "Asia/Manila"),
-                recurrence: "NONE",
+                recurrence: String(
+                  formData.get("recurrence") ?? "NONE",
+                ) as CreateEventInput["recurrence"],
                 area: String(formData.get("area") ?? ""),
                 expectedRiders: Number(formData.get("expectedRiders") ?? 1),
                 perkPreview: String(formData.get("perkPreview") ?? ""),
@@ -651,64 +640,11 @@ function CreateEventSection({
               setCreatedEvent(draft);
             }}
           >
-            <Field label="Event title" htmlFor="title">
-              <Input id="title" name="title" required placeholder="Katipunan Bike Night" />
-            </Field>
-            <Field label="Event type" htmlFor="type">
-              <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                id="type"
-                name="type"
-                required
-                defaultValue="Tambike"
-              >
-                {eventTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Location name" htmlFor="locationName">
-              <Input id="locationName" name="locationName" required maxLength={EVENT_LOCATION_LIMITS.name} placeholder="Shell Pugon" />
-            </Field>
-            <Field label="Location address" htmlFor="locationAddress">
-              <Input id="locationAddress" name="locationAddress" required maxLength={EVENT_LOCATION_LIMITS.address} placeholder="Antipolo, Rizal" />
-            </Field>
-            <Field label="Map link" htmlFor="locationMapLink">
-              <Input id="locationMapLink" name="locationMapLink" type="url" maxLength={EVENT_LOCATION_LIMITS.mapLink} placeholder="https://maps.example.test/place" />
-            </Field>
-            <Field label="Area" htmlFor="area">
-              <Input id="area" name="area" required maxLength={EVENT_LOCATION_LIMITS.area} placeholder="Katipunan, Quezon City" />
-            </Field>
-            <Field label="Start date" htmlFor="startDate">
-              <Input id="startDate" name="startDate" type="date" required />
-            </Field>
-            <Field label="Start time" htmlFor="startTime">
-              <Input id="startTime" name="startTime" type="time" required />
-            </Field>
-            <Field label="End date" htmlFor="endDate">
-              <Input id="endDate" name="endDate" type="date" required />
-            </Field>
-            <Field label="End time" htmlFor="endTime">
-              <Input id="endTime" name="endTime" type="time" required />
-            </Field>
-            <Field label="Timezone" htmlFor="timeZone">
-              <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                id="timeZone"
-                name="timeZone"
-                defaultValue="Asia/Manila"
-              >
-                <option value="Asia/Manila">Philippines (Asia/Manila)</option>
-              </select>
-            </Field>
-            <Field label="Expected riders" htmlFor="expectedRiders">
-              <Input id="expectedRiders" name="expectedRiders" required type="number" min="1" defaultValue="40" />
-            </Field>
-            <Field label="Perk preview" htmlFor="perkPreview">
-              <Input id="perkPreview" name="perkPreview" required placeholder="Free sticker for checked-in riders" />
-            </Field>
+            <EventEditorFields
+              idPrefix="create-event"
+              defaults={defaults}
+              disabled={pending || !canCreate}
+            />
             {!canCreate ? (
               <div className="md:col-span-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
                 {disabledReason}
@@ -732,97 +668,6 @@ function CreateEventSection({
           </form>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function EventDetailSection({ event }: { event: Event }) {
-  const { checkInSettings, configureCheckIn, issueSelfCheckInQr } = useDemo();
-  const [isSavingPolicy, setIsSavingPolicy] = React.useState(false);
-  const [issuedQr, setIssuedQr] = React.useState<SelfCheckInQr | null>(null);
-  const settings: EventCheckInSettings =
-    checkInSettings.find((candidate) => candidate.eventId === event.id) ?? {
-      eventId: event.id,
-      mode: "staff_only",
-      state: "closed",
-      qrMode: "rotating",
-      fixedQrAcknowledged: false,
-    };
-
-  const saveCheckInPolicy = async (input: CheckInConfiguration) => {
-    setIsSavingPolicy(true);
-    try {
-      await configureCheckIn(event.id, input);
-      setIssuedQr(null);
-    } finally {
-      setIsSavingPolicy(false);
-    }
-  };
-
-  const issueQr = async () => {
-    const qr = await issueSelfCheckInQr(event.id);
-    setIssuedQr(qr);
-    return qr;
-  };
-
-  return (
-    <div className="grid gap-4 px-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>{event.title}</CardTitle>
-          <CardDescription>
-            {event.type} at {event.locationName} in {event.area}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <MetricBlock label="Status" value={formatStatus(event.status)} />
-            <MetricBlock label="Going" value={String(event.going)} />
-            <MetricBlock label="Interested" value={String(event.interested)} />
-          </div>
-          <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-            {event.whatHappens}
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <InfoList title="Risk flags" items={event.riskFlags} />
-            <InfoList title="Rules" items={event.rules} />
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Event actions</CardTitle>
-          <CardDescription>Move from setup to event-day operations.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2">
-          <Button asChild>
-            <Link href={`/organizer/events/${event.id}/attendees`}>Open attendees</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/organizer/events/${event.id}/scanner`}>Open scanner</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/organizer/events/${event.id}/report`}>Open report</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/giveaway-ops/${event.id}`}>Claim desk</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/events/${event.id}`}>View public page</Link>
-          </Button>
-        </CardContent>
-      </Card>
-      <div className="lg:col-span-2">
-        <CheckInPolicyPanel
-          key={`${event.id}:${settings.mode}:${settings.state}:${settings.qrMode}:${settings.fixedQrAcknowledged}`}
-          event={event}
-          settings={settings}
-          pending={isSavingPolicy}
-          issuedQr={issuedQr}
-          onSave={saveCheckInPolicy}
-          onIssueQr={issueQr}
-        />
-      </div>
     </div>
   );
 }
@@ -953,23 +798,6 @@ function TablePanel({
         </CardHeader>
         <CardContent>{children}</CardContent>
       </Card>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
     </div>
   );
 }
