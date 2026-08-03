@@ -23,7 +23,12 @@ import type {
 } from "@/features/member-profiles/types";
 import { decodeSelfCheckInToken } from "@/features/check-in/qr-token";
 import { BackendError, getTambikeBackend } from "./backend";
-import { clearSessionToken, readSessionToken, setSessionToken } from "./session-cookie";
+import {
+  clearSessionToken,
+  readRequiredSessionToken,
+  readSessionToken,
+  setSessionToken,
+} from "./session-cookie";
 import type { FinalizeMemberMediaInput } from "./member-media/service";
 
 async function snapshot(sessionToken?: string): Promise<DemoState> {
@@ -162,8 +167,16 @@ export async function getEventAttendeeSummaryAction(eventId: string) {
 export async function approvePublishAction(eventId: string) {
   const backend = await getTambikeBackend();
   const token = await readRequiredSessionToken();
-  await backend.approvePublish(token, eventId);
-  return snapshot();
+  const view = await backend.getAdminEventReview(token, eventId);
+  const published = await backend.reviewEvent(token, eventId, {
+    decision: "PUBLISH",
+    expectedUpdatedAt: view.expectedUpdatedAt,
+  });
+  revalidatePath(`/admin/events/review/${eventId}`);
+  revalidatePath("/admin/events/review");
+  revalidatePath(`/events/${eventId}`);
+  revalidatePath(`/organizer/events/${eventId}`);
+  return published;
 }
 
 export async function configureCheckInAction(
@@ -277,15 +290,6 @@ export async function scanPassAction(
       state: await snapshot(),
     };
   }
-}
-
-async function readRequiredSessionToken() {
-  const token = await readSessionToken();
-  if (!token) {
-    throw new Error("UNAUTHENTICATED");
-  }
-
-  return token;
 }
 
 function scanPassCodeFor(error: unknown): ScanPassCode {

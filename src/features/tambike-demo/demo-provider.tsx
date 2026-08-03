@@ -303,10 +303,9 @@ export function DemoProvider({
   );
 
   const approvePublish = useCallback(async (eventId: string) => {
-    const nextState = await approvePublishAction(eventId);
-    applyState(nextState);
+    await approvePublishAction(eventId);
     setAdminDecision("published");
-  }, [applyState]);
+  }, []);
 
   const configureCheckIn = useCallback(
     async (eventId: string, input: CheckInConfiguration) => {

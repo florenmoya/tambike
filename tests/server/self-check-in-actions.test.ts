@@ -21,7 +21,15 @@ vi.mock("../../src/server/backend", async (importOriginal) => {
 
 vi.mock("../../src/server/session-cookie", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/session-cookie")>();
-  return { ...actual, readSessionToken };
+  return {
+    ...actual,
+    readSessionToken,
+    readRequiredSessionToken: async () => {
+      const token = await readSessionToken();
+      if (!token) throw new Error("UNAUTHENTICATED");
+      return token;
+    },
+  };
 });
 
 vi.mock("next/cache", () => ({ revalidatePath }));
