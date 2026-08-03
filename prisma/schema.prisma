@@ -51,6 +51,7 @@ enum EventStatus {
   COMPLETED
   NEEDS_CHANGES
   REJECTED
+  DISABLED
   CANCELLED
 }
 
@@ -320,6 +321,8 @@ model User {
   sessions                    Session[]
   suspendedBy                 User?                       @relation("UserSuspendedBy", fields: [suspendedByUserId], references: [id], onDelete: SetNull)
   suspensionsPerformed        User[]                      @relation("UserSuspendedBy")
+  eventsDisabled              Event[]                      @relation("EventDisabledBy")
+  eventReviews                EventApproval[]              @relation("EventReviewer")
   organizerProfile            OrganizerProfile?
   motorcycle                  Motorcycle?
   rsvps                       RSVP[]
@@ -413,6 +416,10 @@ model Event {
   perkPreview        String
   tags               String[]
   riskFlags          String[]
+  submissionVersion Int         @default(1)
+  disabledAt         DateTime?
+  disabledByUserId   String?
+  disableReason      String?     @db.VarChar(500)
   rideOutMeetup      String?
   rideOutMapLink     String?
   rideOutCallTime    String?
@@ -424,6 +431,7 @@ model Event {
   updatedAt          DateTime    @updatedAt
 
   organizer             OrganizerProfile            @relation(fields: [organizerId], references: [id])
+  disabledBy            User?                       @relation("EventDisabledBy", fields: [disabledByUserId], references: [id], onDelete: SetNull)
   approvals             EventApproval[]
   rsvps                 RSVP[]
   passes                Pass[]
@@ -440,16 +448,22 @@ model Event {
 }
 
 model EventApproval {
-  id         String           @id @default(cuid())
-  eventId    String
-  reviewerId String?
-  decision   ApprovalDecision @default(pending)
-  conditions String?
-  notes      String?
-  decidedAt  DateTime?
-  createdAt  DateTime         @default(now())
+  id                String           @id @default(cuid())
+  eventId           String
+  submissionVersion Int
+  reviewerId        String?
+  decision          ApprovalDecision @default(pending)
+  conditions        String?
+  notes             String?          @db.VarChar(1000)
+  submittedAt       DateTime         @default(now())
+  decidedAt         DateTime?
+  createdAt         DateTime         @default(now())
 
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event    Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  reviewer User? @relation("EventReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, submissionVersion])
+  @@index([decision, submittedAt])
 }
 
 model RSVP {

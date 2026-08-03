@@ -5688,6 +5688,7 @@ export class PrismaTambikeBackend {
         create: {
           id: `admin-review-${eventId}`,
           eventId,
+          submissionVersion: 1,
           reviewerId: user.id,
           decision: "published",
           decidedAt: new Date(),

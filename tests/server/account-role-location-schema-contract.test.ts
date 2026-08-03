@@ -10,6 +10,13 @@ const migrationPath = resolve(
   "prisma/migrations/20260715120000_simplify_accounts_and_locations/migration.sql",
 );
 const migrationSql = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+const eventReviewMigrationPath = resolve(
+  process.cwd(),
+  "prisma/migrations/20260731160000_event_review_lifecycle/migration.sql",
+);
+const eventReviewMigrationSql = existsSync(eventReviewMigrationPath)
+  ? readFileSync(eventReviewMigrationPath, "utf8")
+  : "";
 const prismaSchema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
 const typesSource = readFileSync(
   resolve(process.cwd(), "src/features/tambike-demo/types.ts"),
@@ -90,6 +97,46 @@ describe("account role and event location Prisma schema contract", () => {
     expect(prismaSchema).toContain("accountStatus");
     expect(prismaSchema).toContain("suspendedByUserId");
     expect(prismaSchema).toContain('relation("UserSuspendedBy"');
+  });
+
+  test("persists a distinct disabled event state and versioned review history", () => {
+    const models = new Map(Prisma.dmmf.datamodel.models.map((model) => [model.name, model]));
+
+    expect(typesSource).toMatch(/EventStatus[\s\S]*"DISABLED"/);
+    expect(prismaSchema).toContain("DISABLED");
+    expect(prismaSchema).toContain("submissionVersion");
+    expect(prismaSchema).toContain("disabledByUserId");
+    expect(prismaSchema).toContain("@@unique([eventId, submissionVersion])");
+    expect(prismaSchema).toContain('relation("EventDisabledBy"');
+    expect(prismaSchema).toContain('relation("EventReviewer"');
+    expect(models.get("Event")?.fields.find((field) => field.name === "submissionVersion"))
+      .toMatchObject({ kind: "scalar", type: "Int" });
+    expect(models.get("EventApproval")?.fields.map((field) => field.name)).toEqual(
+      expect.arrayContaining(["submissionVersion", "submittedAt", "reviewer"]),
+    );
+    expect(models.get("EventApproval")?.fields.find((field) => field.name === "reviewer"))
+      .toMatchObject({ kind: "object", relationName: "EventReviewer" });
+  });
+
+  test("backfills review versions before enforcing unique history and safe reviewer references", () => {
+    expect(eventReviewMigrationSql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(eventReviewMigrationSql).toContain('ALTER TYPE "EventStatus" ADD VALUE IF NOT EXISTS \'DISABLED\'');
+    expect(eventReviewMigrationSql).toContain('ROW_NUMBER() OVER (');
+    expect(eventReviewMigrationSql).toContain('ORDER BY COALESCE("decidedAt", "createdAt"), "id"');
+    expect(eventReviewMigrationSql).toContain('SET "submissionVersion" = ranked.version');
+    expect(eventReviewMigrationSql).toContain('SET "submittedAt" = "createdAt"');
+    expect(eventReviewMigrationSql).toContain(
+      'ALTER COLUMN "submissionVersion" DROP DEFAULT',
+    );
+    expect(eventReviewMigrationSql).toContain(
+      'CREATE UNIQUE INDEX "EventApproval_eventId_submissionVersion_key"',
+    );
+    expect(eventReviewMigrationSql).toContain("EVENT_REVIEW_ORPHAN_REVIEWER");
+    expect(eventReviewMigrationSql).not.toContain('SET "reviewerId" = NULL');
+    expect(eventReviewMigrationSql).toContain(
+      'FOREIGN KEY ("reviewerId") REFERENCES "User"("id")\n  ON DELETE SET NULL ON UPDATE CASCADE',
+    );
+    expect(eventReviewMigrationSql.trimEnd().endsWith("COMMIT;")).toBe(true);
   });
 
   test("removes venue ownership and approval-type relations from the generated model", () => {

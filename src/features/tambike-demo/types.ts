@@ -32,6 +32,7 @@ export type EventStatus =
   | "COMPLETED"
   | "NEEDS_CHANGES"
   | "REJECTED"
+  | "DISABLED"
   | "CANCELLED";
 
 export type EventType =
