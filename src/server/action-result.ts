@@ -24,7 +24,7 @@ export function actionError(
     isBackendError &&
     "code" in error &&
     typeof error.code === "string" &&
-    error.code in defaultMessages
+    Object.hasOwn(defaultMessages, error.code)
   ) {
     const code = error.code as keyof typeof defaultMessages;
     return {

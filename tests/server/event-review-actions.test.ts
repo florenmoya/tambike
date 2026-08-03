@@ -480,6 +480,7 @@ describe("admin event review actions", () => {
   test.each([
     ["CONFLICT", "This event changed in another session. Reload and try again."],
     ["FORBIDDEN", "Your account cannot perform this action."],
+    ["INVALID_INPUT", "Review the highlighted fields and try again."],
     ["NOT_FOUND", "This event is no longer available."],
     ["UNAUTHENTICATED", "Log in with an admin account and try again."],
   ] as const)("maps %s without revalidation", async (code, message) => {
@@ -503,6 +504,33 @@ describe("admin event review actions", () => {
     });
     expect(revalidate).not.toHaveBeenCalled();
   });
+
+  test.each(["constructor", "UNEXPECTED_BACKEND_CODE"])(
+    "rethrows a backend-named error with unrecognized code %s",
+    async (code) => {
+      const { createAdminEventReviewActions } = await loadAdminCore();
+      const malformed = Object.assign(new Error(code), {
+        code,
+        name: "BackendError",
+      });
+      const revalidate = vi.fn();
+      const action = createAdminEventReviewActions(
+        dependencies(
+          adminBackend({
+            reviewEvent: async () => {
+              throw malformed;
+            },
+          }),
+          { revalidate },
+        ),
+      );
+
+      await expect(action.reviewEventAction(idleAdmin, reviewForm())).rejects.toBe(
+        malformed,
+      );
+      expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
 
   test("maps a backend conflict across a development module reload", async () => {
     const { createAdminEventReviewActions } = await loadAdminCore();
