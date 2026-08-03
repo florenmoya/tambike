@@ -46,8 +46,11 @@ describe("Tambike backend domain rules", () => {
     const admin = await backend.loginWithPassword("admin@bayanko.ph", "secret_123");
 
     expect(guestSnapshot.users).toEqual([]);
+    expect(guestSnapshot.events).toHaveLength(20);
     expect(backend.getSnapshot(rider.sessionToken).users).toEqual([]);
+    expect(backend.getSnapshot(rider.sessionToken).events).toHaveLength(20);
     expect(backend.getSnapshot(organizer.sessionToken).users).toEqual([]);
+    expect(backend.getSnapshot(organizer.sessionToken).events).toHaveLength(24);
     expect(backend.getSnapshot(rider.sessionToken).currentUser?.email).toBe("snapshot-rider@example.test");
 
     const snapshot = backend.getSnapshot(admin.sessionToken);
@@ -311,6 +314,12 @@ describe("Tambike backend domain rules", () => {
       endDate: "2099-07-25",
     });
 
+    await Promise.all(
+      [farther, nearest, earliest].map((event) =>
+        backend.approvePublish(actors.admin.sessionToken, event.id),
+      ),
+    );
+
     expect(earliest.date).toBe("Sat · Jul 25, 2099");
     expect(backend.listEvents({ q: "Order Test" }).map((event) => event.id)).toEqual([
       earliest.id,
@@ -331,6 +340,12 @@ describe("Tambike backend domain rules", () => {
       title: "Direct Review Event",
       status: "PUBLISHED",
       organizerId: TAMBIKE_ORGANIZER_PROFILE_ID,
+    });
+    await expect(
+      backend.getAdminEventReview(actors.admin.sessionToken, published.id),
+    ).resolves.toMatchObject({
+      submissionVersion: 1,
+      history: [{ submissionVersion: 1, decision: "published" }],
     });
     expect(backend).not.toHaveProperty("approveVenueWithConditions");
   });

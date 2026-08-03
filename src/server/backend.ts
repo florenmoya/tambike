@@ -66,6 +66,14 @@ import type {
   AccountAccessMutationInput,
   AdminUserAccount,
 } from "@/features/admin/account-access-types";
+import type {
+  AdminEventReviewView,
+  EventReviewHistoryItem,
+  EventStatusMutationInput,
+  OrganizerEventSubmissionView,
+  ResubmitEventInput,
+  ReviewEventInput,
+} from "@/features/admin/event-review-types";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
   EventScheduleValidationError,
@@ -88,6 +96,7 @@ import type {
   CreateEventInput,
   Event,
   EventSchedule,
+  EventStatus,
   EventType,
   OrganizerQrMode,
   Pass,
@@ -259,6 +268,11 @@ export type AuditAction =
   | "CHECK_IN_SETTINGS_UPDATED"
   | "SELF_CHECK_IN_REQUESTED"
   | "ADMIN_PUBLISHED"
+  | "EVENT_CHANGES_REQUESTED"
+  | "EVENT_REJECTED"
+  | "EVENT_RESUBMITTED"
+  | "EVENT_DISABLED"
+  | "EVENT_RESTORED_TO_REVIEW"
   | "ATTENDEE_EXPORT_CREATED"
   | "LEAD_EXPORT_CREATED"
   | "GIVEAWAY_CREATED"
@@ -399,6 +413,27 @@ type AuditRecord = {
   targetId?: string;
   metadata?: AuditMetadata;
   createdAt: Date;
+};
+
+type BackendEventApproval = EventReviewHistoryItem & {
+  eventId: string;
+  reviewerId?: string;
+};
+
+type BackendEventDisableMetadata = {
+  disabledAt: string;
+  disabledByUserId: string;
+  reason: string;
+};
+
+type BackendEventNotification = {
+  id: string;
+  userId: string;
+  kind: "EVENT_CHANGES_REQUESTED" | "EVENT_REJECTED";
+  title: string;
+  body: string;
+  href: string;
+  createdAt: string;
 };
 
 type AuditMetadataValue = string | number | boolean | null;
@@ -821,6 +856,7 @@ export type TambikeTestFixture = {
   >;
   rsvps?: Array<RSVP & { userId: string; goingAt?: string; id?: string }>;
   passes?: Array<Pass & { userId: string }>;
+  events?: Event[];
 };
 
 export type TambikeTestSeedOptions = {
@@ -943,7 +979,10 @@ async function createSeed(options: TambikeTestSeedOptions = {}): Promise<Backend
     ...fixtureUsers,
   ];
 
-  const events = demoEvents.map(cloneEvent);
+  const events = [
+    ...demoEvents.map(cloneEvent),
+    ...(options.fixture?.events ?? []).map(cloneEvent),
+  ];
   for (const event of events) {
     for (const perk of event.perks) {
       const quantity = options.perkQuantities?.[perk.id];
@@ -973,6 +1012,15 @@ export class TambikeBackend {
   private readonly users = new Map<string, BackendUser>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly events = new Map<string, Event>();
+  private readonly eventApprovals = new Map<string, BackendEventApproval[]>();
+  private readonly eventUpdatedAt = new Map<string, string>();
+  private readonly eventSubmissionVersions = new Map<string, number>();
+  private readonly eventDraftInputs = new Map<string, CreateEventInput>();
+  private readonly eventDisableMetadata = new Map<
+    string,
+    BackendEventDisableMetadata
+  >();
+  private readonly eventNotifications = new Map<string, BackendEventNotification>();
   private readonly rsvps = new Map<string, RSVP & { userId: string; goingAt?: string; id?: string }>();
   private readonly rosterSettings = new Map<string, boolean>();
   private readonly passes = new Map<string, Pass & { userId: string }>();
@@ -1026,8 +1074,22 @@ export class TambikeBackend {
       this.users.set(user.id, { ...user });
     }
 
+    const initializedAt = new Date().toISOString();
     for (const event of seed.events) {
       this.events.set(event.id, cloneEvent(event));
+      this.eventUpdatedAt.set(event.id, initializedAt);
+      this.eventSubmissionVersions.set(event.id, 1);
+      const decision = this.historyDecisionForEventStatus(event.status);
+      this.eventApprovals.set(event.id, [
+        {
+          id: `event-approval-${randomUUID()}`,
+          eventId: event.id,
+          submissionVersion: 1,
+          decision,
+          submittedAt: initializedAt,
+          ...(decision === "pending" ? {} : { decidedAt: initializedAt }),
+        },
+      ]);
     }
 
     for (const rsvp of seed.rsvps) {
@@ -1067,7 +1129,7 @@ export class TambikeBackend {
           }))
       : [];
 
-    const events = this.listEvents();
+    const events = this.listEventsForViewer(currentUser);
 
     return {
       currentUser: currentUser ? cloneUser(currentUser) : null,
@@ -1567,7 +1629,35 @@ export class TambikeBackend {
       ],
     };
 
+    const submittedAt = new Date().toISOString();
     this.events.set(event.id, event);
+    this.eventUpdatedAt.set(event.id, submittedAt);
+    this.eventSubmissionVersions.set(event.id, 1);
+    this.eventApprovals.set(event.id, [
+      {
+        id: `event-approval-${randomUUID()}`,
+        eventId: event.id,
+        submissionVersion: 1,
+        decision: "pending",
+        submittedAt,
+      },
+    ]);
+    this.eventDraftInputs.set(event.id, {
+      title,
+      type: input.type,
+      expectedRiders,
+      perkPreview,
+      ...location,
+      startDate: input.startDate.trim(),
+      startTime: input.startTime.trim(),
+      endDate: input.endDate.trim(),
+      endTime: input.endTime.trim(),
+      timeZone: input.timeZone.trim(),
+      recurrence: input.recurrence,
+      ...(input.recurrenceEndsOn?.trim()
+        ? { recurrenceEndsOn: input.recurrenceEndsOn.trim() }
+        : {}),
+    });
     this.checkInSettings.set(event.id, {
       eventId: event.id,
       mode: "staff_only",
@@ -4422,6 +4512,9 @@ export class TambikeBackend {
   async registerForEvent(sessionToken: string, eventId: string, input: RegistrationInput) {
     const user = this.requireUser(sessionToken);
     const event = this.requireEvent(eventId);
+    if (event.status === "DISABLED") {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
     const cta = getEventCtaState(event);
     if (!cta.canRegister && !cta.canShowInterest) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
@@ -4610,6 +4703,7 @@ export class TambikeBackend {
 
   async getEventAttendeeSummary(eventId: string): Promise<EventAttendeeSummary> {
     const event = this.requireEvent(eventId);
+    this.requirePublicEvent(event);
     return this.buildMemoryRosterSummary(event, this.rosterSettings.get(event.id) ?? false);
   }
 
@@ -4617,6 +4711,7 @@ export class TambikeBackend {
     eventId: string,
   ): Promise<EventAttendeePublicPreview> {
     const event = this.requireEvent(eventId);
+    this.requirePublicEvent(event);
     const enabled = this.rosterSettings.get(event.id) ?? false;
     const summary = this.buildMemoryRosterSummary(event, enabled);
     if (!enabled) return { summary, attendees: [] };
@@ -4868,15 +4963,276 @@ export class TambikeBackend {
     return { ...pass };
   }
 
-  async approvePublish(sessionToken: string, eventId: string) {
-    const user = this.requireRole(sessionToken, "admin");
+  async getAdminEventReview(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<AdminEventReviewView> {
+    this.requireRole(sessionToken, "admin");
+    return this.toAdminEventReviewView(this.requireEvent(eventId));
+  }
+
+  async reviewEvent(
+    sessionToken: string,
+    eventId: string,
+    input: ReviewEventInput,
+  ): Promise<AdminEventReviewView> {
+    const reviewer = this.requireRole(sessionToken, "admin");
     const event = this.requireEvent(eventId);
-    if (event.status !== "PENDING_ADMIN_REVIEW") {
+    this.requireEventStatus(event, ["PENDING_ADMIN_REVIEW"]);
+    this.requireExpectedEventUpdate(event.id, input.expectedUpdatedAt);
+
+    if (!["PUBLISH", "REQUEST_CHANGES", "REJECT"].includes(input.decision)) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
-    event.status = "PUBLISHED";
-    this.audit("ADMIN_PUBLISHED", user.id, event.id);
-    return cloneEvent(event);
+    const reason =
+      input.decision === "PUBLISH"
+        ? undefined
+        : this.requireEventReason(input.reason, 1000);
+    const submissionVersion = this.requireEventSubmissionVersion(event.id);
+    const history = this.requireEventApprovalHistory(event.id);
+    const current = history.find(
+      (item) =>
+        item.submissionVersion === submissionVersion && item.decision === "pending",
+    );
+    if (!current) throw new BackendError("CONFLICT", "CONFLICT");
+
+    const transition =
+      input.decision === "PUBLISH"
+        ? {
+            status: "PUBLISHED" as const,
+            decision: "published" as const,
+            auditAction: "ADMIN_PUBLISHED" as const,
+          }
+        : input.decision === "REQUEST_CHANGES"
+          ? {
+              status: "NEEDS_CHANGES" as const,
+              decision: "needs_changes" as const,
+              auditAction: "EVENT_CHANGES_REQUESTED" as const,
+            }
+          : {
+              status: "REJECTED" as const,
+              decision: "rejected" as const,
+              auditAction: "EVENT_REJECTED" as const,
+            };
+    const decidedAt = this.nextEventUpdatedAt(event.id);
+    event.status = transition.status;
+    current.decision = transition.decision;
+    current.reviewerId = reviewer.id;
+    current.reviewerName = reviewer.displayName;
+    current.decidedAt = decidedAt;
+    if (reason) current.reason = reason;
+    this.eventUpdatedAt.set(event.id, decidedAt);
+    this.audit(transition.auditAction, reviewer.id, event.id, {
+      previousStatus: "PENDING_ADMIN_REVIEW",
+      nextStatus: transition.status,
+      submissionVersion,
+      ...(reason ? { reason } : {}),
+    });
+    if (transition.decision === "needs_changes" || transition.decision === "rejected") {
+      this.recordEventReviewNotification(event, transition.auditAction, reason!);
+    }
+    return this.toAdminEventReviewView(event);
+  }
+
+  async disableEvent(
+    sessionToken: string,
+    eventId: string,
+    input: EventStatusMutationInput,
+  ): Promise<AdminEventReviewView> {
+    const administrator = this.requireRole(sessionToken, "admin");
+    const event = this.requireEvent(eventId);
+    this.requireEventStatus(event, ["PUBLISHED"]);
+    this.requireExpectedEventUpdate(event.id, input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+    const disabledAt = this.nextEventUpdatedAt(event.id);
+
+    event.status = "DISABLED";
+    this.eventUpdatedAt.set(event.id, disabledAt);
+    this.eventDisableMetadata.set(event.id, {
+      disabledAt,
+      disabledByUserId: administrator.id,
+      reason,
+    });
+    this.audit("EVENT_DISABLED", administrator.id, event.id, {
+      previousStatus: "PUBLISHED",
+      nextStatus: "DISABLED",
+      submissionVersion: this.requireEventSubmissionVersion(event.id),
+      reason,
+    });
+    return this.toAdminEventReviewView(event);
+  }
+
+  async restoreEventToReview(
+    sessionToken: string,
+    eventId: string,
+    input: EventStatusMutationInput,
+  ): Promise<AdminEventReviewView> {
+    const administrator = this.requireRole(sessionToken, "admin");
+    const event = this.requireEvent(eventId);
+    this.requireEventStatus(event, ["DISABLED"]);
+    this.requireExpectedEventUpdate(event.id, input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+    const previousDisable = this.eventDisableMetadata.get(event.id);
+    const submittedAt = this.nextEventUpdatedAt(event.id);
+    const submissionVersion = this.requireEventSubmissionVersion(event.id) + 1;
+
+    event.status = "PENDING_ADMIN_REVIEW";
+    this.eventUpdatedAt.set(event.id, submittedAt);
+    this.eventSubmissionVersions.set(event.id, submissionVersion);
+    this.eventDisableMetadata.delete(event.id);
+    this.requireEventApprovalHistory(event.id).push({
+      id: `event-approval-${randomUUID()}`,
+      eventId: event.id,
+      submissionVersion,
+      decision: "pending",
+      reason,
+      submittedAt,
+    });
+    this.audit("EVENT_RESTORED_TO_REVIEW", administrator.id, event.id, {
+      previousStatus: "DISABLED",
+      nextStatus: "PENDING_ADMIN_REVIEW",
+      submissionVersion,
+      reason,
+      ...(previousDisable
+        ? {
+            disabledAt: previousDisable.disabledAt,
+            disabledByUserId: previousDisable.disabledByUserId,
+          }
+        : {}),
+    });
+    return this.toAdminEventReviewView(event);
+  }
+
+  async getOrganizerEventSubmission(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<OrganizerEventSubmissionView> {
+    const organizer = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireOwnedApprovedOrganizer(organizer, event);
+    return this.toOrganizerEventSubmissionView(event);
+  }
+
+  async resubmitEvent(
+    sessionToken: string,
+    eventId: string,
+    input: ResubmitEventInput,
+  ): Promise<OrganizerEventSubmissionView> {
+    const organizer = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireOwnedApprovedOrganizer(organizer, event);
+    this.requireEventStatus(event, ["NEEDS_CHANGES"]);
+    this.requireExpectedEventUpdate(event.id, input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+
+    const title = input.event.title.trim();
+    const perkPreview = input.event.perkPreview.trim();
+    const expectedRiders = Number(input.event.expectedRiders);
+    const location = normalizeEventLocation(input.event);
+    let schedule: EventSchedule;
+    try {
+      schedule = parseEventScheduleInput(input.event);
+    } catch (error) {
+      if (error instanceof EventScheduleValidationError) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      throw error;
+    }
+    if (
+      !title ||
+      !perkPreview ||
+      !Number.isInteger(expectedRiders) ||
+      expectedRiders <= 0 ||
+      !location
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const labels = formatEventSchedule(schedule);
+    const submittedAt = this.nextEventUpdatedAt(event.id);
+    const submissionVersion = this.requireEventSubmissionVersion(event.id) + 1;
+
+    Object.assign(event, {
+      title,
+      type: input.event.type,
+      status: "PENDING_ADMIN_REVIEW" as const,
+      ...location,
+      date: labels.date,
+      time: labels.time,
+      ...schedule,
+      shortDescription: `${title} is awaiting admin review.`,
+      whatHappens:
+        "Organizer-created event submitted directly for admin review and publication.",
+      expectedRiders,
+      perkPreview,
+      tags: [input.event.type, "Admin review"],
+      riskFlags: this.riskFlagsFor(input.event.type, expectedRiders),
+      rules: defaultRulesForEvent(input.event.type),
+      perks: [
+        {
+          id: event.perks[0]?.id ?? `perk-${event.id}`,
+          type: "Check-in perk",
+          description: perkPreview,
+          ...(event.perks[0]?.quantity
+            ? { quantity: event.perks[0].quantity }
+            : {}),
+        },
+      ],
+    });
+    this.eventUpdatedAt.set(event.id, submittedAt);
+    this.eventSubmissionVersions.set(event.id, submissionVersion);
+    this.eventDraftInputs.set(event.id, {
+      title,
+      type: input.event.type,
+      expectedRiders,
+      perkPreview,
+      ...location,
+      startDate: input.event.startDate.trim(),
+      startTime: input.event.startTime.trim(),
+      endDate: input.event.endDate.trim(),
+      endTime: input.event.endTime.trim(),
+      timeZone: input.event.timeZone.trim(),
+      recurrence: input.event.recurrence,
+      ...(input.event.recurrenceEndsOn?.trim()
+        ? { recurrenceEndsOn: input.event.recurrenceEndsOn.trim() }
+        : {}),
+    });
+    this.requireEventApprovalHistory(event.id).push({
+      id: `event-approval-${randomUUID()}`,
+      eventId: event.id,
+      submissionVersion,
+      decision: "pending",
+      reason,
+      submittedAt,
+    });
+    this.audit("EVENT_RESUBMITTED", organizer.id, event.id, {
+      previousStatus: "NEEDS_CHANGES",
+      nextStatus: "PENDING_ADMIN_REVIEW",
+      submissionVersion,
+      reason,
+    });
+    return this.toOrganizerEventSubmissionView(event);
+  }
+
+  async getRejectedEventCopySource(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<CreateEventInput> {
+    const organizer = this.requireUser(sessionToken);
+    const event = this.requireEvent(eventId);
+    this.requireOwnedApprovedOrganizer(organizer, event);
+    this.requireEventStatus(event, ["REJECTED"]);
+    const source = this.eventDraftInputs.get(event.id);
+    if (!source) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return { ...source };
+  }
+
+  async approvePublish(sessionToken: string, eventId: string) {
+    const view = await this.getAdminEventReview(sessionToken, eventId);
+    const published = await this.reviewEvent(sessionToken, eventId, {
+      decision: "PUBLISH",
+      expectedUpdatedAt: view.expectedUpdatedAt,
+    });
+    return published.event;
   }
 
   async exportAttendeesCsv(sessionToken: string, eventId: string) {
@@ -4954,11 +5310,25 @@ export class TambikeBackend {
   }
 
   listEvents(query?: EventQueryInput) {
+    return this.listEventsForViewer(null, query);
+  }
+
+  private listEventsForViewer(
+    viewer: BackendUser | null,
+    query?: EventQueryInput,
+  ) {
+    const publicStatuses = new Set<EventStatus>(["PUBLISHED", "ONGOING", "COMPLETED"]);
     return sortEventsBySchedule(
       filterEventsByQuery(
-        Array.from(this.events.values()).map((event) =>
-          this.withAttendanceCounts(event),
-        ),
+        Array.from(this.events.values())
+          .filter(
+            (event) =>
+              publicStatuses.has(event.status) ||
+              viewer?.role === "admin" ||
+              (viewer?.role === "organizer" &&
+                viewer.organizerProfileId === event.organizerId),
+          )
+          .map((event) => this.withAttendanceCounts(event)),
         query,
       ),
     );
@@ -7980,6 +8350,145 @@ export class TambikeBackend {
     return session && session.expiresAt >= new Date()
       ? this.users.get(session.userId) ?? null
       : null;
+  }
+
+  private historyDecisionForEventStatus(
+    status: EventStatus,
+  ): EventReviewHistoryItem["decision"] {
+    if (status === "PENDING_ADMIN_REVIEW") return "pending";
+    if (status === "NEEDS_CHANGES") return "needs_changes";
+    if (status === "REJECTED") return "rejected";
+    return "published";
+  }
+
+  private requireEventStatus(event: Event, allowed: readonly EventStatus[]) {
+    if (!allowed.includes(event.status)) {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
+  }
+
+  private requirePublicEvent(event: Event) {
+    if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(event.status)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+  }
+
+  private requireExpectedEventUpdate(eventId: string, expected: string) {
+    if (this.eventUpdatedAt.get(eventId) !== expected) {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
+  }
+
+  private requireEventSubmissionVersion(eventId: string) {
+    const submissionVersion = this.eventSubmissionVersions.get(eventId);
+    if (!submissionVersion) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return submissionVersion;
+  }
+
+  private requireEventApprovalHistory(eventId: string) {
+    const history = this.eventApprovals.get(eventId);
+    if (!history) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return history;
+  }
+
+  private nextEventUpdatedAt(eventId: string) {
+    const previous = Date.parse(this.eventUpdatedAt.get(eventId) ?? "");
+    return new Date(
+      Number.isFinite(previous)
+        ? Math.max(Date.now(), previous + 1)
+        : Date.now(),
+    ).toISOString();
+  }
+
+  private requireEventReason(reason: unknown, maximumLength: number) {
+    if (typeof reason !== "string") {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const normalized = reason.trim();
+    if (normalized.length < 10 || normalized.length > maximumLength) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return normalized;
+  }
+
+  private requireOwnedApprovedOrganizer(user: BackendUser, event: Event) {
+    if (
+      user.role !== "organizer" ||
+      user.verificationStatus !== "APPROVED" ||
+      !user.organizerProfileId ||
+      user.organizerProfileId !== event.organizerId
+    ) {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
+  }
+
+  private cloneEventReviewHistory(eventId: string): EventReviewHistoryItem[] {
+    return this.requireEventApprovalHistory(eventId).map((item) => ({
+      id: item.id,
+      submissionVersion: item.submissionVersion,
+      decision: item.decision,
+      ...(item.reviewerName ? { reviewerName: item.reviewerName } : {}),
+      ...(item.reason ? { reason: item.reason } : {}),
+      submittedAt: item.submittedAt,
+      ...(item.decidedAt ? { decidedAt: item.decidedAt } : {}),
+    }));
+  }
+
+  private toAdminEventReviewView(event: Event): AdminEventReviewView {
+    const organizer = Array.from(this.users.values()).find(
+      (candidate) => candidate.organizerProfileId === event.organizerId,
+    );
+    const expectedUpdatedAt = this.eventUpdatedAt.get(event.id);
+    if (!expectedUpdatedAt) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return {
+      event: cloneEvent(event),
+      organizerName: organizer?.displayName ?? "Unknown organizer",
+      submissionVersion: this.requireEventSubmissionVersion(event.id),
+      expectedUpdatedAt,
+      history: this.cloneEventReviewHistory(event.id),
+    };
+  }
+
+  private toOrganizerEventSubmissionView(
+    event: Event,
+  ): OrganizerEventSubmissionView {
+    const expectedUpdatedAt = this.eventUpdatedAt.get(event.id);
+    if (!expectedUpdatedAt) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    const history = this.cloneEventReviewHistory(event.id);
+    const latestDecision = [...history]
+      .reverse()
+      .find((item) => item.decision !== "pending");
+    return {
+      event: cloneEvent(event),
+      submissionVersion: this.requireEventSubmissionVersion(event.id),
+      expectedUpdatedAt,
+      ...(latestDecision ? { latestDecision: { ...latestDecision } } : {}),
+      history,
+    };
+  }
+
+  private recordEventReviewNotification(
+    event: Event,
+    kind: "EVENT_CHANGES_REQUESTED" | "EVENT_REJECTED",
+    reason: string,
+  ) {
+    const organizer = Array.from(this.users.values()).find(
+      (candidate) => candidate.organizerProfileId === event.organizerId,
+    );
+    if (!organizer) return;
+    const notification: BackendEventNotification = {
+      id: `event-notification-${randomUUID()}`,
+      userId: organizer.id,
+      kind,
+      title:
+        kind === "EVENT_CHANGES_REQUESTED"
+          ? "Changes requested"
+          : "Event submission rejected",
+      body: reason,
+      href: `/organizer/events/${encodeURIComponent(event.id)}`,
+      createdAt: new Date().toISOString(),
+    };
+    this.eventNotifications.set(notification.id, notification);
   }
 
   private requireUser(sessionToken: string) {
