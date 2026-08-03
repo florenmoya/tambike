@@ -16,7 +16,16 @@ export function actionError(
   error: unknown,
   overrides: Partial<typeof defaultMessages> = {},
 ): ActionState<never> {
-  if (error instanceof BackendError && error.code in defaultMessages) {
+  const isBackendError =
+    error instanceof BackendError ||
+    (error instanceof Error && error.name === "BackendError");
+  if (
+    error instanceof Error &&
+    isBackendError &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code in defaultMessages
+  ) {
     const code = error.code as keyof typeof defaultMessages;
     return {
       status: "error",

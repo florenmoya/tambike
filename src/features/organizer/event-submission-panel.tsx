@@ -19,6 +19,7 @@ import type {
 import type { ActionState } from "@/features/shared/action-state";
 import { EventEditorFields } from "@/features/organizer/event-editor-fields";
 import type { CreateEventInput, Event } from "@/features/tambike-demo/types";
+import { useOptionalDemo } from "@/features/tambike-demo/demo-provider";
 import { resubmitEventAction } from "@/server/organizer/event-submission-actions";
 
 const idleActionState: ActionState<OrganizerEventSubmissionView> = {
@@ -32,16 +33,20 @@ export function EventSubmissionPanel({
   initialView: OrganizerEventSubmissionView;
 }) {
   const [view, setView] = React.useState(initialView);
+  const synchronizePersistedEvent = useOptionalDemo()?.synchronizePersistedEvent;
   const submitAction = React.useCallback(
     async (
       previous: ActionState<OrganizerEventSubmissionView>,
       formData: FormData,
     ): Promise<ActionState<OrganizerEventSubmissionView>> => {
       const result = await resubmitEventAction(previous, formData);
-      if (result.status === "success") setView(result.data);
+      if (result.status === "success") {
+        setView(result.data);
+        synchronizePersistedEvent?.(result.data.event);
+      }
       return result;
     },
-    [],
+    [synchronizePersistedEvent],
   );
   const [state, formAction, pending] = React.useActionState(
     submitAction,
@@ -163,7 +168,7 @@ export function EventSubmissionPanel({
                 </p>
                 {state.status === "error" && state.code === "CONFLICT" ? (
                   <Button asChild className="min-h-11" variant="outline">
-                    <Link href={`/organizer/events/${view.event.id}`}>Reload event</Link>
+                    <a href={`/organizer/events/${view.event.id}`}>Reload event</a>
                   </Button>
                 ) : null}
                 <div className="grid gap-2 sm:flex sm:items-center">

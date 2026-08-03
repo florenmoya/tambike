@@ -626,6 +626,9 @@ function CreateEventSection({
                 recurrence: String(
                   formData.get("recurrence") ?? "NONE",
                 ) as CreateEventInput["recurrence"],
+                ...(formData.get("recurrenceEndsOn")
+                  ? { recurrenceEndsOn: String(formData.get("recurrenceEndsOn")) }
+                  : {}),
                 area: String(formData.get("area") ?? ""),
                 expectedRiders: Number(formData.get("expectedRiders") ?? 1),
                 perkPreview: String(formData.get("perkPreview") ?? ""),

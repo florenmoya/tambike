@@ -45,6 +45,26 @@ export function EventEditorFields({
 
   return (
     <>
+      <input
+        type="hidden"
+        name="recurrence"
+        value={defaults?.recurrence ?? "NONE"}
+        disabled={disabled}
+      />
+      {defaults?.recurrenceEndsOn ? (
+        <input
+          type="hidden"
+          name="recurrenceEndsOn"
+          value={defaults.recurrenceEndsOn}
+          disabled={disabled}
+        />
+      ) : null}
+      <input
+        type="hidden"
+        name="timeZone"
+        value={defaults?.timeZone ?? "Asia/Manila"}
+        disabled={disabled}
+      />
       <EditorField
         error={fieldErrors?.title?.[0]}
         htmlFor={`${idPrefix}-title`}
@@ -78,22 +98,6 @@ export function EventEditorFields({
               {type}
             </option>
           ))}
-        </select>
-      </EditorField>
-
-      <EditorField
-        error={fieldErrors?.recurrence?.[0]}
-        htmlFor={`${idPrefix}-recurrence`}
-        label="Schedule"
-      >
-        <select
-          {...inputProps("recurrence")}
-          className="min-h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-          required
-          autoComplete="off"
-          defaultValue={defaults?.recurrence ?? "NONE"}
-        >
-          <option value="NONE">One-time event</option>
         </select>
       </EditorField>
 
@@ -153,22 +157,6 @@ export function EventEditorFields({
           defaultValue={defaults?.endTime ?? ""}
         />
       </EditorField>
-      <EditorField
-        error={fieldErrors?.timeZone?.[0]}
-        htmlFor={`${idPrefix}-timeZone`}
-        label="Time zone"
-      >
-        <select
-          {...inputProps("timeZone")}
-          className="min-h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-          required
-          autoComplete="off"
-          defaultValue={defaults?.timeZone ?? "Asia/Manila"}
-        >
-          <option value="Asia/Manila">Philippines (Asia/Manila)</option>
-        </select>
-      </EditorField>
-
       <EditorField
         error={fieldErrors?.locationName?.[0]}
         htmlFor={`${idPrefix}-locationName`}

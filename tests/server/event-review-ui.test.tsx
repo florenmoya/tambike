@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, createElement, type ComponentType } from "react";
+import { act, createElement, type ComponentType, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
@@ -13,6 +13,14 @@ import type {
 } from "../../src/features/admin/event-review-types";
 import type { ActionState } from "../../src/features/shared/action-state";
 import type { Event } from "../../src/features/tambike-demo/types";
+
+vi.mock("next/link", async () => {
+  const react = await import("react");
+  return {
+    default: ({ href, ...props }: { href: string; children: ReactNode }) =>
+      react.createElement("a", { ...props, href, "data-next-link": "true" }),
+  };
+});
 
 const adminActions = vi.hoisted(() => ({
   reviewEventAction: vi.fn(),
@@ -115,6 +123,11 @@ async function loadEditorFields() {
       disabled?: boolean;
     }>;
   }>;
+}
+
+async function loadDemoProvider() {
+  const modulePath = `../../src/features/tambike-demo/${"demo-provider"}`;
+  return import(modulePath);
 }
 
 afterEach(() => {
@@ -305,6 +318,11 @@ describe("persisted event review UI", () => {
       await act(async () => requestChanges.click());
       const form = document.querySelector<HTMLFormElement>('[role="dialog"] form')!;
       const reason = form.querySelector<HTMLTextAreaElement>('textarea[name="reason"]')!;
+      const cancel = [...form.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Cancel",
+      )!;
+      cancel.focus();
+      expect(document.activeElement).toBe(cancel);
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
           reason,
@@ -454,8 +472,9 @@ describe("persisted event review UI", () => {
           startTime: "18:00",
           endDate: "2099-08-07",
           endTime: "21:00",
-          timeZone: "Asia/Manila",
-          recurrence: "NONE",
+          timeZone: "Asia/Tokyo",
+          recurrence: "WEEKLY",
+          recurrenceEndsOn: "2099-09-04",
           locationName: "Quezon Memorial Circle",
           locationAddress: "Elliptical Road, Quezon City",
           locationMapLink: "https://maps.example.test/quezon-circle",
@@ -470,8 +489,170 @@ describe("persisted event review UI", () => {
     expect(markup).toContain('for="copy-event-title"');
     expect(markup).toContain('name="title"');
     expect(markup).toContain('value="Quezon City Night Ride"');
-    expect(markup).toContain('name="recurrence"');
-    expect(markup.match(/min-h-11/g)?.length).toBeGreaterThanOrEqual(14);
+    expect(markup).toContain('<input type="hidden" name="recurrence" value="WEEKLY"');
+    expect(markup).toContain('<input type="hidden" name="recurrenceEndsOn" value="2099-09-04"');
+    expect(markup).toContain('<input type="hidden" name="timeZone" value="Asia/Tokyo"');
+    expect(markup).not.toContain("Schedule</label>");
+    expect(markup).not.toContain("Time zone</label>");
+    expect(markup.match(/min-h-11/g)?.length).toBeGreaterThanOrEqual(12);
+  });
+
+  test("synchronizes successful admin and organizer transitions into the shared event catalog", async () => {
+    const { EventReviewControls } = await loadAdminControls();
+    const { EventSubmissionPanel } = await loadOrganizerPanel();
+    const { DemoProvider, useDemo } = await loadDemoProvider();
+    const unrelated = { ...event, id: "event-2", title: "Unrelated event" };
+    const initialState = {
+      currentUser: {
+        id: "admin-1",
+        displayName: "Tambike Ops",
+        email: "ops@example.test",
+        role: "admin" as const,
+        verificationStatus: "APPROVED" as const,
+        accountStatus: "ACTIVE" as const,
+        area: "Metro Manila",
+        joinedAt: "2026-01-01T00:00:00.000Z",
+      },
+      users: [],
+      events: [event, unrelated],
+      passes: [],
+      checkInSettings: [],
+      passCreated: false,
+    };
+
+    function CatalogProbe() {
+      const { events } = useDemo();
+      return createElement(
+        "output",
+        { "data-testid": "catalog" },
+        events.map((item: Event) => `${item.id}:${item.status}`).join("|"),
+      );
+    }
+
+    async function runTransition(
+      detail: ReactNode,
+      submitLabel: string,
+      action: ReturnType<typeof vi.fn>,
+      nextStatus: Event["status"],
+    ) {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      action.mockResolvedValueOnce({
+        status: "success",
+        code: "SUCCESS",
+        message: "Saved.",
+        data: nextStatus === "PUBLISHED"
+          ? { ...adminView(nextStatus), event: { ...event, status: nextStatus } }
+          : { ...organizerView(nextStatus), event: { ...event, status: nextStatus } },
+      });
+      try {
+        await act(async () => {
+          root.render(
+            createElement(
+              DemoProvider,
+              { initialState },
+              createElement("div", null, detail, createElement(CatalogProbe)),
+            ),
+          );
+        });
+        const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (candidate) => candidate.textContent?.trim() === submitLabel,
+        )!;
+        await act(async () => button.click());
+        const form = document.querySelector<HTMLFormElement>('[role="dialog"] form')
+          ?? container.querySelector<HTMLFormElement>("form")!;
+        if (submitLabel === "Update and resubmit") {
+          const reason = form.querySelector<HTMLTextAreaElement>('textarea[name="reason"]')!;
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+            reason,
+            "Clarified the route and assembly point.",
+          );
+          reason.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        await act(async () => form.requestSubmit());
+
+        expect(container.querySelector('[data-testid="catalog"]')?.textContent).toBe(
+          `event-1:${nextStatus}|event-2:PENDING_ADMIN_REVIEW`,
+        );
+      } finally {
+        await act(async () => root.unmount());
+      }
+    }
+
+    await runTransition(
+      createElement(EventReviewControls, { initialView: adminView("PENDING_ADMIN_REVIEW") }),
+      "Approve and publish",
+      adminActions.reviewEventAction,
+      "PUBLISHED",
+    );
+    await runTransition(
+      createElement(EventSubmissionPanel, { initialView: organizerView("NEEDS_CHANGES") }),
+      "Update and resubmit",
+      organizerActions.resubmitEventAction,
+      "PENDING_ADMIN_REVIEW",
+    );
+  });
+
+  test("uses a document reload after a conflict so a fresh retry adopts the new version", async () => {
+    const { EventReviewControls } = await loadAdminControls();
+    const container = document.createElement("div");
+    document.body.append(container);
+    let root = createRoot(container);
+    adminActions.reviewEventAction.mockResolvedValueOnce({
+      status: "error",
+      code: "CONFLICT",
+      message: "This event changed while you were reviewing it.",
+    });
+
+    await act(async () => {
+      root.render(createElement(EventReviewControls, {
+        initialView: adminView("PENDING_ADMIN_REVIEW"),
+      }));
+    });
+    await act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Approve and publish",
+      )!.click();
+    });
+    await act(async () => {
+      document.querySelector<HTMLFormElement>('[role="dialog"] form')!.requestSubmit();
+    });
+    const reload = document.querySelector<HTMLAnchorElement>('[role="dialog"] a[href="/admin/events/review/event-1"]')!;
+    expect(reload.textContent).toBe("Reload event");
+    expect(reload.hasAttribute("data-next-link")).toBe(false);
+
+    await act(async () => root.unmount());
+    container.replaceChildren();
+    root = createRoot(container);
+    const freshView = {
+      ...adminView("PENDING_ADMIN_REVIEW"),
+      expectedUpdatedAt: "2026-08-04T01:20:00.000Z",
+    };
+    adminActions.reviewEventAction.mockResolvedValueOnce({
+      status: "success",
+      code: "SUCCESS",
+      message: "Event published.",
+      data: { ...freshView, event: { ...freshView.event, status: "PUBLISHED" } },
+    });
+    try {
+      await act(async () => {
+        root.render(createElement(EventReviewControls, { initialView: freshView }));
+      });
+      await act(async () => {
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Approve and publish",
+        )!.click();
+      });
+      const retryForm = document.querySelector<HTMLFormElement>('[role="dialog"] form')!;
+      expect(retryForm.querySelector<HTMLInputElement>('input[name="expectedUpdatedAt"]')?.value)
+        .toBe("2026-08-04T01:20:00.000Z");
+      await act(async () => retryForm.requestSubmit());
+      expect(container.textContent).toContain("Event published.");
+      expect(container.textContent).toContain("Disable event");
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   test("removes all compatibility-only event status state and action wiring", () => {

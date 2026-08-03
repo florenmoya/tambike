@@ -504,6 +504,32 @@ describe("admin event review actions", () => {
     expect(revalidate).not.toHaveBeenCalled();
   });
 
+  test("maps a backend conflict across a development module reload", async () => {
+    const { createAdminEventReviewActions } = await loadAdminCore();
+    const revalidate = vi.fn();
+    const reloadedConflict = Object.assign(new Error("CONFLICT"), {
+      code: "CONFLICT" as const,
+      name: "BackendError",
+    });
+    const action = createAdminEventReviewActions(
+      dependencies(
+        adminBackend({
+          reviewEvent: async () => {
+            throw reloadedConflict;
+          },
+        }),
+        { revalidate },
+      ),
+    );
+
+    await expect(action.reviewEventAction(idleAdmin, reviewForm())).resolves.toEqual({
+      status: "error",
+      code: "CONFLICT",
+      message: "This event changed in another session. Reload and try again.",
+    });
+    expect(revalidate).not.toHaveBeenCalled();
+  });
+
   test.each([
     ["disable", "Event disabled."],
     ["restore", "Event restored to review."],

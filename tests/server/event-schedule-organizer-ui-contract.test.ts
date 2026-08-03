@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { EventEditorFields } from "../../src/features/organizer/event-editor-fields";
 
 const organizerSource = readFileSync(
   resolve(
@@ -33,14 +37,30 @@ describe("organizer structured event schedule UI", () => {
     expect(organizerSource).not.toContain('formData.get("time")');
   });
 
-  test("submits a one-time schedule with an explicit, restricted recurrence control", () => {
-    expect(editorSource).toContain('inputProps("timeZone")');
-    expect(editorSource).toContain('<option value="Asia/Manila">');
-    expect(editorSource).toContain('inputProps("recurrence")');
-    expect(editorSource).toContain('<option value="NONE">One-time event</option>');
+  test("submits fixed schedule values without showing dead single-option controls", () => {
+    const createMarkup = renderToStaticMarkup(
+      createElement(EventEditorFields, { idPrefix: "create-event" }),
+    );
+    const weeklyMarkup = renderToStaticMarkup(
+      createElement(EventEditorFields, {
+        idPrefix: "copy-event",
+        defaults: {
+          recurrence: "WEEKLY",
+          recurrenceEndsOn: "2026-09-30",
+          timeZone: "Asia/Tokyo",
+        },
+      }),
+    );
+
+    expect(createMarkup).toContain('<input type="hidden" name="recurrence" value="NONE"');
+    expect(createMarkup).toContain('<input type="hidden" name="timeZone" value="Asia/Manila"');
+    expect(createMarkup).not.toContain('name="recurrenceEndsOn"');
+    expect(weeklyMarkup).toContain('<input type="hidden" name="recurrence" value="WEEKLY"');
+    expect(weeklyMarkup).toContain('<input type="hidden" name="recurrenceEndsOn" value="2026-09-30"');
+    expect(weeklyMarkup).toContain('<input type="hidden" name="timeZone" value="Asia/Tokyo"');
+    expect(createMarkup).not.toContain("Schedule</label>");
+    expect(createMarkup).not.toContain("Time zone</label>");
     expect(organizerSource).toContain('formData.get("recurrence") ?? "NONE"');
-    expect(editorSource).not.toContain('value="WEEKLY"');
-    expect(editorSource).not.toContain('recurrence === "WEEKLY"');
-    expect(editorSource).not.toContain('inputProps("recurrenceEndsOn")');
+    expect(organizerSource).toContain('formData.get("recurrenceEndsOn")');
   });
 });

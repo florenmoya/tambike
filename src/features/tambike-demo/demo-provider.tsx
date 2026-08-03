@@ -74,6 +74,7 @@ interface DemoContextValue {
   reorderMotorcyclePhotos: (mediaIds: string[]) => Promise<MemberProfileEditorView>;
   requireLogin: (notice: string) => boolean;
   events: Event[];
+  synchronizePersistedEvent: (event: Event) => void;
   passes: Pass[];
   checkInSettings: EventCheckInSettings[];
   applyServerState: (state: DemoState) => void;
@@ -138,6 +139,14 @@ export function DemoProvider({
   const [scannerOutcome, setScannerOutcomeState] = useState<ScannerOutcome>("idle");
 
   const role: Role = currentUser?.role ?? "guest";
+
+  const synchronizePersistedEvent = useCallback((persistedEvent: Event) => {
+    setEvents((currentEvents) =>
+      currentEvents.map((event) =>
+        event.id === persistedEvent.id ? persistedEvent : event,
+      ),
+    );
+  }, []);
 
   const applyState = useCallback((nextState: DemoState) => {
     setUsers(nextState.users);
@@ -331,6 +340,7 @@ export function DemoProvider({
       reorderMotorcyclePhotos,
       requireLogin,
       events,
+      synchronizePersistedEvent,
       passes,
       checkInSettings,
       applyServerState: applyState,
@@ -358,6 +368,7 @@ export function DemoProvider({
       createEventDraft,
       currentUser,
       events,
+      synchronizePersistedEvent,
       issueSelfCheckInQr,
       loginWithPassword,
       logout,
@@ -393,4 +404,8 @@ export function useDemo() {
     throw new Error("useDemo must be used within DemoProvider");
   }
   return context;
+}
+
+export function useOptionalDemo() {
+  return useContext(DemoContext);
 }

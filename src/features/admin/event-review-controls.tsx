@@ -18,6 +18,7 @@ import type {
   EventReviewHistoryItem,
 } from "@/features/admin/event-review-types";
 import type { ActionState } from "@/features/shared/action-state";
+import { useOptionalDemo } from "@/features/tambike-demo/demo-provider";
 import {
   disableEventAction,
   restoreEventAction,
@@ -53,6 +54,7 @@ export function EventReviewControls({
   const [feedback, setFeedback] = React.useState("");
   const [requestPending, setRequestPending] = React.useState(false);
   const pendingRef = React.useRef(false);
+  const synchronizePersistedEvent = useOptionalDemo()?.synchronizePersistedEvent;
 
   const selectAction = (kind: ReviewAction) => {
     if (pendingRef.current) return;
@@ -83,10 +85,11 @@ export function EventReviewControls({
       pendingRef.current = false;
       setRequestPending(false);
       setView(nextView);
+      synchronizePersistedEvent?.(nextView.event);
       setFeedback(message);
       setSelected(null);
     },
-    [selected],
+    [selected, synchronizePersistedEvent],
   );
   const cancelRequest = React.useCallback((origin: SelectedReviewAction) => {
     if (pendingRef.current || selected?.key !== origin.key) return;
@@ -278,6 +281,10 @@ function ReviewActionDialog({
   const needsReason = selected.kind !== "publish";
   const reasonError =
     state.status === "error" ? state.fieldErrors?.reason?.[0] : undefined;
+  const reasonRef = React.useRef<HTMLTextAreaElement>(null);
+  React.useEffect(() => {
+    if (reasonError) reasonRef.current?.focus();
+  }, [reasonError]);
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onCancel(selected)}>
@@ -318,6 +325,7 @@ function ReviewActionDialog({
                   {config.reasonLabel}
                 </label>
                 <textarea
+                  ref={reasonRef}
                   id="event-review-reason"
                   name="reason"
                   required
@@ -358,7 +366,7 @@ function ReviewActionDialog({
             </p>
             {state.status === "error" && state.code === "CONFLICT" ? (
               <Button asChild className="min-h-11" variant="outline">
-                <Link href={`/admin/events/review/${selected.eventId}`}>Reload event</Link>
+                <a href={`/admin/events/review/${selected.eventId}`}>Reload event</a>
               </Button>
             ) : null}
             <div className="grid gap-2 sm:flex sm:justify-end">
