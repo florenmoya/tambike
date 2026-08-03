@@ -688,14 +688,17 @@ describe("Prisma event review lifecycle", () => {
       ).find((candidate) => candidate.id === event.id);
 
       expect(publicEvent?.whatHappens).toBe(
-        "Check the event details for the schedule, location, and participation instructions.",
+        "Check in on arrival, follow the posted schedule, and observe the listed participation rules.",
       );
-      expect(publicEvent?.whatHappens).toHaveLength(83);
+      expect(publicEvent?.whatHappens).toHaveLength(92);
       expect(
         publicEvent?.whatHappens.split(/[.!?]+(?:\s|$)/).filter(Boolean),
       ).toHaveLength(1);
       expect(publicEvent?.whatHappens).not.toMatch(
         /\b(?:submission|review|approval|publication|backend|admin|draft|exclusive|unlock)\b/i,
+      );
+      expect(publicEvent?.whatHappens).not.toMatch(
+        /(?:check the event details|see the event)/i,
       );
     } finally {
       await closePrismaIntegrationClientPair(backends);

@@ -1,2 +1,2 @@
 export const DEFAULT_EVENT_WHAT_HAPPENS =
-  "Check the event details for the schedule, location, and participation instructions.";
+  "Check in on arrival, follow the posted schedule, and observe the listed participation rules.";
