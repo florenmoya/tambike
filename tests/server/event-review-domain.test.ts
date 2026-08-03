@@ -32,14 +32,32 @@ async function createPendingEvent(namespace: string) {
 }
 
 describe("memory event-review lifecycle", () => {
-  test("uses concise rider-facing default event brief copy", async () => {
-    const { event } = await createPendingEvent("rider-facing-brief");
-
-    expect(event.whatHappens).toBe(
-      "See the event schedule and organizer updates for timing, activities, and on-site instructions.",
+  test("publishes concise factual default event copy through public discovery", async () => {
+    const { backend, actors, event } = await createPendingEvent(
+      "rider-facing-brief",
     );
-    expect(event.whatHappens).not.toMatch(
-      /\b(?:submission|review|approval|publication|backend|admin|draft)\b/i,
+    const pending = await backend.getAdminEventReview(
+      actors.admin.sessionToken,
+      event.id,
+    );
+    await backend.reviewEvent(actors.admin.sessionToken, event.id, {
+      decision: "PUBLISH",
+      expectedUpdatedAt: pending.expectedUpdatedAt,
+    });
+
+    const publicEvent = backend
+      .listEvents({ q: event.title })
+      .find((candidate) => candidate.id === event.id);
+
+    expect(publicEvent?.whatHappens).toBe(
+      "Check the event details for the schedule, location, and participation instructions.",
+    );
+    expect(publicEvent?.whatHappens).toHaveLength(83);
+    expect(
+      publicEvent?.whatHappens.split(/[.!?]+(?:\s|$)/).filter(Boolean),
+    ).toHaveLength(1);
+    expect(publicEvent?.whatHappens).not.toMatch(
+      /\b(?:submission|review|approval|publication|backend|admin|draft|exclusive|unlock)\b/i,
     );
   });
 

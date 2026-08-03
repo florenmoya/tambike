@@ -1,8 +1,5 @@
 import type { CreateEventInput, Event } from "../tambike-demo/types";
 
-export const ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS =
-  "See the event schedule and organizer updates for timing, activities, and on-site instructions.";
-
 export type EventReviewDecision =
   | "PUBLISH"
   | "REQUEST_CHANGES"

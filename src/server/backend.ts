@@ -67,7 +67,6 @@ import type {
   AdminUserAccount,
 } from "@/features/admin/account-access-types";
 import {
-  ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
   type AdminEventReviewView,
   type EventReviewHistoryItem,
   type EventStatusMutationInput,
@@ -75,6 +74,7 @@ import {
   type ResubmitEventInput,
   type ReviewEventInput,
 } from "@/features/admin/event-review-types";
+import { DEFAULT_EVENT_WHAT_HAPPENS } from "@/features/tambike-demo/event-copy";
 import { normalizeEventLocation } from "@/features/tambike-demo/event-location";
 import {
   EventScheduleValidationError,
@@ -1613,7 +1613,7 @@ export class TambikeBackend {
       time: labels.time,
       ...schedule,
       shortDescription: `${title} is awaiting admin review.`,
-      whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+      whatHappens: DEFAULT_EVENT_WHAT_HAPPENS,
       going: 0,
       interested: 0,
       expectedRiders,
@@ -5171,7 +5171,7 @@ export class TambikeBackend {
       time: labels.time,
       ...schedule,
       shortDescription: `${title} is awaiting admin review.`,
-      whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+      whatHappens: DEFAULT_EVENT_WHAT_HAPPENS,
       expectedRiders,
       perkPreview,
       tags: [input.event.type, "Admin review"],

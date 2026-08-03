@@ -99,7 +99,6 @@ import type {
   UserProfile,
 } from "@/features/tambike-demo/types";
 import {
-  ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
   type AdminEventReviewView,
   type EventReviewHistoryItem,
   type EventStatusMutationInput,
@@ -107,6 +106,7 @@ import {
   type ResubmitEventInput,
   type ReviewEventInput,
 } from "@/features/admin/event-review-types";
+import { DEFAULT_EVENT_WHAT_HAPPENS } from "@/features/tambike-demo/event-copy";
 import type {
   MemberProfileEditorView,
   MemberProfileView,
@@ -5103,7 +5103,7 @@ export class PrismaTambikeBackend {
           area: normalized.location.area,
           expectedRiders: normalized.expectedRiders,
           description: `${normalized.title} is awaiting admin review.`,
-          whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+          whatHappens: DEFAULT_EVENT_WHAT_HAPPENS,
           perkPreview: normalized.perkPreview,
           tags: [normalized.type, "Admin review"],
           riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),
@@ -5978,7 +5978,7 @@ export class PrismaTambikeBackend {
           area: normalized.location.area,
           expectedRiders: normalized.expectedRiders,
           description: `${normalized.title} is awaiting admin review.`,
-          whatHappens: ORGANIZER_SUBMITTED_EVENT_WHAT_HAPPENS,
+          whatHappens: DEFAULT_EVENT_WHAT_HAPPENS,
           perkPreview: normalized.perkPreview,
           tags: [normalized.type, "Admin review"],
           riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),

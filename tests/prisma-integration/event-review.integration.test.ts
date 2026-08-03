@@ -648,16 +648,55 @@ describe("Prisma event review lifecycle", () => {
         memory.createEventDraft(memoryActors.organizer.sessionToken, input),
         backends.primary.backend.createEventDraft(fixture.organizerSession, input),
       ]);
-      expect(prismaEvent.whatHappens).toBe(
-        "See the event schedule and organizer updates for timing, activities, and on-site instructions.",
-      );
-      expect(prismaEvent.whatHappens).not.toMatch(
-        /\b(?:submission|review|approval|publication|backend|admin|draft)\b/i,
-      );
       expect(prismaEvent).toEqual({
         ...memoryEvent,
         organizerId: fixture.organizerProfileId,
       });
+    } finally {
+      await closePrismaIntegrationClientPair(backends);
+      await closePrismaIntegrationClientPair(raw);
+    }
+  });
+
+  test("publishes the safe default event copy through public discovery", async () => {
+    const raw = createPrismaIntegrationClients();
+    const backends = createBackends();
+    const suffix = randomUUID();
+    try {
+      const fixture = trackFixture(
+        await createPrismaEventFixture(raw.primary, { suffix }),
+      );
+      const event = await backends.primary.backend.createEventDraft(
+        fixture.organizerSession,
+        draftInput(suffix),
+      );
+      const pending = await backends.primary.backend.getAdminEventReview(
+        fixture.adminSession,
+        event.id,
+      );
+      await backends.primary.backend.reviewEvent(
+        fixture.adminSession,
+        event.id,
+        {
+          decision: "PUBLISH",
+          expectedUpdatedAt: pending.expectedUpdatedAt,
+        },
+      );
+
+      const publicEvent = (
+        await backends.primary.backend.listEvents({ q: event.title })
+      ).find((candidate) => candidate.id === event.id);
+
+      expect(publicEvent?.whatHappens).toBe(
+        "Check the event details for the schedule, location, and participation instructions.",
+      );
+      expect(publicEvent?.whatHappens).toHaveLength(83);
+      expect(
+        publicEvent?.whatHappens.split(/[.!?]+(?:\s|$)/).filter(Boolean),
+      ).toHaveLength(1);
+      expect(publicEvent?.whatHappens).not.toMatch(
+        /\b(?:submission|review|approval|publication|backend|admin|draft|exclusive|unlock)\b/i,
+      );
     } finally {
       await closePrismaIntegrationClientPair(backends);
       await closePrismaIntegrationClientPair(raw);
