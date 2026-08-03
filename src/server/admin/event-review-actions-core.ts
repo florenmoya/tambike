@@ -7,6 +7,7 @@ import type {
 import type { ActionState } from "@/features/shared/action-state";
 import { actionError } from "@/server/action-result";
 import { BackendError } from "@/server/backend";
+import { formDataToStrictInput } from "@/server/form-data";
 
 const eventIdSchema = z.string().trim().min(1).max(200);
 function isCanonicalIsoTimestamp(value: string) {
@@ -152,7 +153,7 @@ export function createAdminEventReviewActions(
     _previous: ActionState<AdminEventReviewView>,
     formData: FormData,
   ): Promise<ActionState<AdminEventReviewView>> {
-    const parsed = reviewSchema.safeParse(Object.fromEntries(formData));
+    const parsed = reviewSchema.safeParse(formDataToStrictInput(formData));
     if (!parsed.success) return invalidInputState(parsed.error);
 
     try {
@@ -193,7 +194,7 @@ export function createAdminEventReviewActions(
     successMessage: string,
   ): Promise<ActionState<AdminEventReviewView>> {
     const parsed = eventStatusMutationSchema.safeParse(
-      Object.fromEntries(formData),
+      formDataToStrictInput(formData),
     );
     if (!parsed.success) return invalidInputState(parsed.error);
 

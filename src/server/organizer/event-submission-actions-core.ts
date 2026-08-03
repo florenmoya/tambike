@@ -13,6 +13,7 @@ import {
 import type { CreateEventInput } from "@/features/tambike-demo/types";
 import { actionError } from "@/server/action-result";
 import { BackendError } from "@/server/backend";
+import { formDataToStrictInput } from "@/server/form-data";
 
 const eventIdSchema = z.string().trim().min(1).max(200);
 function isCanonicalIsoTimestamp(value: string) {
@@ -212,7 +213,9 @@ export function createOrganizerEventSubmissionActions(
     _previous: ActionState<OrganizerEventSubmissionView>,
     formData: FormData,
   ): Promise<ActionState<OrganizerEventSubmissionView>> {
-    const parsed = resubmitEventSchema.safeParse(Object.fromEntries(formData));
+    const parsed = resubmitEventSchema.safeParse(
+      formDataToStrictInput(formData),
+    );
     if (!parsed.success) return invalidInputState(parsed.error);
 
     try {

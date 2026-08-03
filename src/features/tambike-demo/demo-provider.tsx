@@ -303,7 +303,12 @@ export function DemoProvider({
   );
 
   const approvePublish = useCallback(async (eventId: string) => {
-    await approvePublishAction(eventId);
+    const published = await approvePublishAction(eventId);
+    setEvents((currentEvents) =>
+      currentEvents.map((event) =>
+        event.id === published.event.id ? published.event : event,
+      ),
+    );
     setAdminDecision("published");
   }, []);
 

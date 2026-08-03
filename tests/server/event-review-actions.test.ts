@@ -300,14 +300,16 @@ describe("event review validation", () => {
     ["unknown decision", { decision: "APPROVE" }],
     ["malformed timestamp", { expectedUpdatedAt: "yesterday" }],
     ["untrusted extra field", { reviewerId: "admin-2" }],
+    ["framework-prefix lookalike", { $ACTIONARY_ID: "not-framework-owned" }],
   ])("rejects %s before backend access", async (_name, override) => {
     const { createAdminEventReviewActions } = await loadAdminCore();
     const getBackend = vi.fn(async () => {
       throw new Error("backend must not load");
     });
+    const revalidate = vi.fn();
 
     const result = await createAdminEventReviewActions(
-      dependencies(adminBackend(), { getBackend }),
+      dependencies(adminBackend(), { getBackend, revalidate }),
     ).reviewEventAction(idleAdmin, reviewForm(override));
 
     expect(result).toMatchObject({
@@ -316,6 +318,39 @@ describe("event review validation", () => {
       fieldErrors: expect.any(Object),
     });
     expect(getBackend).not.toHaveBeenCalled();
+    expect(revalidate).not.toHaveBeenCalled();
+  });
+
+  test("preserves duplicate and typed FormData validation semantics", async () => {
+    const { createAdminEventReviewActions } = await loadAdminCore();
+    const reviewEvent = vi.fn(async () => adminView);
+    const getBackend = vi.fn(async () => adminBackend({ reviewEvent }));
+    const actions = createAdminEventReviewActions(
+      dependencies(adminBackend(), { getBackend }),
+    );
+    const duplicateForm = reviewForm();
+    duplicateForm.append("eventId", "event-last");
+
+    await expect(
+      actions.reviewEventAction(idleAdmin, duplicateForm),
+    ).resolves.toMatchObject({ status: "success" });
+    expect(reviewEvent).toHaveBeenCalledWith("session-1", "event-last", {
+      decision: "PUBLISH",
+      expectedUpdatedAt: "2026-07-31T03:00:00.000Z",
+    });
+
+    vi.clearAllMocks();
+    const typedForm = reviewForm();
+    typedForm.set(
+      "eventId",
+      new Blob(["event-1"], { type: "text/plain" }),
+      "event.txt",
+    );
+    await expect(
+      actions.reviewEventAction(idleAdmin, typedForm),
+    ).resolves.toMatchObject({ status: "error", code: "INVALID_INPUT" });
+    expect(getBackend).not.toHaveBeenCalled();
+    expect(reviewEvent).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -394,6 +429,26 @@ describe("admin event review actions", () => {
       ["/events/event-1"],
       ["/organizer/events/event-1"],
     ]);
+  });
+
+  test("accepts Next action metadata without weakening strict review validation", async () => {
+    const { createAdminEventReviewActions } = await loadAdminCore();
+    const reviewEvent = vi.fn(async () => adminView);
+    const form = reviewForm();
+    form.set("$ACTION_ID_9f72", "framework-action-id");
+    form.set("$ACTION_REF_1", "framework-action-reference");
+    const action = createAdminEventReviewActions(
+      dependencies(adminBackend({ reviewEvent })),
+    );
+
+    await expect(action.reviewEventAction(idleAdmin, form)).resolves.toMatchObject({
+      status: "success",
+      data: adminView,
+    });
+    expect(reviewEvent).toHaveBeenCalledWith("session-1", "event-1", {
+      decision: "PUBLISH",
+      expectedUpdatedAt: "2026-07-31T03:00:00.000Z",
+    });
   });
 
   test.each([
@@ -477,6 +532,45 @@ describe("admin event review actions", () => {
     });
     expect(revalidate).toHaveBeenCalledTimes(4);
   });
+
+  test.each(["disable", "restore"] as const)(
+    "accepts Next action metadata for %s without accepting arbitrary extras",
+    async (kind) => {
+      const { createAdminEventReviewActions } = await loadAdminCore();
+      const disableEvent = vi.fn(async () => adminView);
+      const restoreEventToReview = vi.fn(async () => adminView);
+      const getBackend = vi.fn(async () =>
+        adminBackend({ disableEvent, restoreEventToReview }),
+      );
+      const revalidate = vi.fn();
+      const actions = createAdminEventReviewActions(
+        dependencies(adminBackend(), { getBackend, revalidate }),
+      );
+      const action =
+        kind === "disable" ? actions.disableEventAction : actions.restoreEventAction;
+      const frameworkForm = statusForm();
+      frameworkForm.set("$ACTION_ID_status", "framework-action-id");
+      frameworkForm.set("$ACTION_REF_status", "framework-action-reference");
+
+      await expect(action(idleAdmin, frameworkForm)).resolves.toMatchObject({
+        status: "success",
+        data: adminView,
+      });
+      const mutation = kind === "disable" ? disableEvent : restoreEventToReview;
+      expect(mutation).toHaveBeenCalledTimes(1);
+
+      vi.clearAllMocks();
+      const unexpectedForm = statusForm({ operatorId: "admin-2" });
+      await expect(action(idleAdmin, unexpectedForm)).resolves.toMatchObject({
+        status: "error",
+        code: "INVALID_INPUT",
+      });
+      expect(getBackend).not.toHaveBeenCalled();
+      expect(disableEvent).not.toHaveBeenCalled();
+      expect(restoreEventToReview).not.toHaveBeenCalled();
+      expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
 
   test("throws unexpected failures without revalidation", async () => {
     const { createAdminEventReviewActions } = await loadAdminCore();
@@ -592,6 +686,33 @@ describe("organizer event submission actions", () => {
       ["/admin/events/review"],
       ["/events/event-1"],
     ]);
+  });
+
+  test("accepts Next action metadata for resubmission but rejects arbitrary extras", async () => {
+    const { createOrganizerEventSubmissionActions } = await loadOrganizerCore();
+    const resubmitEvent = vi.fn(async () => organizerView);
+    const getBackend = vi.fn(async () => organizerBackend({ resubmitEvent }));
+    const revalidate = vi.fn();
+    const action = createOrganizerEventSubmissionActions(
+      dependencies(organizerBackend(), { getBackend, revalidate }),
+    );
+    const frameworkForm = resubmitForm();
+    frameworkForm.set("$ACTION_ID_resubmit", "framework-action-id");
+    frameworkForm.set("$ACTION_REF_resubmit", "framework-action-reference");
+
+    await expect(
+      action.resubmitEventAction(idleOrganizer, frameworkForm),
+    ).resolves.toMatchObject({ status: "success", data: organizerView });
+    expect(resubmitEvent).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    const unexpectedForm = resubmitForm({ organizerId: "organizer-2" });
+    await expect(
+      action.resubmitEventAction(idleOrganizer, unexpectedForm),
+    ).resolves.toMatchObject({ status: "error", code: "INVALID_INPUT" });
+    expect(getBackend).not.toHaveBeenCalled();
+    expect(resubmitEvent).not.toHaveBeenCalled();
+    expect(revalidate).not.toHaveBeenCalled();
   });
 
   test.each([
