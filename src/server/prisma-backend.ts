@@ -84,6 +84,7 @@ import type {
   CreateEventInput,
   Event,
   EventSchedule,
+  EventStatus,
   EventType,
   OrganizerQrMode,
   Pass,
@@ -97,6 +98,14 @@ import type {
   SignupInput,
   UserProfile,
 } from "@/features/tambike-demo/types";
+import type {
+  AdminEventReviewView,
+  EventReviewHistoryItem,
+  EventStatusMutationInput,
+  OrganizerEventSubmissionView,
+  ResubmitEventInput,
+  ReviewEventInput,
+} from "@/features/admin/event-review-types";
 import type {
   MemberProfileEditorView,
   MemberProfileView,
@@ -285,6 +294,11 @@ const eventRecordSelect = {
   poster: true,
   dateLabel: true,
   timeLabel: true,
+  startsAt: true,
+  endsAt: true,
+  timeZone: true,
+  recurrence: true,
+  recurrenceEndsAt: true,
   area: true,
   description: true,
   whatHappens: true,
@@ -445,6 +459,29 @@ const eventRecordWithCountsSelect = {
   _count: { select: { passes: true, rsvps: true } },
 } as const;
 
+const eventReviewSelect = {
+  ...eventRecordWithCountsSelect,
+  submissionVersion: true,
+  disabledAt: true,
+  disabledByUserId: true,
+  disableReason: true,
+  updatedAt: true,
+  organizer: {
+    select: {
+      userId: true,
+      user: { select: { displayName: true } },
+    },
+  },
+  approvals: {
+    orderBy: [{ submissionVersion: "asc" }, { id: "asc" }],
+    include: { reviewer: { select: { displayName: true } } },
+  },
+} satisfies Prisma.EventSelect;
+
+type PrismaEventReviewRecord = Prisma.EventGetPayload<{
+  select: typeof eventReviewSelect;
+}>;
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -566,7 +603,7 @@ export class PrismaTambikeBackend {
       currentUser?.role === "admin"
         ? this.listPublicUsers()
         : Promise.resolve([]),
-      this.listEvents(),
+      this.listEventsForViewer(currentUser),
       currentUser ? this.listPassesForUser(currentUser.id) : Promise.resolve([]),
       this.prisma.eventCheckInSettings.findMany(),
     ]);
@@ -5016,91 +5053,128 @@ export class PrismaTambikeBackend {
       throw new BackendError("FORBIDDEN", "FORBIDDEN");
     }
 
-    const title = input.title.trim();
-    const perkPreview = input.perkPreview.trim();
-    const expectedRiders = Number(input.expectedRiders);
-    const location = normalizeEventLocation(input);
-    let schedule: EventSchedule;
-    try {
-      schedule = parseEventScheduleInput(input);
-    } catch (error) {
-      if (error instanceof EventScheduleValidationError) {
-        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-      }
-      throw error;
-    }
-    const labels = formatEventSchedule(schedule);
-    if (
-      !title ||
-      !perkPreview ||
-      !Number.isInteger(expectedRiders) ||
-      expectedRiders <= 0 ||
-      !location
-    ) {
-      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-    }
+    const normalized = this.normalizeEventSubmissionInput(input);
 
-    const baseSlug = slugify(title);
+    const baseSlug = slugify(normalized.title);
     const existing = await this.prisma.event.findUnique({
       where: { slug: baseSlug },
       select: { id: true },
     });
     const slug = existing ? `${baseSlug}-${Date.now()}` : baseSlug;
-    const type = input.type;
-    const event = await this.prisma.event.create({
-      data: {
-        id: slug,
-        slug,
-        title,
-        type: eventTypeToDb[type] as never,
-        status: "PENDING_ADMIN_REVIEW",
-        organizerId,
-        locationName: location.locationName,
-        locationAddress: location.locationAddress,
-        locationMapLink: location.locationMapLink ?? null,
-        poster: "/demo/poster-tambike-cafe-classico.jpg",
-        dateLabel: labels.date,
-        timeLabel: labels.time,
-        area: location.area,
-        expectedRiders,
-        description: `${title} is awaiting admin review.`,
-        whatHappens:
-          "Organizer-created draft that will move through admin publish.",
-        perkPreview,
-        tags: [type, "Admin review"],
-        riskFlags: this.riskFlagsFor(type, expectedRiders),
-        safetyRules: defaultRulesForEvent(type),
-        checkInSettings: {
-          create: {
-            mode: "staff_only",
-            state: "closed",
-            qrMode: "rotating",
+    const event = await this.prisma.$transaction(async (tx) => {
+      await this.lockLifecycleActor(tx, user.id);
+      const actor = await tx.user.findUnique({
+        where: { id: user.id },
+        include: { organizerProfile: true },
+      });
+      if (
+        !actor ||
+        actor.accountStatus !== "ACTIVE" ||
+        actor.role !== "organizer" ||
+        actor.verificationStatus !== "APPROVED" ||
+        actor.organizerProfile?.id !== organizerId
+      ) {
+        throw new BackendError("FORBIDDEN", "FORBIDDEN");
+      }
+      const submittedAt = new Date();
+      const created = await tx.event.create({
+        data: {
+          id: slug,
+          slug,
+          title: normalized.title,
+          type: eventTypeToDb[normalized.type] as never,
+          status: "PENDING_ADMIN_REVIEW",
+          submissionVersion: 1,
+          organizerId,
+          locationName: normalized.location.locationName,
+          locationAddress: normalized.location.locationAddress,
+          locationMapLink: normalized.location.locationMapLink ?? null,
+          poster: "/demo/poster-tambike-cafe-classico.jpg",
+          dateLabel: normalized.labels.date,
+          timeLabel: normalized.labels.time,
+          startsAt: new Date(normalized.schedule.startsAt),
+          endsAt: new Date(normalized.schedule.endsAt),
+          timeZone: normalized.schedule.timeZone,
+          recurrence: normalized.schedule.recurrence,
+          recurrenceEndsAt: normalized.schedule.recurrenceEndsAt
+            ? new Date(normalized.schedule.recurrenceEndsAt)
+            : null,
+          area: normalized.location.area,
+          expectedRiders: normalized.expectedRiders,
+          description: `${normalized.title} is awaiting admin review.`,
+          whatHappens:
+            "Organizer-created draft that will move through admin publish.",
+          perkPreview: normalized.perkPreview,
+          tags: [normalized.type, "Admin review"],
+          riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),
+          safetyRules: defaultRulesForEvent(normalized.type),
+          createdAt: submittedAt,
+          updatedAt: submittedAt,
+          checkInSettings: {
+            create: {
+              mode: "staff_only",
+              state: "closed",
+              qrMode: "rotating",
+            },
+          },
+          perks: {
+            create: {
+              id: `perk-${slug}`,
+              type: "Check-in perk",
+              description: normalized.perkPreview,
+            },
+          },
+          approvals: {
+            create: {
+              id: `event-approval-${randomUUID()}`,
+              submissionVersion: 1,
+              decision: "pending",
+              submittedAt,
+            },
           },
         },
-        perks: {
-          create: {
-            id: `perk-${slug}`,
-            type: "Check-in perk",
-            description: perkPreview,
+        select: eventRecordWithCountsSelect,
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "EVENT_DRAFT_CREATED",
+          actorUserId: actor.id,
+          targetType: "Event",
+          targetId: created.id,
+          metadata: {
+            nextStatus: "PENDING_ADMIN_REVIEW",
+            submissionVersion: 1,
           },
         },
-      },
-      select: eventRecordWithCountsSelect,
+      });
+      return created;
     });
-
-    await this.audit("EVENT_DRAFT_CREATED", user.id, "Event", event.id);
     return this.toEvent(event);
   }
 
   async registerForEvent(sessionToken: string, eventId: string, input: RegistrationInput) {
     const user = await this.requireUser(sessionToken);
     const event = await this.requireEvent(eventId);
+    if (event.status === "DISABLED") {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
     const cta = getEventCtaState(this.toEvent(event));
     if (!cta.canRegister && !cta.canShowInterest) {
       throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
     }
     const result = await this.prisma.$transaction(async (tx) => {
       await this.lockGiveawayEvent(tx, event.id);
+      const currentEvent = await tx.event.findUnique({
+        where: { id: event.id },
+        select: { status: true },
+      });
+      if (!currentEvent) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      if (currentEvent.status === "DISABLED") {
+        throw new BackendError("CONFLICT", "CONFLICT");
+      }
+      if (!["PUBLISHED", "ONGOING", "COMPLETED"].includes(currentEvent.status)) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
       const previousRsvp = await tx.rSVP.findUnique({
         where: { eventId_userId: { eventId: event.id, userId: user.id } },
         select: { status: true, goingAt: true, rosterIdentity: true },
@@ -5239,6 +5313,17 @@ export class PrismaTambikeBackend {
     options: { cursor?: string; limit?: number } = {},
   ): Promise<EventAttendeeRosterPage> {
     const event = await this.requireRosterEvent(eventId);
+    const isPublic = this.isPublicEventStatus(event.status);
+    if (!isPublic) {
+      if (!sessionToken) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      const viewer = await this.requireUser(sessionToken);
+      if (
+        viewer.role !== "admin" &&
+        !(viewer.role === "organizer" && event.organizer.userId === viewer.id)
+      ) {
+        throw new BackendError("NOT_FOUND", "NOT_FOUND");
+      }
+    }
     const enabled = event.rosterSettings?.enabled ?? false;
     if (enabled) {
       if (!sessionToken) throw new BackendError("UNAUTHENTICATED", "UNAUTHENTICATED");
@@ -5312,6 +5397,9 @@ export class PrismaTambikeBackend {
 
   async getEventAttendeeSummary(eventId: string): Promise<EventAttendeeSummary> {
     const event = await this.requireRosterEvent(eventId);
+    if (!this.isPublicEventStatus(event.status)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
     return this.buildPrismaRosterSummary(
       event.id,
       event.title,
@@ -5323,6 +5411,9 @@ export class PrismaTambikeBackend {
     eventId: string,
   ): Promise<EventAttendeePublicPreview> {
     const event = await this.requireRosterEvent(eventId);
+    if (!this.isPublicEventStatus(event.status)) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
     const enabled = event.rosterSettings?.enabled ?? false;
     const summary = await this.buildPrismaRosterSummary(
       event.id,
@@ -5606,7 +5697,10 @@ export class PrismaTambikeBackend {
     }
     try {
       const outcome = await this.prisma.$transaction(async (tx) => {
-        await this.lockCheckInEvent(tx, event.id);
+        const lockedEvent = await this.lockCheckInEvent(tx, event.id);
+        if (lockedEvent.status !== "PUBLISHED" && lockedEvent.status !== "ONGOING") {
+          throw new BackendError("CHECK_IN_NOT_OPEN", "CHECK_IN_NOT_OPEN");
+        }
         const existing = await tx.checkIn.findUnique({
           where: { eventId_passId: { eventId: event.id, passId: pass.id } },
         });
@@ -5671,80 +5765,261 @@ export class PrismaTambikeBackend {
     }
   }
 
-  async approvePublish(sessionToken: string, eventId: string) {
-    const user = await this.requireRole(sessionToken, "admin");
-    await this.requireEvent(eventId);
-    const event = await this.prisma.$transaction(async (tx) => {
-      const currentEvent = await tx.event.findUnique({
-        where: { id: eventId },
-        select: { status: true, submissionVersion: true },
-      });
-      if (!currentEvent || currentEvent.status !== "PENDING_ADMIN_REVIEW") {
-        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-      }
+  async getAdminEventReview(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<AdminEventReviewView> {
+    await this.requireRole(sessionToken, "admin");
+    return this.toAdminEventReviewView(await this.requireEventReview(eventId));
+  }
 
-      const updated = await tx.event.updateMany({
+  async reviewEvent(
+    sessionToken: string,
+    eventId: string,
+    input: ReviewEventInput,
+  ): Promise<AdminEventReviewView> {
+    const actor = await this.requireRole(sessionToken, "admin");
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+    if (!["PUBLISH", "REQUEST_CHANGES", "REJECT"].includes(input.decision)) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    const reason = input.decision === "PUBLISH"
+      ? undefined
+      : this.requireEventReason(input.reason, 1000);
+    const transition = input.decision === "PUBLISH"
+      ? { status: "PUBLISHED" as const, decision: "published" as const, audit: "ADMIN_PUBLISHED" as const }
+      : input.decision === "REQUEST_CHANGES"
+        ? { status: "NEEDS_CHANGES" as const, decision: "needs_changes" as const, audit: "EVENT_CHANGES_REQUESTED" as const }
+        : { status: "REJECTED" as const, decision: "rejected" as const, audit: "EVENT_REJECTED" as const };
+
+    const record = await this.prisma.$transaction(async (tx) => {
+      await this.requireActiveLifecycleActor(tx, actor.id, "admin");
+      const event = await this.lockEventReview(tx, eventId);
+      this.requirePrismaEventTransition(event, "PENDING_ADMIN_REVIEW", expectedUpdatedAt);
+      const currentApproval = event.approvals.find(
+        (approval) => approval.submissionVersion === event.submissionVersion,
+      );
+      if (!currentApproval || currentApproval.decision !== "pending") {
+        throw new BackendError("CONFLICT", "CONFLICT");
+      }
+      const decidedAt = this.nextEventUpdatedAt(event.updatedAt);
+      const changed = await tx.event.updateMany({
         where: {
-          id: eventId,
+          id: event.id,
           status: "PENDING_ADMIN_REVIEW",
-          submissionVersion: currentEvent.submissionVersion,
+          submissionVersion: event.submissionVersion,
+          updatedAt: event.updatedAt,
         },
-        data: { status: "PUBLISHED" },
+        data: { status: transition.status, updatedAt: decidedAt },
       });
-      if (updated.count !== 1) {
-        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-      }
-
-      const currentApproval = await tx.eventApproval.findUnique({
+      if (changed.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
+      const approvalChanged = await tx.eventApproval.updateMany({
         where: {
-          eventId_submissionVersion: {
-            eventId,
-            submissionVersion: currentEvent.submissionVersion,
-          },
+          id: currentApproval.id,
+          eventId: event.id,
+          submissionVersion: event.submissionVersion,
+          decision: "pending",
         },
-        select: { decision: true },
+        data: {
+          reviewerId: actor.id,
+          decision: transition.decision,
+          notes: reason ?? null,
+          decidedAt,
+        },
       });
-      if (currentApproval && currentApproval.decision !== "pending") {
-        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-      }
-
-      const decidedAt = new Date();
-      if (currentApproval) {
-        const approvalUpdated = await tx.eventApproval.updateMany({
-          where: {
-            eventId,
-            submissionVersion: currentEvent.submissionVersion,
-            decision: "pending",
-          },
-          data: {
-            reviewerId: user.id,
-            decision: "published",
-            decidedAt,
-          },
-        });
-        if (approvalUpdated.count !== 1) {
-          throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
-        }
-      } else {
-        await tx.eventApproval.create({
-          data: {
-            id: `admin-review-${eventId}-v${currentEvent.submissionVersion}`,
-            eventId,
-            submissionVersion: currentEvent.submissionVersion,
-            reviewerId: user.id,
-            decision: "published",
-            decidedAt,
-          },
-        });
-      }
-
-      return tx.event.findUniqueOrThrow({
-        where: { id: eventId },
-        select: eventRecordWithCountsSelect,
+      if (approvalChanged.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
+      await this.auditEventLifecycle(tx, transition.audit, actor.id, event.id, {
+        previousStatus: "PENDING_ADMIN_REVIEW",
+        nextStatus: transition.status,
+        submissionVersion: event.submissionVersion,
+        ...(reason ? { reason } : {}),
       });
+      if (reason && (transition.decision === "needs_changes" || transition.decision === "rejected")) {
+        await this.notifyEventReview(
+          tx,
+          event.organizer.userId,
+          event.id,
+          event.submissionVersion,
+          transition.audit,
+          reason,
+        );
+      }
+      return this.requireEventReview(event.id, tx);
     });
-    await this.audit("ADMIN_PUBLISHED", user.id, "Event", event.id);
-    return this.toEvent(event);
+    return this.toAdminEventReviewView(record);
+  }
+
+  async disableEvent(
+    sessionToken: string,
+    eventId: string,
+    input: EventStatusMutationInput,
+  ): Promise<AdminEventReviewView> {
+    const actor = await this.requireRole(sessionToken, "admin");
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+    const record = await this.prisma.$transaction(async (tx) => {
+      await this.requireActiveLifecycleActor(tx, actor.id, "admin");
+      const event = await this.lockEventReview(tx, eventId);
+      this.requirePrismaEventTransition(event, "PUBLISHED", expectedUpdatedAt);
+      const disabledAt = this.nextEventUpdatedAt(event.updatedAt);
+      const changed = await tx.event.updateMany({
+        where: { id: event.id, status: "PUBLISHED", submissionVersion: event.submissionVersion, updatedAt: event.updatedAt },
+        data: {
+          status: "DISABLED",
+          disabledAt,
+          disabledByUserId: actor.id,
+          disableReason: reason,
+          updatedAt: disabledAt,
+        },
+      });
+      if (changed.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
+      await this.auditEventLifecycle(tx, "EVENT_DISABLED", actor.id, event.id, {
+        previousStatus: "PUBLISHED",
+        nextStatus: "DISABLED",
+        submissionVersion: event.submissionVersion,
+        reason,
+      });
+      return this.requireEventReview(event.id, tx);
+    });
+    return this.toAdminEventReviewView(record);
+  }
+
+  async restoreEventToReview(
+    sessionToken: string,
+    eventId: string,
+    input: EventStatusMutationInput,
+  ): Promise<AdminEventReviewView> {
+    const actor = await this.requireRole(sessionToken, "admin");
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+    const record = await this.prisma.$transaction(async (tx) => {
+      await this.requireActiveLifecycleActor(tx, actor.id, "admin");
+      const event = await this.lockEventReview(tx, eventId);
+      this.requirePrismaEventTransition(event, "DISABLED", expectedUpdatedAt);
+      const submittedAt = this.nextEventUpdatedAt(event.updatedAt);
+      const submissionVersion = event.submissionVersion + 1;
+      const changed = await tx.event.updateMany({
+        where: { id: event.id, status: "DISABLED", submissionVersion: event.submissionVersion, updatedAt: event.updatedAt },
+        data: {
+          status: "PENDING_ADMIN_REVIEW",
+          submissionVersion,
+          disabledAt: null,
+          disabledByUserId: null,
+          disableReason: null,
+          updatedAt: submittedAt,
+        },
+      });
+      if (changed.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
+      await tx.eventApproval.create({
+        data: {
+          id: `event-approval-${randomUUID()}`,
+          eventId: event.id,
+          submissionVersion,
+          decision: "pending",
+          notes: reason,
+          submittedAt,
+        },
+      });
+      await this.auditEventLifecycle(tx, "EVENT_RESTORED_TO_REVIEW", actor.id, event.id, {
+        previousStatus: "DISABLED",
+        nextStatus: "PENDING_ADMIN_REVIEW",
+        submissionVersion,
+        reason,
+        disabledAt: event.disabledAt?.toISOString() ?? null,
+        disabledByUserId: event.disabledByUserId,
+      });
+      return this.requireEventReview(event.id, tx);
+    });
+    return this.toAdminEventReviewView(record);
+  }
+
+  async getOrganizerEventSubmission(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<OrganizerEventSubmissionView> {
+    const actor = await this.requireUser(sessionToken);
+    const event = await this.requireEventReview(eventId);
+    this.requireOwnedPrismaOrganizer(actor, event);
+    return this.toOrganizerEventSubmissionView(event);
+  }
+
+  async resubmitEvent(
+    sessionToken: string,
+    eventId: string,
+    input: ResubmitEventInput,
+  ): Promise<OrganizerEventSubmissionView> {
+    const actor = await this.requireUser(sessionToken);
+    const expectedUpdatedAt = this.requireIsoTimestamp(input.expectedUpdatedAt);
+    const reason = this.requireEventReason(input.reason, 500);
+    const normalized = this.normalizeEventSubmissionInput(input.event);
+    const record = await this.prisma.$transaction(async (tx) => {
+      const currentActor = await this.requireActiveLifecycleActor(tx, actor.id, "organizer");
+      const event = await this.lockEventReview(tx, eventId);
+      this.requireOwnedPrismaOrganizer(currentActor, event);
+      this.requirePrismaEventTransition(event, "NEEDS_CHANGES", expectedUpdatedAt);
+      const submittedAt = this.nextEventUpdatedAt(event.updatedAt);
+      const submissionVersion = event.submissionVersion + 1;
+      const changed = await tx.event.updateMany({
+        where: { id: event.id, status: "NEEDS_CHANGES", submissionVersion: event.submissionVersion, updatedAt: event.updatedAt },
+        data: {
+          title: normalized.title,
+          type: eventTypeToDb[normalized.type] as never,
+          status: "PENDING_ADMIN_REVIEW",
+          submissionVersion,
+          locationName: normalized.location.locationName,
+          locationAddress: normalized.location.locationAddress,
+          locationMapLink: normalized.location.locationMapLink ?? null,
+          dateLabel: normalized.labels.date,
+          timeLabel: normalized.labels.time,
+          startsAt: new Date(normalized.schedule.startsAt),
+          endsAt: new Date(normalized.schedule.endsAt),
+          timeZone: normalized.schedule.timeZone,
+          recurrence: normalized.schedule.recurrence,
+          recurrenceEndsAt: normalized.schedule.recurrenceEndsAt ? new Date(normalized.schedule.recurrenceEndsAt) : null,
+          area: normalized.location.area,
+          expectedRiders: normalized.expectedRiders,
+          description: `${normalized.title} is awaiting admin review.`,
+          whatHappens: "Organizer-created event submitted directly for admin review and publication.",
+          perkPreview: normalized.perkPreview,
+          tags: [normalized.type, "Admin review"],
+          riskFlags: this.riskFlagsFor(normalized.type, normalized.expectedRiders),
+          safetyRules: defaultRulesForEvent(normalized.type),
+          updatedAt: submittedAt,
+        },
+      });
+      if (changed.count !== 1) throw new BackendError("CONFLICT", "CONFLICT");
+      await tx.perk.updateMany({ where: { eventId: event.id }, data: { description: normalized.perkPreview } });
+      await tx.eventApproval.create({
+        data: { id: `event-approval-${randomUUID()}`, eventId: event.id, submissionVersion, decision: "pending", notes: reason, submittedAt },
+      });
+      await this.auditEventLifecycle(tx, "EVENT_RESUBMITTED", actor.id, event.id, {
+        previousStatus: "NEEDS_CHANGES",
+        nextStatus: "PENDING_ADMIN_REVIEW",
+        submissionVersion,
+        reason,
+      });
+      return this.requireEventReview(event.id, tx);
+    });
+    return this.toOrganizerEventSubmissionView(record);
+  }
+
+  async getRejectedEventCopySource(
+    sessionToken: string,
+    eventId: string,
+  ): Promise<CreateEventInput> {
+    const actor = await this.requireUser(sessionToken);
+    const event = await this.requireEventReview(eventId);
+    this.requireOwnedPrismaOrganizer(actor, event);
+    if (event.status !== "REJECTED") throw new BackendError("CONFLICT", "CONFLICT");
+    return this.toRejectedEventCopySource(event);
+  }
+
+  async approvePublish(sessionToken: string, eventId: string) {
+    const view = await this.getAdminEventReview(sessionToken, eventId);
+    return (await this.reviewEvent(sessionToken, eventId, {
+      decision: "PUBLISH",
+      expectedUpdatedAt: view.expectedUpdatedAt,
+    })).event;
   }
 
   async exportAttendeesCsv(sessionToken: string, eventId: string) {
@@ -5823,8 +6098,28 @@ export class PrismaTambikeBackend {
   }
 
   async listEvents(query?: EventQueryInput) {
+    return this.listEventsForViewer(null, query);
+  }
+
+  private async listEventsForViewer(
+    viewer: PrismaUserRecord | null,
+    query?: EventQueryInput,
+  ) {
+    const publicStatuses: EventStatus[] = ["PUBLISHED", "ONGOING", "COMPLETED"];
+    const where: Prisma.EventWhereInput =
+      viewer?.role === "admin"
+        ? {}
+        : viewer?.role === "organizer" && viewer.organizerProfile?.id
+          ? {
+              OR: [
+                { status: { in: publicStatuses } },
+                { organizerId: viewer.organizerProfile.id },
+              ],
+            }
+          : { status: { in: publicStatuses } };
     const [events, groupedCheckIns] = await Promise.all([
       this.prisma.event.findMany({
+        where,
         select: eventRecordWithCountsSelect,
         orderBy: { createdAt: "asc" },
       }),
@@ -9552,6 +9847,134 @@ export class PrismaTambikeBackend {
     return user;
   }
 
+  private async lockLifecycleActor(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`,
+    );
+    if (rows.length !== 1) throw new BackendError("FORBIDDEN", "FORBIDDEN");
+  }
+
+  private async requireActiveLifecycleActor(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    role: "admin" | "organizer",
+  ) {
+    await this.lockLifecycleActor(tx, userId);
+    const actor = await tx.user.findUnique({
+      where: { id: userId },
+      include: { organizerProfile: true },
+    });
+    if (
+      !actor ||
+      actor.accountStatus !== "ACTIVE" ||
+      actor.role !== role ||
+      (role === "organizer" && actor.verificationStatus !== "APPROVED")
+    ) {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
+    return actor;
+  }
+
+  private async requireEventReview(
+    eventId: string,
+    client: Prisma.TransactionClient | PrismaClient = this.prisma,
+  ) {
+    const event = await client.event.findUnique({
+      where: { id: eventId },
+      select: eventReviewSelect,
+    });
+    if (!event) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return event;
+  }
+
+  private async lockEventReview(tx: Prisma.TransactionClient, eventId: string) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`,
+    );
+    if (rows.length !== 1) throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    return this.requireEventReview(eventId, tx);
+  }
+
+  private requirePrismaEventTransition(
+    event: Pick<PrismaEventReviewRecord, "status" | "updatedAt">,
+    status: EventStatus,
+    expectedUpdatedAt: Date,
+  ) {
+    if (
+      event.status !== status ||
+      event.updatedAt.getTime() !== expectedUpdatedAt.getTime()
+    ) {
+      throw new BackendError("CONFLICT", "CONFLICT");
+    }
+  }
+
+  private requireOwnedPrismaOrganizer(
+    actor: { role: string; verificationStatus: string; organizerProfile?: { id: string } | null },
+    event: Pick<PrismaEventReviewRecord, "organizerId">,
+  ) {
+    if (
+      actor.role !== "organizer" ||
+      actor.verificationStatus !== "APPROVED" ||
+      actor.organizerProfile?.id !== event.organizerId
+    ) {
+      throw new BackendError("FORBIDDEN", "FORBIDDEN");
+    }
+  }
+
+  private nextEventUpdatedAt(previous: Date) {
+    return new Date(Math.max(Date.now(), previous.getTime() + 1));
+  }
+
+  private requireEventReason(reason: unknown, maximumLength: number) {
+    if (typeof reason !== "string") throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    const normalized = reason.trim();
+    if (normalized.length < 10 || normalized.length > maximumLength) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return normalized;
+  }
+
+  private async auditEventLifecycle(
+    tx: Prisma.TransactionClient,
+    action: AuditAction,
+    actorUserId: string,
+    eventId: string,
+    metadata: Record<string, string | number | boolean | null>,
+  ) {
+    await tx.auditLog.create({
+      data: {
+        action,
+        actorUserId,
+        targetType: "Event",
+        targetId: eventId,
+        metadata,
+      },
+    });
+  }
+
+  private async notifyEventReview(
+    tx: Prisma.TransactionClient,
+    organizerUserId: string,
+    eventId: string,
+    submissionVersion: number,
+    kind: "EVENT_CHANGES_REQUESTED" | "EVENT_REJECTED",
+    reason: string,
+  ) {
+    await tx.notification.create({
+      data: {
+        userId: organizerUserId,
+        kind,
+        title: kind === "EVENT_CHANGES_REQUESTED" ? "Changes requested" : "Event submission rejected",
+        body: reason,
+        href: `/organizer/events/${encodeURIComponent(eventId)}`,
+        dedupeKey: `event-review:${eventId}:v${submissionVersion}:${kind}`,
+      },
+    });
+  }
+
   private async lockAccountAccessAdminSet(tx: Prisma.TransactionClient) {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "User" WHERE "role" = 'admin' ORDER BY "id" FOR UPDATE`,
@@ -9603,12 +10026,17 @@ export class PrismaTambikeBackend {
       select: {
         id: true,
         title: true,
+        status: true,
         organizer: { select: { userId: true } },
         rosterSettings: { select: { enabled: true } },
       },
     });
     if (!event) throw new BackendError("NOT_FOUND", "NOT_FOUND");
     return event;
+  }
+
+  private isPublicEventStatus(status: string) {
+    return ["PUBLISHED", "ONGOING", "COMPLETED"].includes(status);
   }
 
   private async buildPrismaRosterSummary(
@@ -9971,6 +10399,40 @@ export class PrismaTambikeBackend {
     return parsed;
   }
 
+  private normalizeEventSubmissionInput(input: CreateEventInput) {
+    const title = input.title.trim();
+    const perkPreview = input.perkPreview.trim();
+    const expectedRiders = Number(input.expectedRiders);
+    const location = normalizeEventLocation(input);
+    let schedule: EventSchedule;
+    try {
+      schedule = parseEventScheduleInput(input);
+    } catch (error) {
+      if (error instanceof EventScheduleValidationError) {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+      throw error;
+    }
+    if (
+      !title ||
+      !perkPreview ||
+      !Number.isInteger(expectedRiders) ||
+      expectedRiders <= 0 ||
+      !location
+    ) {
+      throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+    }
+    return {
+      title,
+      type: input.type,
+      perkPreview,
+      expectedRiders,
+      location,
+      schedule,
+      labels: formatEventSchedule(schedule),
+    };
+  }
+
   private nextUserUpdatedAt(previous: Date) {
     return new Date(Math.max(Date.now(), previous.getTime() + 1));
   }
@@ -10286,6 +10748,111 @@ export class PrismaTambikeBackend {
         description: perk.description,
         quantity: perk.quantity ?? undefined,
       })),
+    };
+  }
+
+  private toEventReviewHistory(
+    approvals: PrismaEventReviewRecord["approvals"],
+  ): EventReviewHistoryItem[] {
+    return approvals.map((approval) => ({
+      id: approval.id,
+      submissionVersion: approval.submissionVersion,
+      decision:
+        approval.decision === "approved" ||
+        approval.decision === "approved_with_conditions"
+          ? "published"
+          : (approval.decision as EventReviewHistoryItem["decision"]),
+      ...(approval.reviewer?.displayName
+        ? { reviewerName: approval.reviewer.displayName }
+        : {}),
+      ...(approval.notes ? { reason: approval.notes } : {}),
+      submittedAt: approval.submittedAt.toISOString(),
+      ...(approval.decidedAt
+        ? { decidedAt: approval.decidedAt.toISOString() }
+        : {}),
+    }));
+  }
+
+  private toAdminEventReviewView(
+    event: PrismaEventReviewRecord,
+  ): AdminEventReviewView {
+    return {
+      event: this.toEvent(event),
+      organizerName: event.organizer.user.displayName,
+      submissionVersion: event.submissionVersion,
+      expectedUpdatedAt: event.updatedAt.toISOString(),
+      history: this.toEventReviewHistory(event.approvals),
+    };
+  }
+
+  private toOrganizerEventSubmissionView(
+    event: PrismaEventReviewRecord,
+  ): OrganizerEventSubmissionView {
+    const history = this.toEventReviewHistory(event.approvals);
+    const latestDecision = [...history]
+      .reverse()
+      .find((item) => item.decision !== "pending");
+    return {
+      event: this.toEvent(event),
+      submissionVersion: event.submissionVersion,
+      expectedUpdatedAt: event.updatedAt.toISOString(),
+      ...(latestDecision ? { latestDecision: { ...latestDecision } } : {}),
+      history,
+    };
+  }
+
+  private toRejectedEventCopySource(
+    event: PrismaEventReviewRecord,
+  ): CreateEventInput {
+    if (
+      !event.startsAt ||
+      !event.endsAt ||
+      !event.timeZone ||
+      !event.recurrence
+    ) {
+      throw new BackendError("NOT_FOUND", "NOT_FOUND");
+    }
+    const toLocalParts = (date: Date) => {
+      const parts = new Map(
+        new Intl.DateTimeFormat("en-CA", {
+          timeZone: event.timeZone!,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        })
+          .formatToParts(date)
+          .map((part) => [part.type, part.value]),
+      );
+      return {
+        date: `${parts.get("year")}-${parts.get("month")}-${parts.get("day")}`,
+        time: `${parts.get("hour")}:${parts.get("minute")}`,
+      };
+    };
+    const start = toLocalParts(event.startsAt);
+    const end = toLocalParts(event.endsAt);
+    return {
+      title: event.title,
+      type: dbEventTypeToUi[event.type] ?? "Tambike",
+      startDate: start.date,
+      startTime: start.time,
+      endDate: end.date,
+      endTime: end.time,
+      timeZone: event.timeZone,
+      recurrence: event.recurrence,
+      ...(event.recurrenceEndsAt
+        ? { recurrenceEndsOn: toLocalParts(event.recurrenceEndsAt).date }
+        : {}),
+      expectedRiders: event.expectedRiders,
+      perkPreview: event.perkPreview,
+      locationName: event.locationName,
+      locationAddress: event.locationAddress,
+      ...(event.locationMapLink
+        ? { locationMapLink: event.locationMapLink }
+        : {}),
+      area: event.area,
     };
   }
 

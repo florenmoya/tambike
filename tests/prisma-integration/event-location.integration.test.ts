@@ -103,32 +103,28 @@ describe("Prisma event-owned locations", () => {
         suffix,
         riderCount: 1,
       });
-      const firstApprovalId = `legacy-published-${suffix}`;
+      const firstApprovalId = `integration-event-approval-${suffix}`;
       const currentApprovalId = `approval-admin-${suffix}`;
 
       await rawClients.primary.event.update({
         where: { id: fixture.eventId },
         data: { status: "PENDING_ADMIN_REVIEW", submissionVersion: 2 },
       });
-      await rawClients.primary.eventApproval.createMany({
-        data: [
-          {
-            id: firstApprovalId,
-            eventId: fixture.eventId,
-            submissionVersion: 1,
-            reviewerId: fixture.adminId,
-            decision: "published",
-            submittedAt: new Date("2026-07-30T01:00:00.000Z"),
-            decidedAt: new Date("2026-07-30T02:00:00.000Z"),
-          },
-          {
+      await rawClients.primary.eventApproval.update({
+        where: { id: firstApprovalId },
+        data: {
+          submittedAt: new Date("2026-07-30T01:00:00.000Z"),
+          decidedAt: new Date("2026-07-30T02:00:00.000Z"),
+        },
+      });
+      await rawClients.primary.eventApproval.create({
+        data: {
             id: currentApprovalId,
             eventId: fixture.eventId,
             submissionVersion: 2,
             decision: "pending",
             submittedAt: new Date("2026-07-31T01:00:00.000Z"),
-          },
-        ],
+        },
       });
 
       await expect(
@@ -235,11 +231,24 @@ describe("Prisma event-owned locations", () => {
 
       await expect(
         backendClients.primary.backend.approvePublish(fixture.adminSession, fixture.eventId),
-      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      ).rejects.toMatchObject({ code: "CONFLICT" });
 
       await rawClients.primary.event.update({
         where: { id: fixture.eventId },
         data: { status: "PENDING_ADMIN_REVIEW" },
+      });
+      await rawClients.primary.eventApproval.update({
+        where: {
+          eventId_submissionVersion: {
+            eventId: fixture.eventId,
+            submissionVersion: 1,
+          },
+        },
+        data: {
+          reviewerId: null,
+          decision: "pending",
+          decidedAt: null,
+        },
       });
       await expect(
         backendClients.primary.backend.approvePublish(fixture.adminSession, fixture.eventId),

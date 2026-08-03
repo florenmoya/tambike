@@ -107,6 +107,7 @@ export async function createPrismaEventFixture(
         title: "Disposable integration event",
         type: "BIKE_NIGHT",
         status: "PUBLISHED",
+        submissionVersion: 1,
         organizerId: organizerProfileId,
         locationName: location.locationName,
         locationAddress: location.locationAddress,
@@ -126,6 +127,18 @@ export async function createPrismaEventFixture(
         tags: [],
         riskFlags: [],
         safetyRules: [],
+      },
+    });
+    const approvedAt = new Date();
+    await tx.eventApproval.create({
+      data: {
+        id: `integration-event-approval-${suffix}`,
+        eventId,
+        submissionVersion: 1,
+        reviewerId: adminId,
+        decision: "published",
+        submittedAt: approvedAt,
+        decidedAt: approvedAt,
       },
     });
     for (const rider of riders) {

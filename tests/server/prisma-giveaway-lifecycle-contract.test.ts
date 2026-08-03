@@ -528,10 +528,11 @@ describe("Prisma giveaway lifecycle contract", () => {
     expect(prismaBackendSource).not.toContain('user.role === "venue"');
     expect(prismaBackendSource).not.toContain("Respect venue staff");
     expect(prismaBackendSource).not.toContain("Standard venue approval");
-    expect(createEventSource).toContain("normalizeEventLocation(input)");
+    expect(createEventSource).toContain("this.normalizeEventSubmissionInput(input)");
     expect(createEventSource).toContain('status: "PENDING_ADMIN_REVIEW"');
-    expect(createEventSource).toContain("locationName: location.locationName");
-    expect(publishSource).toContain("admin-review-${eventId}");
+    expect(createEventSource).toContain("locationName: normalized.location.locationName");
+    expect(publishSource).toContain('decision: "PUBLISH"');
+    expect(publishSource).toContain("this.reviewEvent");
     expect(userMapperSource).not.toContain("venue");
     expect(eventMapperSource).toContain("locationName: event.locationName");
     expect(eventMapperSource).toContain("locationAddress: event.locationAddress");

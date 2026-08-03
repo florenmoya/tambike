@@ -13,11 +13,17 @@ describe("Prisma event schedule backend contract", () => {
     const createStart = source.indexOf("async createEventDraft");
     const createEnd = source.indexOf("async registerForEvent", createStart);
     const createSource = source.slice(createStart, createEnd);
+    const normalizeStart = source.indexOf("private normalizeEventSubmissionInput");
+    const normalizeEnd = source.indexOf("private nextUserUpdatedAt", normalizeStart);
+    const normalizeSource = source.slice(normalizeStart, normalizeEnd);
 
-    expect(createSource).toContain("parseEventScheduleInput(input)");
-    expect(createSource).toContain("formatEventSchedule(schedule)");
-    expect(createSource).toContain("dateLabel: labels.date");
-    expect(createSource).toContain("timeLabel: labels.time");
+    expect(createSource).toContain("this.normalizeEventSubmissionInput(input)");
+    expect(normalizeSource).toContain("parseEventScheduleInput(input)");
+    expect(normalizeSource).toContain("formatEventSchedule(schedule)");
+    expect(createSource).toContain("dateLabel: normalized.labels.date");
+    expect(createSource).toContain("timeLabel: normalized.labels.time");
+    expect(createSource).toContain("startsAt: new Date(normalized.schedule.startsAt)");
+    expect(createSource).toContain("recurrence: normalized.schedule.recurrence");
     expect(createSource).not.toContain("startsAt: new Date(schedule.startsAt)");
     expect(createSource).not.toContain("recurrence: schedule.recurrence");
     expect(createSource).not.toContain("input.date.trim()");
