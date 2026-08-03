@@ -5675,30 +5675,68 @@ export class PrismaTambikeBackend {
     const user = await this.requireRole(sessionToken, "admin");
     await this.requireEvent(eventId);
     const event = await this.prisma.$transaction(async (tx) => {
+      const currentEvent = await tx.event.findUnique({
+        where: { id: eventId },
+        select: { status: true, submissionVersion: true },
+      });
+      if (!currentEvent || currentEvent.status !== "PENDING_ADMIN_REVIEW") {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+
       const updated = await tx.event.updateMany({
-        where: { id: eventId, status: "PENDING_ADMIN_REVIEW" },
+        where: {
+          id: eventId,
+          status: "PENDING_ADMIN_REVIEW",
+          submissionVersion: currentEvent.submissionVersion,
+        },
         data: { status: "PUBLISHED" },
       });
       if (updated.count !== 1) {
         throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
       }
 
-      await tx.eventApproval.upsert({
-        where: { id: `admin-review-${eventId}` },
-        create: {
-          id: `admin-review-${eventId}`,
-          eventId,
-          submissionVersion: 1,
-          reviewerId: user.id,
-          decision: "published",
-          decidedAt: new Date(),
+      const currentApproval = await tx.eventApproval.findUnique({
+        where: {
+          eventId_submissionVersion: {
+            eventId,
+            submissionVersion: currentEvent.submissionVersion,
+          },
         },
-        update: {
-          reviewerId: user.id,
-          decision: "published",
-          decidedAt: new Date(),
-        },
+        select: { decision: true },
       });
+      if (currentApproval && currentApproval.decision !== "pending") {
+        throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+      }
+
+      const decidedAt = new Date();
+      if (currentApproval) {
+        const approvalUpdated = await tx.eventApproval.updateMany({
+          where: {
+            eventId,
+            submissionVersion: currentEvent.submissionVersion,
+            decision: "pending",
+          },
+          data: {
+            reviewerId: user.id,
+            decision: "published",
+            decidedAt,
+          },
+        });
+        if (approvalUpdated.count !== 1) {
+          throw new BackendError("INVALID_INPUT", "INVALID_INPUT");
+        }
+      } else {
+        await tx.eventApproval.create({
+          data: {
+            id: `admin-review-${eventId}-v${currentEvent.submissionVersion}`,
+            eventId,
+            submissionVersion: currentEvent.submissionVersion,
+            reviewerId: user.id,
+            decision: "published",
+            decidedAt,
+          },
+        });
+      }
 
       return tx.event.findUniqueOrThrow({
         where: { id: eventId },

@@ -120,6 +120,11 @@ describe("account role and event location Prisma schema contract", () => {
 
   test("backfills review versions before enforcing unique history and safe reviewer references", () => {
     expect(eventReviewMigrationSql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(eventReviewMigrationSql).toContain("SET LOCAL lock_timeout = '5s';");
+    expect(eventReviewMigrationSql).toContain("SET LOCAL statement_timeout = '60s';");
+    expect(eventReviewMigrationSql).toContain("OPERATOR ROLLBACK / FORWARD-RECOVERY RUNBOOK");
+    expect(eventReviewMigrationSql).toContain("Lossless rollback:");
+    expect(eventReviewMigrationSql).toContain("Forward recovery:");
     expect(eventReviewMigrationSql).toContain('ALTER TYPE "EventStatus" ADD VALUE IF NOT EXISTS \'DISABLED\'');
     expect(eventReviewMigrationSql).toContain('ROW_NUMBER() OVER (');
     expect(eventReviewMigrationSql).toContain('ORDER BY COALESCE("decidedAt", "createdAt"), "id"');

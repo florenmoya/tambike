@@ -90,6 +90,84 @@ describe("Prisma event-owned locations", () => {
     }
   });
 
+  test("publishes the current arbitrary-ID approval version without rewriting history", async () => {
+    const rawClients = createPrismaIntegrationClients();
+    const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
+      const backend = PrismaTambikeBackend.create(databaseUrl);
+      return { backend, $disconnect: () => backend.disconnect() };
+    });
+    const suffix = randomUUID();
+
+    try {
+      const fixture = await createPrismaEventFixture(rawClients.primary, {
+        suffix,
+        riderCount: 1,
+      });
+      const firstApprovalId = `legacy-published-${suffix}`;
+      const currentApprovalId = `approval-admin-${suffix}`;
+
+      await rawClients.primary.event.update({
+        where: { id: fixture.eventId },
+        data: { status: "PENDING_ADMIN_REVIEW", submissionVersion: 2 },
+      });
+      await rawClients.primary.eventApproval.createMany({
+        data: [
+          {
+            id: firstApprovalId,
+            eventId: fixture.eventId,
+            submissionVersion: 1,
+            reviewerId: fixture.adminId,
+            decision: "published",
+            submittedAt: new Date("2026-07-30T01:00:00.000Z"),
+            decidedAt: new Date("2026-07-30T02:00:00.000Z"),
+          },
+          {
+            id: currentApprovalId,
+            eventId: fixture.eventId,
+            submissionVersion: 2,
+            decision: "pending",
+            submittedAt: new Date("2026-07-31T01:00:00.000Z"),
+          },
+        ],
+      });
+
+      await expect(
+        backendClients.primary.backend.approvePublish(fixture.adminSession, fixture.eventId),
+      ).resolves.toMatchObject({ status: "PUBLISHED" });
+
+      const approvals = await rawClients.secondary.eventApproval.findMany({
+        where: { eventId: fixture.eventId },
+        orderBy: { submissionVersion: "asc" },
+        select: {
+          id: true,
+          submissionVersion: true,
+          reviewerId: true,
+          decision: true,
+          decidedAt: true,
+        },
+      });
+      expect(approvals).toEqual([
+        {
+          id: firstApprovalId,
+          submissionVersion: 1,
+          reviewerId: fixture.adminId,
+          decision: "published",
+          decidedAt: new Date("2026-07-30T02:00:00.000Z"),
+        },
+        {
+          id: currentApprovalId,
+          submissionVersion: 2,
+          reviewerId: fixture.adminId,
+          decision: "published",
+          decidedAt: expect.any(Date),
+        },
+      ]);
+    } finally {
+      await closePrismaIntegrationClientPair(backendClients);
+      await closePrismaIntegrationClientPair(rawClients);
+    }
+  });
+
   test("matches in-memory draft validation for required fields and rider counts", async () => {
     const rawClients = createPrismaIntegrationClients();
     const backendClients = createPrismaIntegrationClientPair(process.env, (databaseUrl) => {
