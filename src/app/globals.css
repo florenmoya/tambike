@@ -5109,6 +5109,22 @@ svg {
   height: 18px;
 }
 
+.login-submit__spinner {
+  animation: login-submit-spin 700ms linear infinite;
+}
+
+@keyframes login-submit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-submit__spinner {
+    animation: none;
+  }
+}
+
 .login-submit:hover,
 .login-submit:focus-visible {
   background: #241c15;

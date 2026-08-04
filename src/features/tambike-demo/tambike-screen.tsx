@@ -5,6 +5,7 @@ import {
   Building2,
   Coffee,
   Gauge,
+  LoaderCircle,
   LockKeyhole,
   LogIn,
   LogOut,
@@ -60,6 +61,7 @@ import type {
   AttendanceType,
   Event,
   EventType,
+  LoginFailureCode,
   Pass,
   Role,
 } from "./types";
@@ -146,6 +148,15 @@ function actionErrorMessage(error: unknown) {
   if (message.includes("FORBIDDEN")) return "Your account does not have access to that action.";
   if (message.includes("INVALID_INPUT")) return "Check the details and try again.";
   return "Something went wrong. Try again.";
+}
+
+function loginErrorMessage(code: LoginFailureCode) {
+  switch (code) {
+    case "INVALID_CREDENTIALS":
+      return "Email or password is incorrect.";
+    case "ACCOUNT_SUSPENDED":
+      return "This account is suspended. Contact Tambike support.";
+  }
 }
 
 async function shareOrCopy({ title, text, url }: { title: string; text: string; url: string }) {
@@ -1645,7 +1656,15 @@ function PassCard({ event, pass }: { event: Event; pass: Pass }) {
   );
 }
 
-function LoginScreen({ nextHref }: { nextHref?: string }) {
+const replaceLocation = (href: string) => window.location.replace(href);
+
+export function LoginScreen({
+  nextHref,
+  navigate = replaceLocation,
+}: {
+  nextHref?: string;
+  navigate?: (href: string) => void;
+}) {
   const { loginWithPassword } = useDemo();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -1680,6 +1699,7 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
         <form
           className="login-card"
           method="post"
+          aria-busy={pending}
           onSubmit={async (event) => {
             event.preventDefault();
             if (!isHydrated) {
@@ -1691,16 +1711,19 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
             const formData = new FormData(event.currentTarget);
 
             try {
-              const user = await loginWithPassword(
+              const result = await loginWithPassword(
                 String(formData.get("email") ?? ""),
                 String(formData.get("password") ?? ""),
               );
-              if (user) {
-                window.location.replace(nextHref ?? destinationFor(user.role));
+              if (!result.ok) {
+                setError(loginErrorMessage(result.code));
+                setPending(false);
+                return;
               }
+
+              navigate(nextHref ?? destinationFor(result.user.role));
             } catch (actionError) {
               setError(actionErrorMessage(actionError));
-            } finally {
               setPending(false);
             }
           }}
@@ -1738,9 +1761,16 @@ function LoginScreen({ nextHref }: { nextHref?: string }) {
             type="submit"
             disabled={pending || !isHydrated}
           >
-            <LogIn aria-hidden="true" />
-            {pending ? "Logging in..." : "Log in"}
+            {pending ? (
+              <LoaderCircle className="login-submit__spinner" aria-hidden="true" />
+            ) : (
+              <LogIn aria-hidden="true" />
+            )}
+            {pending ? "Signing you in…" : "Log in"}
           </button>
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {pending ? "Signing you in and opening your account." : ""}
+          </span>
 
           <div className="login-card__footer">
             <span>New here?</span>

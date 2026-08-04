@@ -127,6 +127,12 @@ export interface UserProfile {
   organizerProfileId?: string;
 }
 
+export type LoginFailureCode = "INVALID_CREDENTIALS" | "ACCOUNT_SUSPENDED";
+
+export type LoginResult =
+  | { ok: true; user: UserProfile }
+  | { ok: false; code: LoginFailureCode };
+
 export interface ProfileInput {
   displayName: string;
   area: string;

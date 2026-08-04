@@ -45,6 +45,7 @@ import type {
   DemoState,
   Event,
   EventCheckInSettings,
+  LoginResult,
   Pass,
   ProfileInput,
   Role,
@@ -62,7 +63,7 @@ interface DemoContextValue {
   currentUser: UserProfile | null;
   authNotice: string;
   setAuthNotice: (notice: string) => void;
-  loginWithPassword: (email: string, password: string) => Promise<UserProfile | null>;
+  loginWithPassword: (email: string, password: string) => Promise<LoginResult>;
   signUpRider: (input: SignupInput) => Promise<UserProfile>;
   logout: () => Promise<void>;
   updateProfile: (input: ProfileInput) => Promise<void>;
@@ -163,11 +164,19 @@ export function DemoProvider({
   );
 
   const loginWithPassword = useCallback(
-    async (email: string, password: string) => {
-      const nextState = await loginWithPasswordAction(email, password);
-      applyState(nextState);
+    async (email: string, password: string): Promise<LoginResult> => {
+      const result = await loginWithPasswordAction(email, password);
+      if (!result.ok) {
+        return result;
+      }
+
+      applyState(result.state);
       setAuthNotice("");
-      return nextState.currentUser;
+      if (!result.state.currentUser) {
+        throw new Error("LOGIN_FAILED");
+      }
+
+      return { ok: true, user: result.state.currentUser };
     },
     [applyState],
   );

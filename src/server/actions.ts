@@ -7,6 +7,7 @@ import type {
   CheckInConfiguration,
   CreateEventInput,
   DemoState,
+  LoginFailureCode,
   ProfileInput,
   ScanMethod,
   ScanPassCode,
@@ -44,9 +45,32 @@ export async function getPublicEventAttendeePreviewAction(eventId: string) {
 
 export async function loginWithPasswordAction(email: string, password: string) {
   const backend = await getTambikeBackend();
-  const result = await backend.loginWithPassword(email, password);
+  let result: Awaited<ReturnType<typeof backend.loginWithPassword>>;
+
+  try {
+    result = await backend.loginWithPassword(email, password);
+  } catch (error) {
+    const isBackendError =
+      error instanceof BackendError ||
+      (error instanceof Error && error.name === "BackendError");
+    if (isBackendError && "code" in error) {
+      const code: LoginFailureCode | undefined =
+        error.code === "UNAUTHENTICATED"
+          ? "INVALID_CREDENTIALS"
+          : error.code === "FORBIDDEN"
+            ? "ACCOUNT_SUSPENDED"
+            : undefined;
+
+      if (code) {
+        return { ok: false as const, code };
+      }
+    }
+
+    throw error;
+  }
+
   await setSessionToken(result.sessionToken);
-  return snapshot(result.sessionToken);
+  return { ok: true as const, state: await snapshot(result.sessionToken) };
 }
 
 export async function signUpRiderAction(input: SignupInput) {
