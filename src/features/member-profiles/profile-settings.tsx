@@ -235,6 +235,36 @@ export function ProfileViewAction({
   );
 }
 
+export function ProfileStudioHeader({
+  presentation,
+  profileDirty,
+  motorcycleDirty,
+}: {
+  presentation: ReturnType<typeof getProfileEditorPresentation>;
+  profileDirty: boolean;
+  motorcycleDirty: boolean;
+}) {
+  return (
+    <header className={styles.studioHeader}>
+      <div className={styles.studioHeading}>
+        <span>Profile</span>
+        <h1 id="profile-settings-title">Your profile</h1>
+        <p>Add the details people see when they open your profile.</p>
+      </div>
+      <div className={styles.studioHeaderActions}>
+        <span className={styles.studioState} data-state={presentation.state}>
+          {presentation.label}
+        </span>
+        <ProfileViewAction
+          viewAction={presentation.viewAction}
+          profileDirty={profileDirty}
+          motorcycleDirty={motorcycleDirty}
+        />
+      </div>
+    </header>
+  );
+}
+
 export function ProfileSaveFooter({
   pending,
   status,
@@ -499,33 +529,11 @@ function LoadedProfileSettings({
       className={`profile-settings ${styles.studio}`}
       aria-labelledby="profile-settings-title"
     >
-      <header className={styles.studioHeader}>
-        <div className={styles.studioHeading}>
-          <span>Profile</span>
-          <h1 id="profile-settings-title">Your profile</h1>
-          <p>Add the details people see when they open your profile.</p>
-        </div>
-        <div className={styles.studioHeaderActions}>
-          <span className={styles.studioState} data-state={presentation.state}>
-            {presentation.label}
-          </span>
-          <ProfileViewAction
-            viewAction={presentation.viewAction}
-            profileDirty={profileDirty}
-            motorcycleDirty={motorcycleDirty}
-          />
-        </div>
-        <div className={styles.studioStatus}>
-          <p>{presentation.description}</p>
-          {presentation.firstMissing ? (
-            <Button asChild variant="outline">
-              <a href={presentation.firstMissing.href}>
-                Add {presentation.firstMissing.label.toLowerCase()}
-              </a>
-            </Button>
-          ) : null}
-        </div>
-      </header>
+      <ProfileStudioHeader
+        presentation={presentation}
+        profileDirty={profileDirty}
+        motorcycleDirty={motorcycleDirty}
+      />
       <p className={styles.requiredLegend}>* Needed for a complete profile</p>
 
       <form

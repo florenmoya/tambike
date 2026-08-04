@@ -158,44 +158,6 @@
   color: var(--studio-paper);
 }
 
-.studioStatus {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem 1rem;
-  min-width: 0;
-  padding: 0.875rem 1rem;
-  border-left: 3px solid var(--studio-amber);
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--studio-paper) 7%, transparent);
-}
-
-.studioStatus p {
-  flex: 1 1 20rem;
-  max-width: 44rem;
-  margin: 0;
-  color: color-mix(in srgb, var(--studio-paper) 68%, transparent);
-  font-size: 0.875rem;
-  line-height: 1.45;
-}
-
-.studioStatus > :global([data-slot="button"]) {
-  min-height: 44px;
-  white-space: nowrap;
-}
-
-.studioStatus > :global([data-slot="button"][data-variant="outline"]) {
-  border-color: var(--studio-paper);
-  background: var(--studio-paper);
-  color: var(--studio-asphalt);
-}
-
-.studioStatus > :global([data-slot="button"][data-variant="outline"]:hover) {
-  background: color-mix(in srgb, var(--studio-paper) 86%, var(--studio-amber));
-  color: var(--studio-asphalt);
-}
-
 .studioEditor {
   display: grid;
   gap: 1.25rem;
@@ -514,10 +476,6 @@
 
   .studioHeaderActions :global([data-slot="button"]) {
     flex: 1 1 auto;
-  }
-
-  .studioStatus > :global([data-slot="button"]) {
-    width: 100%;
   }
 
   .profileDetailsSaveFooter {

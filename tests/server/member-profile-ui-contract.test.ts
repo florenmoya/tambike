@@ -111,6 +111,17 @@ async function loadProfileViewAction() {
   }).ProfileViewAction;
 }
 
+async function loadProfileStudioHeader() {
+  const settings = await import("../../src/features/member-profiles/profile-settings");
+  return (settings as unknown as {
+    ProfileStudioHeader?: (props: {
+      presentation: ReturnType<typeof getProfileEditorPresentation>;
+      profileDirty: boolean;
+      motorcycleDirty: boolean;
+    }) => ReactNode;
+  }).ProfileStudioHeader;
+}
+
 async function loadProfileSaveFooter() {
   const settings = await import("../../src/features/member-profiles/profile-settings");
   return (settings as unknown as {
@@ -460,6 +471,27 @@ describe("member profile App Router and UI contracts", () => {
     expect(settings).not.toContain('aria-label="Profile requirements"');
   });
 
+  test("keeps the profile header controls without the redundant status notice", async () => {
+    const ProfileStudioHeader = await loadProfileStudioHeader();
+    expect(ProfileStudioHeader).toBeTypeOf("function");
+
+    const presentation = getProfileEditorPresentation({
+      ...completeProfileInput,
+      isPublished: true,
+      visibility: "PRIVATE",
+    });
+    const markup = renderToStaticMarkup(ProfileStudioHeader!({
+      presentation,
+      profileDirty: false,
+      motorcycleDirty: false,
+    }));
+
+    expect(markup).toContain("Your profile");
+    expect(markup).toContain("Private");
+    expect(markup).toContain("Preview profile");
+    expect(markup).not.toContain("Only you can see this profile.");
+  });
+
   test("uses neutral profile and account copy across public member surfaces", () => {
     const screen = source("src/features/tambike-demo/tambike-screen.tsx");
     const profileScreen = source(
@@ -597,7 +629,7 @@ describe("member profile App Router and UI contracts", () => {
     expect(styles).toContain(".studio");
     expect(styles).toContain(".studioHeaderActions");
     expect(styles).toContain(".studioState");
-    expect(styles).toContain(".studioStatus");
+    expect(styles).not.toContain(".studioStatus");
     expect(styles).toContain(".requiredLegend");
     expect(styles).not.toContain(".studioModeSwitch");
     expect(styles).not.toContain(".studioPreviewMode");
@@ -645,9 +677,6 @@ describe("member profile App Router and UI contracts", () => {
     );
     expect(styles).toMatch(
       /@media\s*\(max-width:\s*640px\)[\s\S]*?\.motorcyclePhotoGrid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/,
-    );
-    expect(styles).toMatch(
-      /\.studioStatus\s*>\s*:global\(\[data-slot="button"\]\[data-variant="outline"\]\)\s*\{[\s\S]*?background:\s*var\(--studio-paper\);[\s\S]*?color:\s*var\(--studio-asphalt\);/,
     );
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
   });
