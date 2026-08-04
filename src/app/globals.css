@@ -5120,7 +5120,8 @@ svg {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .login-submit__spinner {
+  .login-submit__spinner,
+  .logout-button__spinner {
     animation: none;
   }
 }
@@ -5341,6 +5342,65 @@ svg {
   display: none;
 }
 
+.logout-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 247, 226, 0.9);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.logout-button:hover:not(:disabled),
+.logout-button:focus-visible {
+  border-color: rgba(255, 190, 69, 0.42);
+  background: rgba(255, 190, 69, 0.14);
+  color: #fff;
+  outline: 2px solid rgba(255, 190, 69, 0.3);
+  outline-offset: 2px;
+}
+
+.logout-button:disabled,
+.mobile-nav-session .mobile-logout-button:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.logout-button svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.logout-button__spinner {
+  animation: login-submit-spin 700ms linear infinite;
+}
+
+.logout-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: clamp(18px, 4vw, 44px);
+  max-width: min(360px, calc(100vw - 32px));
+  margin: 0;
+  border: 1px solid rgba(255, 186, 159, 0.3);
+  border-radius: 8px;
+  background: rgba(43, 13, 10, 0.96);
+  color: #ffe7dd;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 750;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.3);
+}
+
 .header-search-popover {
   position: fixed;
   z-index: 80;
@@ -5480,6 +5540,14 @@ svg {
     color: rgba(255, 247, 226, 0.84);
     padding: 11px 12px;
     text-align: left;
+  }
+
+  .header-actions .logout-button {
+    display: none;
+  }
+
+  .logout-error {
+    right: 16px;
   }
 
   .mobile-nav-session button:hover,

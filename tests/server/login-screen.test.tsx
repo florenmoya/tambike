@@ -4,16 +4,31 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { UserProfile } from "../../src/features/tambike-demo/types";
+import type { Role, UserProfile } from "../../src/features/tambike-demo/types";
 
 const loginWithPassword = vi.hoisted(() => vi.fn());
+const logout = vi.hoisted(() => vi.fn());
+const routerPush = vi.hoisted(() => vi.fn());
+const demoSession = vi.hoisted(() => ({
+  currentUser: null as UserProfile | null,
+  role: "guest" as Role,
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
+vi.mock("../../src/features/giveaways/giveaway-notification-bell", () => ({
+  GiveawayNotificationBell: () => null,
+}));
 
 vi.mock("../../src/features/tambike-demo/demo-provider", () => ({
-  useDemo: () => ({ loginWithPassword }),
+  useDemo: () => ({ loginWithPassword, logout, ...demoSession }),
 }));
 
 import {
   LoginScreen,
+  TambikeAppShell,
 } from "../../src/features/tambike-demo/tambike-screen";
 
 const organizer: UserProfile = {
@@ -31,6 +46,16 @@ const organizer: UserProfile = {
 type LoginView = {
   container: HTMLDivElement;
   form: HTMLFormElement;
+  navigate: ReturnType<typeof vi.fn>;
+  root: Root;
+};
+
+type ShellView = {
+  container: HTMLDivElement;
+  desktopLogout: HTMLButtonElement;
+  header: HTMLElement;
+  menuButton: HTMLButtonElement;
+  mobileLogout: HTMLButtonElement;
   navigate: ReturnType<typeof vi.fn>;
   root: Root;
 };
@@ -66,8 +91,57 @@ async function disposeLogin(view: LoginView) {
   view.container.remove();
 }
 
+async function renderShell(): Promise<ShellView> {
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+  demoSession.currentUser = organizer;
+  demoSession.role = "organizer";
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const navigate = vi.fn();
+
+  await act(async () => {
+    root.render(
+      <TambikeAppShell navigate={navigate}>
+        <main>Tambike content</main>
+      </TambikeAppShell>,
+    );
+  });
+
+  const desktopLogout = container.querySelector<HTMLButtonElement>(
+    ".header-actions .logout-button",
+  );
+  const mobileLogout = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Mobile log out"]',
+  );
+  const menuButton = container.querySelector<HTMLButtonElement>(".menu-button");
+  const header = container.querySelector<HTMLElement>(".site-header");
+  if (!desktopLogout || !mobileLogout || !menuButton || !header) {
+    throw new Error("Tambike shell did not render its logout controls");
+  }
+
+  return {
+    container,
+    desktopLogout,
+    header,
+    menuButton,
+    mobileLogout,
+    navigate,
+    root,
+  };
+}
+
+async function disposeShell(view: ShellView) {
+  await act(async () => view.root.unmount());
+  view.container.remove();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  demoSession.currentUser = null;
+  demoSession.role = "guest";
 });
 
 afterEach(() => {
@@ -151,6 +225,64 @@ describe("LoginScreen", () => {
       expect(view.navigate).not.toHaveBeenCalled();
     } finally {
       await disposeLogin(view);
+    }
+  });
+});
+
+describe("TambikeAppShell logout", () => {
+  test("shows labeled shared progress and keeps the mobile menu open through success", async () => {
+    let finishLogout!: () => void;
+    logout.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogout = resolve;
+        }),
+    );
+    const view = await renderShell();
+
+    try {
+      expect(view.desktopLogout.textContent).toContain("Log out");
+      await act(async () => view.menuButton.click());
+      await act(async () => {
+        view.mobileLogout.click();
+        await Promise.resolve();
+      });
+
+      expect(view.header.classList.contains("is-nav-open")).toBe(true);
+      expect(view.desktopLogout.disabled).toBe(true);
+      expect(view.mobileLogout.disabled).toBe(true);
+      expect(view.desktopLogout.textContent).toContain("Logging out…");
+      expect(view.mobileLogout.textContent).toContain("Logging out…");
+      expect(
+        view.container.querySelectorAll(".logout-button__spinner"),
+      ).toHaveLength(2);
+
+      await act(async () => finishLogout());
+
+      expect(view.navigate).toHaveBeenCalledWith("/");
+      expect(view.desktopLogout.disabled).toBe(true);
+      expect(view.mobileLogout.disabled).toBe(true);
+    } finally {
+      await disposeShell(view);
+    }
+  });
+
+  test("restores logout and shows safe feedback when the request fails", async () => {
+    logout.mockRejectedValue(new Error("session store unavailable"));
+    const view = await renderShell();
+
+    try {
+      await act(async () => view.desktopLogout.click());
+
+      expect(view.desktopLogout.disabled).toBe(false);
+      expect(view.mobileLogout.disabled).toBe(false);
+      expect(view.desktopLogout.textContent).toContain("Log out");
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
+        "Could not log out. Try again.",
+      );
+      expect(view.navigate).not.toHaveBeenCalled();
+    } finally {
+      await disposeShell(view);
     }
   });
 });

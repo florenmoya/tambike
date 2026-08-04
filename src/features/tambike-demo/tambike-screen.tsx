@@ -422,12 +422,33 @@ function SpeedometerNavGauge() {
   );
 }
 
-export function TambikeAppShell({ children }: { children: React.ReactNode }) {
+interface TambikeAppShellProps {
+  children: React.ReactNode;
+  navigate?: (href: string) => void;
+}
+
+function LogoutButtonContent({ pending }: { pending: boolean }) {
+  return pending ? (
+    <>
+      <LoaderCircle className="logout-button__spinner" aria-hidden="true" />
+      <span>Logging out…</span>
+    </>
+  ) : (
+    <>
+      <LogOut aria-hidden="true" />
+      <span>Log out</span>
+    </>
+  );
+}
+
+export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
   const { role, currentUser, logout } = useDemo();
   const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   const panelLink = panelLinkByRole[role];
   const PanelIcon = panelLink?.icon;
   const openSearch = () => {
@@ -439,6 +460,21 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
     const normalizedQuery = searchQuery.trim();
     setSearchOpen(false);
     router.push(normalizedQuery ? `/events?q=${encodeURIComponent(normalizedQuery)}` : "/events");
+  };
+  const handleLogout = async () => {
+    if (logoutPending) return;
+
+    setLogoutError("");
+    setLogoutPending(true);
+
+    try {
+      await logout();
+      if (navigate) navigate("/");
+      else window.location.replace("/");
+    } catch {
+      setLogoutPending(false);
+      setLogoutError("Could not log out. Try again.");
+    }
   };
 
   return (
@@ -475,15 +511,16 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
                   </Link>
                 ) : null}
                 <button
+                  className="mobile-logout-button"
                   aria-label="Mobile log out"
                   type="button"
+                  aria-busy={logoutPending}
+                  disabled={logoutPending}
                   onClick={() => {
-                    setNavOpen(false);
-                    void logout();
+                    void handleLogout();
                   }}
                 >
-                  <LogOut aria-hidden="true" />
-                  Log out
+                  <LogoutButtonContent pending={logoutPending} />
                 </button>
               </>
             ) : (
@@ -514,14 +551,16 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
                 <strong>{roleLabels[role]}</strong>
               </Link>
               <button
-                className="icon-button"
+                className="logout-button"
                 type="button"
                 aria-label="Log out"
+                aria-busy={logoutPending}
+                disabled={logoutPending}
                 onClick={() => {
-                  void logout();
+                  void handleLogout();
                 }}
               >
-                <LogOut aria-hidden="true" />
+                <LogoutButtonContent pending={logoutPending} />
               </button>
             </>
           ) : (
@@ -558,6 +597,11 @@ export function TambikeAppShell({ children }: { children: React.ReactNode }) {
             <Menu aria-hidden="true" />
           </button>
         </div>
+        {logoutError ? (
+          <p className="logout-error" role="alert">
+            {logoutError}
+          </p>
+        ) : null}
         {searchOpen ? (
           <form className="header-search-popover" role="search" onSubmit={submitSearch}>
             <label>
