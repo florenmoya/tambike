@@ -487,7 +487,7 @@ describe("member profile App Router and UI contracts", () => {
     }));
 
     expect(markup).toContain("Your profile");
-    expect(markup).toContain("Private");
+    expect(markup).not.toContain("Private");
     expect(markup).toContain("Preview profile");
     expect(markup).not.toContain("Only you can see this profile.");
   });
@@ -628,7 +628,6 @@ describe("member profile App Router and UI contracts", () => {
 
     expect(styles).toContain(".studio");
     expect(styles).toContain(".studioHeaderActions");
-    expect(styles).toContain(".studioState");
     expect(styles).not.toContain(".studioStatus");
     expect(styles).toContain(".requiredLegend");
     expect(styles).not.toContain(".studioModeSwitch");

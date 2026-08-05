@@ -132,32 +132,6 @@
   text-align: right;
 }
 
-.studioState {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: 0.25rem 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--studio-steel) 36%, transparent);
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 800;
-}
-
-.studioState[data-state="live"] {
-  border-color: color-mix(in srgb, var(--studio-green) 72%, transparent);
-  color: #91c5a5;
-}
-
-.studioState[data-state="ready"] {
-  border-color: color-mix(in srgb, var(--studio-amber) 72%, transparent);
-  color: var(--studio-amber);
-}
-
-.studioState[data-state="private"] {
-  border-color: color-mix(in srgb, var(--studio-steel) 72%, transparent);
-  color: var(--studio-paper);
-}
-
 .studioEditor {
   display: grid;
   gap: 1.25rem;

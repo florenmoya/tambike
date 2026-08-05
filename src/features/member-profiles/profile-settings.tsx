@@ -252,9 +252,6 @@ export function ProfileStudioHeader({
         <p>Add the details people see when they open your profile.</p>
       </div>
       <div className={styles.studioHeaderActions}>
-        <span className={styles.studioState} data-state={presentation.state}>
-          {presentation.label}
-        </span>
         <ProfileViewAction
           viewAction={presentation.viewAction}
           profileDirty={profileDirty}
