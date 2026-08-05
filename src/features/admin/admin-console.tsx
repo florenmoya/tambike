@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { organizers } from "@/features/tambike-demo/data";
+import { eventReviewSummary } from "@/features/admin/event-review-copy";
 import { useDemo } from "@/features/tambike-demo/demo-provider";
 import type { Event, UserProfile } from "@/features/tambike-demo/types";
 
@@ -318,13 +319,7 @@ export function adminEventReviewSummary(
   event: Event,
   state: { isDisabled: boolean; isPublished: boolean },
 ) {
-  if (state.isDisabled) {
-    return `${event.title} is disabled and hidden from public operations.`;
-  }
-  if (state.isPublished) {
-    return `${event.title} is published and visible to riders.`;
-  }
-  return event.shortDescription;
+  return eventReviewSummary(event, state);
 }
 
 function ReportsSection({ rows }: { rows: ReportRow[] }) {

@@ -9,6 +9,17 @@ const source = readFileSync(
 );
 
 describe("Prisma event schedule backend contract", () => {
+  test("counts only interested RSVPs in the Interested metric", async () => {
+    const backend = await import("../../src/server/prisma-backend") as {
+      eventRelationshipCountSelect?: unknown;
+    };
+
+    expect(backend.eventRelationshipCountSelect).toEqual({
+      passes: true,
+      rsvps: { where: { status: "interested" } },
+    });
+  });
+
   test("validates structured input and persists generated labels", () => {
     const createStart = source.indexOf("async createEventDraft");
     const createEnd = source.indexOf("async registerForEvent", createStart);

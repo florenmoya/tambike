@@ -174,6 +174,22 @@ describe("persisted event review UI", () => {
     expect(pending.match(/min-h-11/g)?.length).toBeGreaterThanOrEqual(4);
   });
 
+  test("replaces pending-review copy after publication", async () => {
+    const { EventReviewControls } = await loadAdminControls();
+    const publishedView = adminView("PUBLISHED");
+    publishedView.event.shortDescription =
+      "Quezon City Night Ride is awaiting admin review.";
+
+    const published = renderToStaticMarkup(
+      createElement(EventReviewControls, { initialView: publishedView }),
+    );
+
+    expect(published).toContain(
+      "Quezon City Night Ride is published and visible to riders.",
+    );
+    expect(published).not.toContain("awaiting admin review");
+  });
+
   test("opens an origin-bound required-reason dialog with concurrency fields", async () => {
     const { EventReviewControls } = await loadAdminControls();
     const container = document.createElement("div");

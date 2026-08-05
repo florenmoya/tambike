@@ -60,7 +60,7 @@ QR check-in can be operated by:
 - an admin;
 - explicitly assigned operators where the giveaway/check-in flow supports assignment.
 
-Check-in validates pass identity, event match, pass status, duplicate check-in, cancellation, and active event window. Perk redemption remains separate from attendance and can be marked manually by authorized staff.
+Check-in validates pass identity, event match, pass status, duplicate check-in, and cancellation. Rider self-check-in also follows the configured event policy and active event window; authorized staff scanning remains available as an operational override. Perk redemption remains separate from attendance and can be marked manually by authorized staff.
 
 ## 6. Giveaways and raffle operations
 

@@ -315,13 +315,18 @@ const eventRecordSelect = {
   safetyRules: true,
 } as const;
 
+export const eventRelationshipCountSelect = {
+  passes: true,
+  rsvps: { where: { status: "interested" } },
+} as const;
+
 const giveawayConfigurationInclude = {
   event: {
     select: {
       ...eventRecordSelect,
       organizer: { select: { userId: true } },
       perks: true,
-      _count: { select: { passes: true, rsvps: true } },
+      _count: { select: eventRelationshipCountSelect },
     },
   },
   mechanicsVersions: { orderBy: { version: "desc" } },
@@ -457,7 +462,7 @@ const GIVEAWAY_CONFIGURATION_TRANSACTION_OPTIONS = {
 const eventRecordWithCountsSelect = {
   ...eventRecordSelect,
   perks: true,
-  _count: { select: { passes: true, rsvps: true } },
+  _count: { select: eventRelationshipCountSelect },
 } as const;
 
 const eventReviewSelect = {
@@ -10096,7 +10101,7 @@ export class PrismaTambikeBackend {
         organizer: { select: { userId: true } },
         checkInSettings: true,
         perks: true,
-        _count: { select: { passes: true, rsvps: true } },
+        _count: { select: eventRelationshipCountSelect },
       },
     });
     if (!event) {
@@ -10124,7 +10129,7 @@ export class PrismaTambikeBackend {
             organizer: { select: { userId: true } },
             checkInSettings: true,
             perks: true,
-            _count: { select: { passes: true, rsvps: true } },
+            _count: { select: eventRelationshipCountSelect },
           },
         },
       },

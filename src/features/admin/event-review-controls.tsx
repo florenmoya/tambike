@@ -17,6 +17,7 @@ import type {
   AdminEventReviewView,
   EventReviewHistoryItem,
 } from "@/features/admin/event-review-types";
+import { eventReviewSummary } from "@/features/admin/event-review-copy";
 import type { ActionState } from "@/features/shared/action-state";
 import { useOptionalDemo } from "@/features/tambike-demo/demo-provider";
 import {
@@ -130,7 +131,10 @@ export function EventReviewControls({
             <div className="grid gap-2">
               <h2 className="text-sm font-semibold">Event details</h2>
               <p className="break-words text-sm leading-6 text-muted-foreground">
-                {view.event.shortDescription}
+                {eventReviewSummary(view.event, {
+                  isDisabled: status === "DISABLED",
+                  isPublished: status === "PUBLISHED",
+                })}
               </p>
               <p className="break-words text-sm leading-6 text-muted-foreground">
                 {view.event.locationAddress}
