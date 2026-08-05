@@ -2,6 +2,7 @@
 
 import { useLinkStatus } from "next/link";
 import type { MouseEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import styles from "./tambike-loading-feedback.module.css";
 
@@ -63,7 +64,9 @@ export function EventNavigationFeedback({
   return (
     <>
       {children(pending)}
-      {pending ? <EventLoadingModal eventTitle={eventTitle} /> : null}
+      {pending && typeof document !== "undefined"
+        ? createPortal(<EventLoadingModal eventTitle={eventTitle} />, document.body)
+        : null}
     </>
   );
 }

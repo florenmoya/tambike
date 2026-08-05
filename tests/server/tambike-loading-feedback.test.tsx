@@ -69,4 +69,12 @@ describe("Tambike loading feedback", () => {
     expect(feedbackSource).toContain("event.preventDefault();");
     expect(feedbackSource).toContain("event.stopPropagation();");
   });
+
+  test("portals the pending modal to document.body from the link-status bridge", () => {
+    const feedbackSource = source("src/components/tambike-loading-feedback.tsx");
+
+    expect(feedbackSource).toMatch(
+      /export function EventNavigationFeedback[\s\S]*?const \{ pending \} = useLinkStatus\(\);[\s\S]*?createPortal\(\s*<EventLoadingModal eventTitle=\{eventTitle\} \/>,\s*document\.body,?\s*\)/,
+    );
+  });
 });
