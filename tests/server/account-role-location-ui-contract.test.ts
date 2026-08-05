@@ -114,11 +114,15 @@ describe("account and event-location UI contracts", () => {
     expect(stylesSource).toContain(".mobile-nav-session");
   });
 
-  test("wires the header search control to the event query route", () => {
+  test("keeps event-page search while removing shared-header search", () => {
+    expect(screenSource).toContain('className="event-search"');
+    expect(screenSource).toContain('action="/events"');
     expect(screenSource).toContain('role="search"');
     expect(screenSource).toContain('aria-label="Search events"');
-    expect(screenSource).toContain('router.push(normalizedQuery');
-    expect(stylesSource).toContain(".header-search-popover");
+    expect(screenSource).not.toContain('aria-label="Open event search"');
+    expect(screenSource).not.toContain("router.push(normalizedQuery");
+    expect(screenSource).not.toContain("header-search-popover");
+    expect(stylesSource).not.toContain(".header-search-popover");
   });
 
   test("keeps the legacy screen renderer to public and rider-only variants", () => {
