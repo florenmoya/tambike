@@ -3,7 +3,6 @@
 import clsx from "clsx";
 import {
   Building2,
-  ChevronDown,
   Coffee,
   Gauge,
   LoaderCircle,
@@ -91,13 +90,6 @@ interface TambikeScreenProps {
   nextHref?: string;
   attendeePreview?: EventAttendeePreviewData;
 }
-
-const roleLabels: Record<Role, string> = {
-  guest: "Guest",
-  rider: "Member",
-  organizer: "Organizer",
-  admin: "Admin",
-};
 
 const featuredEventIds = [
   "tambike-cafe-classico",
@@ -444,10 +436,7 @@ function LogoutButtonContent({ pending }: { pending: boolean }) {
 
 export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
   const { role, currentUser, logout } = useDemo();
-  const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -455,16 +444,6 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
   const accountTriggerRef = useRef<HTMLButtonElement>(null);
   const panelLink = panelLinkByRole[role];
   const PanelIcon = panelLink?.icon;
-  const openSearch = () => {
-    setNavOpen(false);
-    setSearchOpen(true);
-  };
-  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const normalizedQuery = searchQuery.trim();
-    setSearchOpen(false);
-    router.push(normalizedQuery ? `/events?q=${encodeURIComponent(normalizedQuery)}` : "/events");
-  };
   const handleLogout = async () => {
     if (logoutPending) return;
 
@@ -526,10 +505,6 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
             </Link>
           ))}
           <div className="mobile-nav-session">
-            <button aria-label="Open event search" type="button" onClick={openSearch}>
-              <Search aria-hidden="true" />
-              Search events
-            </button>
             {currentUser ? (
               <>
                 <Link href="/profile" onClick={() => setNavOpen(false)}>
@@ -578,7 +553,7 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
               <div className="account-menu" ref={accountMenuRef}>
                 <button
                   ref={accountTriggerRef}
-                  className="account-chip"
+                  className="icon-button account-menu__trigger"
                   type="button"
                   aria-label="Account menu"
                   aria-controls="desktop-account-options"
@@ -586,9 +561,6 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
                   onClick={() => setAccountMenuOpen((open) => !open)}
                 >
                   <User aria-hidden="true" />
-                  <span>{currentUser.displayName}</span>
-                  <strong>{roleLabels[role]}</strong>
-                  <ChevronDown className="account-menu__chevron" aria-hidden="true" />
                 </button>
                 {accountMenuOpen ? (
                   <div
@@ -639,18 +611,6 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
             </>
           )}
           <button
-            className="icon-button"
-            type="button"
-            aria-label="Search events"
-            aria-expanded={searchOpen}
-            onClick={() => setSearchOpen((open) => !open)}
-          >
-            <Search aria-hidden="true" />
-          </button>
-          <Link className="icon-button" href={currentUser ? "/profile" : "/login"} aria-label="Account">
-            <User aria-hidden="true" />
-          </Link>
-          <button
             className="menu-button"
             type="button"
             aria-label={navOpen ? "Close navigation" : "Open navigation"}
@@ -664,22 +624,6 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
           <p className="logout-error" role="alert">
             {logoutError}
           </p>
-        ) : null}
-        {searchOpen ? (
-          <form className="header-search-popover" role="search" onSubmit={submitSearch}>
-            <label>
-              <span>Search events</span>
-              <input
-                aria-label="Search events"
-                autoFocus
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Event, venue, or city"
-                type="search"
-                value={searchQuery}
-              />
-            </label>
-            <button type="submit">Search</button>
-          </form>
         ) : null}
       </header>
       <main className="ambient-main">{children}</main>

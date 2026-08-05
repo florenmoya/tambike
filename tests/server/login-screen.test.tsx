@@ -109,7 +109,7 @@ async function renderShell(): Promise<ShellView> {
   });
 
   const accountTrigger = container.querySelector<HTMLButtonElement>(
-    "button.account-chip",
+    "button.account-menu__trigger",
   );
   const mobileLogout = container.querySelector<HTMLButtonElement>(
     '[aria-label="Mobile log out"]',
@@ -247,6 +247,17 @@ describe("TambikeAppShell logout", () => {
     const view = await renderShell();
 
     try {
+      expect(view.container.querySelector(".account-chip")).toBeNull();
+      expect(
+        view.container.querySelector('.header-actions > a[href="/profile"]'),
+      ).toBeNull();
+      expect(
+        view.container.querySelector('[aria-label="Search events"]'),
+      ).toBeNull();
+      expect(
+        view.container.querySelector('[aria-label="Open event search"]'),
+      ).toBeNull();
+      expect(view.container.querySelector(".header-search-popover")).toBeNull();
       expect(view.accountTrigger.getAttribute("aria-expanded")).toBe("false");
       expect(
         view.container.querySelector(".header-actions > .logout-button"),
