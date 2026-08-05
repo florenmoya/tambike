@@ -51,10 +51,8 @@ type LoginView = {
 };
 
 type ShellView = {
+  accountTrigger: HTMLButtonElement;
   container: HTMLDivElement;
-  desktopLogout: HTMLButtonElement;
-  header: HTMLElement;
-  menuButton: HTMLButtonElement;
   mobileLogout: HTMLButtonElement;
   navigate: ReturnType<typeof vi.fn>;
   root: Root;
@@ -110,23 +108,19 @@ async function renderShell(): Promise<ShellView> {
     );
   });
 
-  const desktopLogout = container.querySelector<HTMLButtonElement>(
-    ".header-actions .logout-button",
+  const accountTrigger = container.querySelector<HTMLButtonElement>(
+    "button.account-chip",
   );
   const mobileLogout = container.querySelector<HTMLButtonElement>(
     '[aria-label="Mobile log out"]',
   );
-  const menuButton = container.querySelector<HTMLButtonElement>(".menu-button");
-  const header = container.querySelector<HTMLElement>(".site-header");
-  if (!desktopLogout || !mobileLogout || !menuButton || !header) {
-    throw new Error("Tambike shell did not render its logout controls");
+  if (!accountTrigger || !mobileLogout) {
+    throw new Error("Tambike shell did not render its account controls");
   }
 
   return {
+    accountTrigger,
     container,
-    desktopLogout,
-    header,
-    menuButton,
     mobileLogout,
     navigate,
     root,
@@ -136,6 +130,25 @@ async function renderShell(): Promise<ShellView> {
 async function disposeShell(view: ShellView) {
   await act(async () => view.root.unmount());
   view.container.remove();
+}
+
+async function openAccountMenu(view: ShellView) {
+  await act(async () => view.accountTrigger.click());
+
+  const panel = view.container.querySelector<HTMLElement>(
+    ".account-menu__panel",
+  );
+  const profileLink = panel?.querySelector<HTMLAnchorElement>(
+    'a[href="/profile"]',
+  );
+  const logoutButton = panel?.querySelector<HTMLButtonElement>(
+    ".account-menu__logout",
+  );
+  if (!panel || !profileLink || !logoutButton) {
+    throw new Error("Account menu did not render its required actions");
+  }
+
+  return { logoutButton, panel, profileLink };
 }
 
 beforeEach(() => {
@@ -230,7 +243,77 @@ describe("LoginScreen", () => {
 });
 
 describe("TambikeAppShell logout", () => {
-  test("shows labeled shared progress and keeps the mobile menu open through success", async () => {
+  test("opens account options without a standalone desktop logout control", async () => {
+    const view = await renderShell();
+
+    try {
+      expect(view.accountTrigger.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        view.container.querySelector(".header-actions > .logout-button"),
+      ).toBeNull();
+
+      const menu = await openAccountMenu(view);
+
+      expect(view.accountTrigger.getAttribute("aria-expanded")).toBe("true");
+      expect(menu.panel.getAttribute("role")).toBe("group");
+      expect(menu.panel.getAttribute("aria-label")).toBe("Account options");
+      expect(menu.profileLink.textContent).toContain("View profile");
+      expect(menu.profileLink.getAttribute("href")).toBe("/profile");
+      expect(menu.logoutButton.textContent).toContain("Log out");
+      expect(view.mobileLogout.textContent).toContain("Log out");
+      expect(
+        view.container.querySelector('.mobile-nav-session a[href="/profile"]'),
+      ).not.toBeNull();
+    } finally {
+      await disposeShell(view);
+    }
+  });
+
+  test("dismisses account options with its trigger, outside interaction, and Escape", async () => {
+    const view = await renderShell();
+
+    try {
+      await openAccountMenu(view);
+      await act(async () => view.accountTrigger.click());
+      expect(view.container.querySelector(".account-menu__panel")).toBeNull();
+
+      await openAccountMenu(view);
+      await act(async () =>
+        document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })),
+      );
+      expect(view.container.querySelector(".account-menu__panel")).toBeNull();
+
+      await openAccountMenu(view);
+      await act(async () =>
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      );
+      expect(view.container.querySelector(".account-menu__panel")).toBeNull();
+      expect(document.activeElement).toBe(view.accountTrigger);
+    } finally {
+      await disposeShell(view);
+    }
+  });
+
+  test("closes account options after choosing View profile", async () => {
+    const view = await renderShell();
+
+    try {
+      const menu = await openAccountMenu(view);
+      menu.profileLink.addEventListener("click", (event) => event.preventDefault(), {
+        once: true,
+      });
+
+      await act(async () => menu.profileLink.click());
+
+      expect(view.container.querySelector(".account-menu__panel")).toBeNull();
+    } finally {
+      await disposeShell(view);
+    }
+  });
+
+  test("shows shared progress in the open account menu through success", async () => {
     let finishLogout!: () => void;
     logout.mockImplementation(
       () =>
@@ -241,17 +324,17 @@ describe("TambikeAppShell logout", () => {
     const view = await renderShell();
 
     try {
-      expect(view.desktopLogout.textContent).toContain("Log out");
-      await act(async () => view.menuButton.click());
+      const menu = await openAccountMenu(view);
       await act(async () => {
-        view.mobileLogout.click();
+        menu.logoutButton.click();
         await Promise.resolve();
       });
 
-      expect(view.header.classList.contains("is-nav-open")).toBe(true);
-      expect(view.desktopLogout.disabled).toBe(true);
+      expect(view.container.querySelector(".account-menu__panel")).not.toBeNull();
+      expect(view.accountTrigger.getAttribute("aria-expanded")).toBe("true");
+      expect(menu.logoutButton.disabled).toBe(true);
       expect(view.mobileLogout.disabled).toBe(true);
-      expect(view.desktopLogout.textContent).toContain("Logging out…");
+      expect(menu.logoutButton.textContent).toContain("Logging out…");
       expect(view.mobileLogout.textContent).toContain("Logging out…");
       expect(
         view.container.querySelectorAll(".logout-button__spinner"),
@@ -260,7 +343,7 @@ describe("TambikeAppShell logout", () => {
       await act(async () => finishLogout());
 
       expect(view.navigate).toHaveBeenCalledWith("/");
-      expect(view.desktopLogout.disabled).toBe(true);
+      expect(menu.logoutButton.disabled).toBe(true);
       expect(view.mobileLogout.disabled).toBe(true);
     } finally {
       await disposeShell(view);
@@ -272,12 +355,14 @@ describe("TambikeAppShell logout", () => {
     const view = await renderShell();
 
     try {
-      await act(async () => view.desktopLogout.click());
+      const menu = await openAccountMenu(view);
+      await act(async () => menu.logoutButton.click());
 
-      expect(view.desktopLogout.disabled).toBe(false);
+      expect(view.container.querySelector(".account-menu__panel")).not.toBeNull();
+      expect(menu.logoutButton.disabled).toBe(false);
       expect(view.mobileLogout.disabled).toBe(false);
-      expect(view.desktopLogout.textContent).toContain("Log out");
-      expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
+      expect(menu.logoutButton.textContent).toContain("Log out");
+      expect(menu.panel.querySelector('[role="alert"]')?.textContent).toBe(
         "Could not log out. Try again.",
       );
       expect(view.navigate).not.toHaveBeenCalled();

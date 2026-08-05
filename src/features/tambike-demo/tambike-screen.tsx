@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import {
   Building2,
+  ChevronDown,
   Coffee,
   Gauge,
   LoaderCircle,
@@ -447,8 +448,11 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
   const [navOpen, setNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
   const panelLink = panelLinkByRole[role];
   const PanelIcon = panelLink?.icon;
   const openSearch = () => {
@@ -476,6 +480,32 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
       setLogoutError("Could not log out. Try again.");
     }
   };
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+
+    const handlePointerDown = (event: globalThis.PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !accountMenuRef.current?.contains(event.target)
+      ) {
+        setAccountMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      setAccountMenuOpen(false);
+      accountTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [accountMenuOpen]);
 
   return (
     <div className="tambike-shell">
@@ -545,23 +575,56 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
                   <span>{panelLink.label}</span>
                 </Link>
               ) : null}
-              <Link className="account-chip" href="/profile">
-                <User aria-hidden="true" />
-                <span>{currentUser.displayName}</span>
-                <strong>{roleLabels[role]}</strong>
-              </Link>
-              <button
-                className="logout-button"
-                type="button"
-                aria-label="Log out"
-                aria-busy={logoutPending}
-                disabled={logoutPending}
-                onClick={() => {
-                  void handleLogout();
-                }}
-              >
-                <LogoutButtonContent pending={logoutPending} />
-              </button>
+              <div className="account-menu" ref={accountMenuRef}>
+                <button
+                  ref={accountTriggerRef}
+                  className="account-chip"
+                  type="button"
+                  aria-label="Account menu"
+                  aria-controls="desktop-account-options"
+                  aria-expanded={accountMenuOpen}
+                  onClick={() => setAccountMenuOpen((open) => !open)}
+                >
+                  <User aria-hidden="true" />
+                  <span>{currentUser.displayName}</span>
+                  <strong>{roleLabels[role]}</strong>
+                  <ChevronDown className="account-menu__chevron" aria-hidden="true" />
+                </button>
+                {accountMenuOpen ? (
+                  <div
+                    id="desktop-account-options"
+                    className="account-menu__panel"
+                    role="group"
+                    aria-label="Account options"
+                  >
+                    <Link
+                      className="account-menu__item"
+                      href="/profile"
+                      onClick={() => setAccountMenuOpen(false)}
+                    >
+                      <User aria-hidden="true" />
+                      <span>View profile</span>
+                    </Link>
+                    <button
+                      className="account-menu__item account-menu__logout"
+                      type="button"
+                      aria-label="Log out"
+                      aria-busy={logoutPending}
+                      disabled={logoutPending}
+                      onClick={() => {
+                        void handleLogout();
+                      }}
+                    >
+                      <LogoutButtonContent pending={logoutPending} />
+                    </button>
+                    {logoutError ? (
+                      <p className="account-menu__error" role="alert">
+                        {logoutError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </>
           ) : (
             <>
@@ -597,7 +660,7 @@ export function TambikeAppShell({ children, navigate }: TambikeAppShellProps) {
             <Menu aria-hidden="true" />
           </button>
         </div>
-        {logoutError ? (
+        {logoutError && !accountMenuOpen ? (
           <p className="logout-error" role="alert">
             {logoutError}
           </p>
