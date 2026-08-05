@@ -1985,6 +1985,19 @@ export class TambikeBackend {
     return {
       giveawayId: giveaway.id,
       canCancel: giveaway.awards.length === 0 && ["draft", "scheduled", "open", "paused"].includes(giveaway.state),
+      canSchedule:
+        giveaway.state === "draft" &&
+        giveaway.complianceStatus === "approved" &&
+        Boolean(giveaway.entryOpensAt && new Date(giveaway.entryOpensAt).getTime() > Date.now()),
+      canOpen:
+        giveaway.complianceStatus === "approved" &&
+        (["scheduled", "paused"].includes(giveaway.state) ||
+          (giveaway.state === "draft" &&
+            (!giveaway.entryOpensAt || new Date(giveaway.entryOpensAt).getTime() <= Date.now()))),
+      canCompleteClaims:
+        giveaway.state === "claims_open" &&
+        !giveaway.awards.some((award) => award.isCurrent && award.status !== "fulfilled") &&
+        !this.hasUnresolvedTerminalDirectGiveawayAward(giveaway),
       canRunInitialRandomDraw:
         ["locked", "drawing"].includes(giveaway.state) &&
         giveaway.prizePools.some((pool) => pool.awardMode === "random_draw") &&

@@ -95,6 +95,29 @@ describe("event attendee preview loader", () => {
     ).rejects.toBe(marker);
   });
 
+  test("maps a serialized backend not-found to the route boundary", async () => {
+    const { loadEventAttendeePreview } = await import(
+      "../../src/app/events/[eventId]/load-event-attendee-preview"
+    );
+    const marker = new Error("route-not-found");
+    const serializedError = Object.assign(new Error("NOT_FOUND"), {
+      name: "BackendError",
+      code: "NOT_FOUND",
+    });
+
+    await expect(
+      loadEventAttendeePreview(
+        "missing",
+        async () => {
+          throw serializedError;
+        },
+        () => {
+          throw marker;
+        },
+      ),
+    ).rejects.toBe(marker);
+  });
+
   test("keeps the event route usable when preview data is unavailable", async () => {
     const { loadEventAttendeePreview } = await import(
       "../../src/app/events/[eventId]/load-event-attendee-preview"

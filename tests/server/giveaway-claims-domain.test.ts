@@ -320,6 +320,10 @@ describe("in-memory giveaway claim security", () => {
     const claim = await backend.issueGiveawayClaimToken(context.rider.sessionToken, context.awardId);
 
     await expect(
+      backend.getOrganizerGiveawayOperations(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ canCompleteClaims: false });
+
+    await expect(
       backend.verifyGiveawayClaim(context.organizer.sessionToken, {
         payload: claim.qrPayload,
         method: "camera",
@@ -356,6 +360,12 @@ describe("in-memory giveaway claim security", () => {
         reference: "desk-1",
       }),
     ).resolves.toMatchObject({ awardId: context.awardId, status: "fulfilled" });
+    await expect(
+      backend.getOrganizerGiveawayOperations(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toMatchObject({ canCompleteClaims: true });
+    await expect(
+      backend.completeGiveawayClaims(context.organizer.sessionToken, context.giveaway.id),
+    ).resolves.toEqual({ completed: true });
   });
 
   test("allows explicit operators only while active and keeps delivery encrypted, consented, scoped, and purgeable", async () => {

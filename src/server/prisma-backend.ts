@@ -1661,6 +1661,31 @@ export class PrismaTambikeBackend {
       giveawayId: giveaway.id,
       canCancel:
         awards.length === 0 && ["draft", "scheduled", "open", "paused"].includes(giveaway.status),
+      canSchedule:
+        giveaway.status === "draft" &&
+        giveaway.complianceStatus === "approved" &&
+        Boolean(giveaway.entryOpensAt && giveaway.entryOpensAt.getTime() > Date.now()),
+      canOpen:
+        giveaway.complianceStatus === "approved" &&
+        (["scheduled", "paused"].includes(giveaway.status) ||
+          (giveaway.status === "draft" &&
+            (!giveaway.entryOpensAt || giveaway.entryOpensAt.getTime() <= Date.now()))),
+      canCompleteClaims:
+        giveaway.status === "claims_open" &&
+        !awards.some((award) => award.isCurrent && award.status !== "fulfilled") &&
+        !awards.some((award) => {
+          if (
+            award.drawId ||
+            award.snapshotEntryId ||
+            award.isCurrent ||
+            award.recoveryClosedAt ||
+            !["declined", "voided", "disqualified", "expired"].includes(award.status)
+          ) {
+            return false;
+          }
+          const pool = giveaway.prizePools.find((candidate) => candidate.id === award.prizePoolId);
+          return pool?.awardMode === "first_come" || pool?.awardMode === "guaranteed";
+        }),
       canRunInitialRandomDraw:
         ["locked", "drawing"].includes(giveaway.status) &&
         giveaway.prizePools.some((pool) => pool.awardMode === "random_draw") &&

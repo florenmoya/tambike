@@ -1574,6 +1574,140 @@ describe("organizer giveaway lifecycle route", () => {
     expect(lockedManualHeader).not.toContain("Run draw");
   });
 
+  test("renders the server-authorized action for an approved draft campaign", () => {
+    const baseProps = {
+      campaign: {
+        id: "giveaway-approved-draft",
+        eventId: "event-1",
+        title: "Approved draft campaign",
+        state: "draft" as const,
+        complianceStatus: "approved" as const,
+        mechanicsVersion: 1,
+      },
+      isPending: false,
+      onSubmit: () => undefined,
+      onSchedule: () => undefined,
+      onOpen: () => undefined,
+      onPause: () => undefined,
+      onLock: () => undefined,
+      onDraw: () => undefined,
+      onPublish: () => undefined,
+    };
+    const manualMarkup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        operations: {
+          giveawayId: "giveaway-approved-draft",
+          canCancel: true,
+          canSchedule: false,
+          canOpen: true,
+          canRunInitialRandomDraw: false,
+          presentationDrawId: null,
+          publishableDrawId: null,
+          recoverableAwards: [],
+        },
+      } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>),
+    );
+    const scheduledMarkup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        operations: {
+          giveawayId: "giveaway-approved-draft",
+          canCancel: true,
+          canSchedule: true,
+          canOpen: false,
+          canRunInitialRandomDraw: false,
+          presentationDrawId: null,
+          publishableDrawId: null,
+          recoverableAwards: [],
+        },
+      } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>),
+    );
+
+    expect(manualMarkup).toMatch(/<button[^>]*>[\s\S]*?Open now<\/button>/);
+    expect(manualMarkup).not.toMatch(/<button[^>]*>[\s\S]*?Schedule<\/button>/);
+    expect(scheduledMarkup).toMatch(/<button[^>]*>[\s\S]*?Schedule<\/button>/);
+    expect(scheduledMarkup).not.toMatch(/<button[^>]*>[\s\S]*?Open now<\/button>/);
+  });
+
+  test("offers compliance resubmission after a paused campaign policy changes", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        campaign: {
+          id: "giveaway-paused-review",
+          eventId: "event-1",
+          title: "Paused campaign",
+          state: "paused",
+          complianceStatus: "draft",
+          mechanicsVersion: 2,
+        },
+        isPending: false,
+        onSubmit: () => undefined,
+        onSchedule: () => undefined,
+        onOpen: () => undefined,
+        onPause: () => undefined,
+        onLock: () => undefined,
+        onDraw: () => undefined,
+        onPublish: () => undefined,
+      }),
+    );
+
+    expect(markup).toMatch(/<button[^>]*>[\s\S]*?Submit review<\/button>/);
+  });
+
+  test("offers claim completion only when the server authorizes it", () => {
+    const baseProps = {
+      campaign: {
+        id: "giveaway-claims",
+        eventId: "event-1",
+        title: "Claims campaign",
+        state: "claims_open" as const,
+        complianceStatus: "approved" as const,
+        mechanicsVersion: 1,
+      },
+      isPending: false,
+      onSubmit: () => undefined,
+      onSchedule: () => undefined,
+      onOpen: () => undefined,
+      onPause: () => undefined,
+      onLock: () => undefined,
+      onDraw: () => undefined,
+      onPublish: () => undefined,
+      onComplete: () => undefined,
+    };
+    const completeMarkup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        operations: {
+          giveawayId: "giveaway-claims",
+          canCancel: false,
+          canCompleteClaims: true,
+          canRunInitialRandomDraw: false,
+          presentationDrawId: null,
+          publishableDrawId: null,
+          recoverableAwards: [],
+        },
+      } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>),
+    );
+    const unresolvedMarkup = renderToStaticMarkup(
+      React.createElement(CampaignOperationalHeader, {
+        ...baseProps,
+        operations: {
+          giveawayId: "giveaway-claims",
+          canCancel: false,
+          canCompleteClaims: false,
+          canRunInitialRandomDraw: false,
+          presentationDrawId: null,
+          publishableDrawId: null,
+          recoverableAwards: [],
+        },
+      } as unknown as React.ComponentProps<typeof CampaignOperationalHeader>),
+    );
+
+    expect(completeMarkup).toMatch(/<button[^>]*>[\s\S]*?Complete campaign<\/button>/);
+    expect(unresolvedMarkup).not.toContain("Complete campaign");
+  });
+
   test("keeps initial random draw and reload-safe publication controls server-owned", () => {
     const operations: OrganizerGiveawayOperations = {
       giveawayId: "giveaway-manual",

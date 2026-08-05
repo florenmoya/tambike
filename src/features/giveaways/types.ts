@@ -421,6 +421,12 @@ export interface OrganizerGiveawayRecoverableAward {
 export interface OrganizerGiveawayOperations {
   giveawayId: string;
   canCancel: boolean;
+  /** The server has verified a future opening time for this approved draft. */
+  canSchedule?: boolean;
+  /** The server has verified that the campaign may be opened immediately. */
+  canOpen?: boolean;
+  /** Every current award is fulfilled and no recovery decision remains open. */
+  canCompleteClaims?: boolean;
   canRunInitialRandomDraw: boolean;
   /** The unique initial random draw used for live presentation and replay. */
   presentationDrawId: string | null;

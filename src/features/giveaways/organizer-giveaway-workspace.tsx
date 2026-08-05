@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   cancelGiveawayAction,
+  completeGiveawayClaimsAction,
   createGiveawayAction,
   createGiveawayCampaignCodeAction,
   getOrganizerGiveawayPresentationAction,
@@ -1758,6 +1759,7 @@ export function OrganizerGiveawayWorkspace({
               onLock={() => runWorkspaceAction("Candidate snapshot locked. Configuration is now frozen.", () => lockGiveawayAction(selectedCampaign.id), selectedCampaign.id)}
               onDraw={runInitialDraw}
               onPublish={publishCurrentDraw}
+              onComplete={() => runWorkspaceAction("Campaign completed after every prize was fulfilled.", () => completeGiveawayClaimsAction(selectedCampaign.id), selectedCampaign.id)}
             />
           ) : (
             <NewCampaignHeader />
@@ -2273,6 +2275,7 @@ export function CampaignOperationalHeader({
   onLock,
   onDraw,
   onPublish,
+  onComplete,
 }: {
   campaign: OrganizerGiveawayCampaign;
   isPending: boolean;
@@ -2287,6 +2290,7 @@ export function CampaignOperationalHeader({
   onLock: () => void;
   onDraw: () => void;
   onPublish: () => void;
+  onComplete?: () => void;
 }) {
   const lifecycle = buildGiveawayLifecycleRoute(campaign.state, campaign.complianceStatus);
   const manualPublicationHoldCopy =
@@ -2310,19 +2314,19 @@ export function CampaignOperationalHeader({
             <CardDescription>Mechanics version {campaign.mechanicsVersion}. The route reflects the campaign’s factual server state.</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            {campaign.state === "draft" && ["draft", "changes_requested", "rejected"].includes(campaign.complianceStatus) ? (
+            {["draft", "scheduled", "paused"].includes(campaign.state) && ["draft", "changes_requested", "rejected"].includes(campaign.complianceStatus) ? (
               <Button type="button" size="sm" onClick={onSubmit} disabled={isPending}>
                 <SendIcon data-icon="inline-start" />
                 Submit review
               </Button>
             ) : null}
-            {campaign.state === "draft" && campaign.complianceStatus === "approved" ? (
+            {campaign.state === "draft" && operations?.canSchedule ? (
               <Button type="button" size="sm" onClick={onSchedule} disabled={isPending}>
                 <Clock3Icon data-icon="inline-start" />
                 Schedule
               </Button>
             ) : null}
-            {campaign.state === "scheduled" || campaign.state === "paused" ? (
+            {["draft", "scheduled", "paused"].includes(campaign.state) && operations?.canOpen ? (
               <Button type="button" size="sm" onClick={onOpen} disabled={isPending}>
                 <PlayCircleIcon data-icon="inline-start" />
                 {campaign.state === "paused" ? "Resume" : "Open now"}
@@ -2371,6 +2375,12 @@ export function CampaignOperationalHeader({
                   </span>
                 ) : null}
               </>
+            ) : null}
+            {operations?.canCompleteClaims && onComplete ? (
+              <Button type="button" size="sm" onClick={onComplete} disabled={isPending}>
+                <CheckCircle2Icon data-icon="inline-start" />
+                Complete campaign
+              </Button>
             ) : null}
           </div>
         </div>
