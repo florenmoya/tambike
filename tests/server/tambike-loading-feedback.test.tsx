@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import {
+  EventLoadingModal,
   ProfileLoadingFeedback,
   TambikeLoadingWheel,
 } from "../../src/components/tambike-loading-feedback";
@@ -41,5 +42,31 @@ describe("Tambike loading feedback", () => {
     expect(profileSource).toContain(
       '<p className="profile-settings-load" role="alert">{loadError}</p>',
     );
+  });
+
+  test("renders the selected event in a non-interactive loading modal", () => {
+    const markup = renderToStaticMarkup(
+      <EventLoadingModal eventTitle="CALABARZON Endurance Ride" />,
+    );
+
+    expect(markup).toContain('data-event-loading-modal="true"');
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain("Opening event…");
+    expect(markup).toContain("CALABARZON Endurance Ride");
+    expect(markup).not.toContain('role="dialog"');
+  });
+
+  test("connects both event link types to the shared pending modal", () => {
+    const screenSource = source("src/features/tambike-demo/tambike-screen.tsx");
+    const feedbackSource = source("src/components/tambike-loading-feedback.tsx");
+
+    expect(screenSource.match(/<EventNavigationFeedback/g)).toHaveLength(2);
+    expect(screenSource).toContain("eventTitle={event.title}");
+    expect(screenSource.match(/aria-busy=\{pending \|\| undefined\}/g)).toHaveLength(2);
+    expect(feedbackSource).toContain("const { pending } = useLinkStatus();");
+    expect(feedbackSource).toContain("event.preventDefault();");
+    expect(feedbackSource).toContain("event.stopPropagation();");
   });
 });

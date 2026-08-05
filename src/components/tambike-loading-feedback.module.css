@@ -87,6 +87,53 @@
 .profileStatus > strong { font-size: 1rem; }
 .profileStatus > span:last-child { max-width: 32ch; color: #9c9185; font-size: 0.875rem; }
 
+.eventBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding:
+    max(1.5rem, env(safe-area-inset-top))
+    max(1.25rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom))
+    max(1.25rem, env(safe-area-inset-left));
+  background:
+    radial-gradient(circle at center, rgb(182 118 35 / 20%), transparent 42%),
+    rgb(10 5 4 / 78%);
+  backdrop-filter: blur(8px);
+  cursor: wait;
+}
+
+.eventPanel {
+  display: grid;
+  width: min(100%, 23rem);
+  justify-items: center;
+  gap: 0.7rem;
+  padding: clamp(1.35rem, 5vw, 2rem);
+  border: 1px solid rgb(255 202 93 / 32%);
+  border-radius: 1rem;
+  background: rgb(10 5 4 / 88%);
+  box-shadow: 0 24px 72px rgb(0 0 0 / 55%);
+  color: #fff4cf;
+  text-align: center;
+}
+
+.eventPanel > strong {
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.eventPanel > span:last-child {
+  max-width: 26ch;
+  color: #9c9185;
+  font-size: 0.875rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 @keyframes loading-wheel-spin {
   to { transform: rotate(360deg); }
 }

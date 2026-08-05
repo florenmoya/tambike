@@ -22,7 +22,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import Image from "next/image";
-import Link, { useLinkStatus } from "next/link";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   useEffect,
@@ -46,6 +46,7 @@ import { EventBrief } from "./event-brief";
 import { GiveawayNotificationBell } from "@/features/giveaways/giveaway-notification-bell";
 import { PublicGiveawayPanel } from "@/features/giveaways/public-giveaway-panel";
 import { RiderGiveawayStatusPanel } from "@/features/giveaways/rider-giveaway-status-panel";
+import { EventNavigationFeedback } from "@/components/tambike-loading-feedback";
 import { ProfilePreview } from "@/features/member-profiles/profile-preview";
 import { ProfileSettings } from "@/features/member-profiles/profile-settings";
 import { EventAttendeePreview } from "@/features/member-profiles/event-attendee-preview";
@@ -1054,22 +1055,33 @@ function FeatureCard({
       draggable={false}
       onDragStart={(event) => event.preventDefault()}
     >
-      <FeaturePoster event={event} poster={poster} isFeatured={isFeatured} />
-      <div className="feature-caption">
-        <h2 className={event.title.length > 24 ? "feature-title-compact" : undefined}>
-          {titleParts ? (
-            <>
-              {titleParts.prefix ? `${titleParts.prefix} ` : null}
-              <span className="feature-title-keep">{titleParts.keepTogether}</span>
-            </>
-          ) : (
-            event.title
-          )}
-        </h2>
-        <p>
-          {event.date} · {event.area}
-        </p>
-      </div>
+      <EventNavigationFeedback eventTitle={event.title}>
+        {(pending) => (
+          <>
+            <FeaturePoster
+              event={event}
+              poster={poster}
+              isFeatured={isFeatured}
+              pending={pending}
+            />
+            <div className="feature-caption">
+              <h2 className={event.title.length > 24 ? "feature-title-compact" : undefined}>
+                {titleParts ? (
+                  <>
+                    {titleParts.prefix ? `${titleParts.prefix} ` : null}
+                    <span className="feature-title-keep">{titleParts.keepTogether}</span>
+                  </>
+                ) : (
+                  event.title
+                )}
+              </h2>
+              <p>
+                {event.date} · {event.area}
+              </p>
+            </div>
+          </>
+        )}
+      </EventNavigationFeedback>
     </Link>
   );
 }
@@ -1078,15 +1090,15 @@ function FeaturePoster({
   event,
   poster,
   isFeatured,
+  pending,
 }: {
   event: Event;
   poster: ReturnType<typeof resolveEventPoster>;
   isFeatured: boolean;
+  pending: boolean;
 }) {
-  const { pending } = useLinkStatus();
-
   return (
-    <div className={clsx("feature-cover", pending && "is-opening")} aria-busy={pending || undefined}>
+    <div className="feature-cover" aria-busy={pending || undefined}>
       <Image
         src={poster}
         alt={`${event.title} poster`}
@@ -1097,12 +1109,6 @@ function FeaturePoster({
         fetchPriority={isFeatured ? "high" : "auto"}
         sizes="(max-width: 760px) 68vw, (min-width: 2400px) 460px, (min-width: 1600px) 400px, 300px"
       />
-      {pending ? (
-        <span className="feature-opening" role="status">
-          <span className="feature-opening-ring" aria-hidden="true" />
-          <span>Opening event…</span>
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -1118,29 +1124,35 @@ function EventCard({ event, priority = false }: { event: Event; priority?: boole
 
   return (
     <Link className="event-card" href={`/events/${event.id}`} style={cardStyle}>
-      <div className="poster">
-        <Image
-          src={poster}
-          alt={`${event.title} poster`}
-          fill
-          placeholder={typeof poster === "string" ? "empty" : "blur"}
-          loading={priority ? "eager" : "lazy"}
-          fetchPriority={priority ? "high" : "auto"}
-          sizes="(max-width: 560px) calc(100vw - 40px), 260px"
-        />
-        <span className="special-offer">{event.perkPreview}</span>
-        <span className="bookmark" aria-hidden="true" />
-      </div>
-      <h3>{event.title}</h3>
-      <p className="event-card__meta">
-        {event.date} · {event.area}
-      </p>
-      <div className="event-card__footer">
-        <div className="price">
-          <strong>{event.going} Going</strong>
-        </div>
-        <span className="event-card__action">{cta.label}</span>
-      </div>
+      <EventNavigationFeedback eventTitle={event.title}>
+        {(pending) => (
+          <>
+            <div className="poster" aria-busy={pending || undefined}>
+              <Image
+                src={poster}
+                alt={`${event.title} poster`}
+                fill
+                placeholder={typeof poster === "string" ? "empty" : "blur"}
+                loading={priority ? "eager" : "lazy"}
+                fetchPriority={priority ? "high" : "auto"}
+                sizes="(max-width: 560px) calc(100vw - 40px), 260px"
+              />
+              <span className="special-offer">{event.perkPreview}</span>
+              <span className="bookmark" aria-hidden="true" />
+            </div>
+            <h3>{event.title}</h3>
+            <p className="event-card__meta">
+              {event.date} · {event.area}
+            </p>
+            <div className="event-card__footer">
+              <div className="price">
+                <strong>{event.going} Going</strong>
+              </div>
+              <span className="event-card__action">{cta.label}</span>
+            </div>
+          </>
+        )}
+      </EventNavigationFeedback>
     </Link>
   );
 }

@@ -2140,50 +2140,6 @@ svg {
   transition: box-shadow 220ms ease;
 }
 
-.feature-cover.is-opening {
-  cursor: wait;
-}
-
-.feature-opening {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 10px;
-  border-radius: inherit;
-  background:
-    radial-gradient(circle at center, rgba(182, 118, 35, 0.2), transparent 42%),
-    rgba(10, 5, 4, 0.72);
-  color: #fff4cf;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-align: center;
-  text-transform: uppercase;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.72);
-}
-
-.feature-opening-ring {
-  width: 38px;
-  aspect-ratio: 1;
-  border: 3px solid rgba(255, 202, 93, 0.28);
-  border-top-color: #ffca5d;
-  border-right-color: #b67623;
-  border-radius: 50%;
-  box-shadow:
-    inset 0 0 0 3px rgba(10, 5, 4, 0.48),
-    0 0 16px rgba(255, 202, 93, 0.18);
-  animation: feature-opening-spin 700ms linear infinite;
-}
-
-@keyframes feature-opening-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .feature-cover img {
   object-fit: cover;
   filter: saturate(1.1) contrast(1.04);
@@ -2881,11 +2837,6 @@ svg {
     animation: none;
   }
 
-  .feature-opening-ring {
-    animation: none;
-    border-color: rgba(255, 202, 93, 0.62);
-    border-top-color: #ffca5d;
-  }
 }
 
 .event-roster-page-shell {
