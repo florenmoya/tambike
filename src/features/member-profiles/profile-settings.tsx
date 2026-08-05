@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ProfileLoadingFeedback } from "@/components/tambike-loading-feedback";
 import {
   Select,
   SelectContent,
@@ -342,11 +343,7 @@ export function ProfileSettings() {
   }
 
   if (!initialEditor) {
-    return (
-      <div className="profile-settings-load" aria-live="polite">
-        <LoaderCircle className="animate-spin" aria-hidden="true" /> Loading garage settings…
-      </div>
-    );
+    return <ProfileLoadingFeedback />;
   }
 
   return <LoadedProfileSettings initialEditor={initialEditor} />;
